@@ -21,20 +21,21 @@ It operates as a standalone on-device application, functioning independently lik
 * **More features coming soon:** Development is ongoing to introduce additional capabilities.
 
 
-## Getting Your .mobiledevicepairing File
+## Getting Your pairing File
 There are two supported ways to obtain a pairing file:
 
-### Option 1 — Generate it with jitterbugpair (recommended)
-1.  Download `jitterbugpair` for your operating system here: [Jitterbug Releases](https://github.com/osy/Jitterbug/releases/latest)
-    * **Note:** On Mac or Linux, you may need to make it executable first:
-        ```bash
-        chmod +x ./jitterbugpair
-        ```
-2.  Run the program (double-click it or run it via Terminal/PowerShell).
-3.  Share the generated `.mobiledevicepairing` file to your iOS device (AirDrop, Files, etc.).
-4.  Open **EnsWilde** and select the pairing file.
+### Option 1 — Generate it with idevicepair (recommended)
+1.  Download `idevicepair` for your operating system here: [idevicepair Releases](https://github.com/jkcoxson/idevice_pair/releases)
+    * **Note:** On Linux, you may need to install usbmuxd first.
+    ```bash
+        sudo apt install -y usbmuxd
+    ```
+2.  Run the program.
+3.  After idevicepair detects your device, hold CTRL, press "load" and save the file.
+4.  Share the generated `.plist` file to your iOS device (AirDrop, Files, etc.).
+5.  Open **EnsWilde** and select the pairing file.
 
-*You should only have to do this once, unless you lose the file or delete the app’s data.*
+*You should only have to do this once, unless you lose the file, delete the app’s data or factory reset the device.*
 
 ---
 
@@ -47,7 +48,7 @@ If you already imported/placed a pairing file for SideStore, it’s typically st
 4. Open **EnsWilde** and select that file directly from the SideStore folder
 
 ## Setting Up VPN
-1.  Download **LocaldevVPN** from the iOS App Store.
+1.  Download **[LocaldevVPN](https://apps.apple.com/app/id6755608044)** from the iOS App Store.
 2.  Enable the VPN within that app.
 3.  Launch **EnsWilde**.
 
