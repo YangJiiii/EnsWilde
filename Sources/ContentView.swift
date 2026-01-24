@@ -579,7 +579,7 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .fileImporter(
             isPresented: $showPairingFileImporter,
-            allowedContentTypes: [UTType(filenameExtension: "mobiledevicepairing", conformingTo: .data)!],
+            allowedContentTypes: [UTType(filenameExtension: "mobiledevicepairing", conformingTo: .data)!, .propertyList],
             onCompletion: handleFileImport
         )
         .alert("System Message", isPresented: $showErrorAlert) {
