@@ -30,13 +30,16 @@ final class Utils {
         return currentVersion < requiredVersion
     }
     
-    /// Check if iOS version is in supported range (iOS 18.0 to iOS 26.2)
-    static func isIOSVersionSupported() -> Bool {
-        let currentVersion = os.majorVersion * 10000 + os.minorVersion * 100 + os.patchVersion
-        let minVersion = 18 * 10000 + 0 * 100 + 0  // iOS 18.0
-        let maxVersion = 26 * 10000 + 2 * 100 + 0  // iOS 26.2
-        return currentVersion >= minVersion && currentVersion <= maxVersion
-    }
+    /// Check if iOS version is supported (iOS 18.0+)
+static func isIOSVersionSupported() -> Bool {
+    let currentVersion = os.majorVersion * 10000
+        + os.minorVersion * 100
+        + os.patchVersion
+
+    let minVersion = 18 * 10000
+
+    return currentVersion >= minVersion
+}
     
     /// Get current iOS version string (e.g., "18.1" or "18.1.2")
     static func getIOSVersionString() -> String {
