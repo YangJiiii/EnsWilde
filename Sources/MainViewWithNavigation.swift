@@ -1,10 +1,5 @@
 import SwiftUI
 import UserNotifications
-
-enum NavigationTab {
-    case home, settings, about, apply
-}
-
 struct MainViewWithNavigation: View {
     @State private var selectedTab: NavigationTab = .home
     @StateObject private var themeStore = PasscodeThemeStore()
