@@ -1,7 +1,10 @@
 import SwiftUI
 import UserNotifications
 
-// MARK: - Main View with Navigation (Feather-style TabView)
+enum NavigationTab {
+    case home, settings, about, apply
+}
+
 struct MainViewWithNavigation: View {
     @State private var selectedTab: NavigationTab = .home
     @StateObject private var themeStore = PasscodeThemeStore()
@@ -12,12 +15,12 @@ struct MainViewWithNavigation: View {
     @State private var showApplySheet = false
     @State private var showStatusSheet = false
     @State private var isInNestedView = false
-    @State private var isSystemReady = false
+    @State private var isSystemReady = true
     @State private var heartbeatRunning = false
     @State private var ddiMounted = false
     @AppStorage("EnsWilde.userTintColor") private var userTintColorHex: String = "#ef9f76"
     @State private var tintRefreshID = UUID()
-    
+
     var body: some View {
         TabView(selection: $selectedTab) {
             ContentView(
@@ -38,23 +41,23 @@ struct MainViewWithNavigation: View {
                 Label(L("nav_home"), systemImage: "house.fill")
             }
             .tag(NavigationTab.home)
-            
+
             NavigationStack {
                 ThemeStoreView(themeStore: themeStore)
             }
             .tabItem {
                 Label(L("nav_theme_store"), systemImage: "square.grid.2x2.fill")
             }
-            .tag(NavigationTab.themeStore)
-            
+            .tag(NavigationTab.home)
+
             NavigationStack {
-                SettingsView(heartbeatRunning: heartbeatRunning, ddiMounted: ddiMounted)
+                SettingsView(heartbeatRunning: false, ddiMounted: false)
             }
             .tabItem {
                 Label(L("nav_settings"), systemImage: "gearshape.fill")
             }
             .tag(NavigationTab.settings)
-            
+
             NavigationStack {
                 AboutView()
             }
@@ -62,32 +65,26 @@ struct MainViewWithNavigation: View {
                 Label(L("nav_about"), systemImage: "info.circle.fill")
             }
             .tag(NavigationTab.about)
-            
-            if isSystemReady {
-                ApplyTabView(
-                    toolStore: toolStore,
-                    toolRunner: toolRunner,
-                    walletStore: walletStore,
-                    themeStore: themeStore,
-                    featureFlagsStore: featureFlagsStore,
-                    isSystemReady: isSystemReady
-                )
-                .tabItem {
-                    Label(L("nav_apply"), systemImage: "checkmark.circle.fill")
-                }
-                .tag(NavigationTab.apply)
+
+            ApplyTabView(
+                toolStore: toolStore,
+                toolRunner: toolRunner,
+                walletStore: walletStore,
+                themeStore: themeStore,
+                featureFlagsStore: featureFlagsStore,
+                isSystemReady: true
+            )
+            .tabItem {
+                Label(L("nav_apply"), systemImage: "checkmark.circle.fill")
             }
+            .tag(NavigationTab.apply)
         }
         .tint(Color(hex: userTintColorHex))
         .id(tintRefreshID)
-        .onChange(of: userTintColorHex) { _ in
-            applyTintColor()
-        }
-        .onAppear {
-            applyTintColor()
-        }
+        .onChange(of: userTintColorHex) { _ in applyTintColor() }
+        .onAppear { applyTintColor() }
     }
-    
+
     private func applyTintColor() {
         let uiColor = UIColor(Color(hex: userTintColorHex))
         UITabBar.appearance().tintColor = uiColor
@@ -102,7 +99,6 @@ struct MainViewWithNavigation: View {
     }
 }
 
-// MARK: - Apply Tab View (inline — shows enabled tweaks and apply controls)
 struct ApplyTabView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
     @ObservedObject var toolStore: ToolStore
@@ -112,7 +108,6 @@ struct ApplyTabView: View {
     @ObservedObject var featureFlagsStore: FeatureFlagsStore
     var isSystemReady: Bool
 
-    @State private var showUUIDAlert = false
     @State private var showErrorAlert = false
     @State private var lastError: String?
 
@@ -124,12 +119,7 @@ struct ApplyTabView: View {
     private var enabledTweaks: [(String, String)] {
         var list: [(String, String)] = []
         if toolStore.replaceMobileGestaltEnabled { list.append((L("tool_mobile_gestalt"), "cpu")) }
-        if toolStore.disableSoundEnabled { list.append((L("tool_disable_sound"), "speaker.slash")) }
-        if walletStore.appleWalletEnabled { list.append((L("tool_apple_wallet"), "wallet.pass")) }
         if themeStore.passcodeThemeEnabled { list.append((L("tool_passcode_theme"), "lock.rectangle")) }
-        if toolStore.themesUIEnabled { list.append((L("tool_themes_ui"), "paintbrush")) }
-        if toolStore.zPatchCustomEnabled { list.append((L("tool_zpatch_custom"), "wrench.and.screwdriver")) }
-        if featureFlagsStore.featureFlagsEnabled { list.append((L("tool_feature_flags"), "flag")) }
         return list
     }
 
@@ -144,21 +134,10 @@ struct ApplyTabView: View {
             .headerProminence(.increased)
             .navigationTitle(L("nav_apply"))
         }
-        .alert(L("alert_uuid_required"), isPresented: $showUUIDAlert) {
-            Button(L("alert_cancel"), role: .cancel) { }
-            Button(L("alert_ok")) { captureUUID() }
-        } message: {
-            Text(L("alert_uuid_instruction"))
-        }
         .alert(L("alert_error"), isPresented: $showErrorAlert) {
             Button(L("alert_ok"), role: .cancel) { }
         } message: {
             Text(lastError ?? L("msg_error_unknown"))
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .applyTweaksFromShortcut)) { _ in
-            if !isRunning && !enabledTweaks.isEmpty {
-                performApply()
-            }
         }
     }
 
@@ -193,12 +172,6 @@ struct ApplyTabView: View {
             Toggle(isOn: $toolStore.soundRespringEnabled) {
                 Label(L("respring_after_apply"), systemImage: "arrow.clockwise")
             }
-            Button(role: .destructive) {
-                toolStore.bookassetdUUID = nil
-            } label: {
-                Label(L("clear_uuid"), systemImage: "xmark.circle")
-            }
-            .disabled(toolStore.bookassetdUUID == nil || toolStore.bookassetdUUID?.isEmpty == true)
         }
     }
 
@@ -207,9 +180,7 @@ struct ApplyTabView: View {
         if isRunning || statusText != "" {
             Section {
                 HStack(spacing: 12) {
-                    if isRunning {
-                        ProgressView()
-                    }
+                    if isRunning { ProgressView() }
                     Text(latestLogOrStatus)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -220,9 +191,7 @@ struct ApplyTabView: View {
     }
 
     private var latestLogOrStatus: String {
-        if isRunning, let lastLog = toolRunner.logs.last?.text {
-            return lastLog
-        }
+        if isRunning, let lastLog = toolRunner.logs.last?.text { return lastLog }
         return statusText
     }
 
@@ -241,11 +210,8 @@ struct ApplyTabView: View {
     private var statusText: String {
         switch toolRunner.state {
         case .idle:
-            if enabledTweaks.isEmpty {
-                return L("apply_enable_first")
-            } else {
-                return L("apply_ready").replacingOccurrences(of: "{count}", with: "\(enabledTweaks.count)")
-            }
+            if enabledTweaks.isEmpty { return L("apply_enable_first") }
+            return L("apply_ready").replacingOccurrences(of: "{count}", with: "\(enabledTweaks.count)")
         case .running(let toolName):
             return L("apply_running").replacingOccurrences(of: "{toolName}", with: toolName)
         case .success:
@@ -257,22 +223,13 @@ struct ApplyTabView: View {
 
     private func performApply() {
         Task {
-            if toolStore.bookassetdUUID == nil || toolStore.bookassetdUUID?.isEmpty == true {
-                showUUIDAlert = true
-                return
-            }
-
             await toolRunner.applyAll(
-                isSystemReady: isSystemReady,
                 store: toolStore,
-                walletStore: walletStore,
-                themeStore: themeStore,
-                featureFlagsStore: featureFlagsStore
+                themeStore: themeStore
             )
 
             if case .success = toolRunner.state {
-                sendLocalNotification(title: "EnsWilde", body: L("apply_done"))
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
                 if toolStore.soundRespringEnabled {
                     try? RespringHelper.respring()
                 } else {
@@ -283,39 +240,9 @@ struct ApplyTabView: View {
             }
 
             if case .failed(let message) = toolRunner.state {
-                sendLocalNotification(title: "EnsWilde", body: L("apply_failed").replacingOccurrences(of: "{message}", with: message))
                 lastError = message
                 showErrorAlert = true
             }
-        }
-    }
-
-    private func captureUUID() {
-        LSApplicationWorkspaceDefaultWorkspace().openApplication(withBundleID: "com.apple.iBooks")
-        Task {
-            do {
-                let uuid = try await BookassetdUUIDHelper.captureUUID(
-                    timeout: 120, openBooksFirst: false, returnToAppAfterCapture: true
-                )
-                toolStore.bookassetdUUID = uuid
-                performApply()
-            } catch {
-                lastError = L("msg_uuid_capture_failed").replacingOccurrences(of: "{error}", with: error.localizedDescription)
-                showErrorAlert = true
-            }
-        }
-    }
-
-    private func sendLocalNotification(title: String, body: String) {
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { settings in
-            guard settings.authorizationStatus == .authorized else { return }
-            let content = UNMutableNotificationContent()
-            content.title = title
-            content.body = body
-            content.sound = .default
-            let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-            center.add(request)
         }
     }
 }
