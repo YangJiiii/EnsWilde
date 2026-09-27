@@ -1,29 +1,3 @@
-workflows:
-  ios-build:
-    name: EnsWilde iOS Build
-    environment:
-      xcode: latest
-    scripts:
-      - name: Resolve Swift packages
-        script: |
-          xcodebuild -resolvePackageDependencies \
-            -project EnsWilde.xcodeproj \
-            -scheme EnsWilde
-      - name: Build IPA
-        script: |
-          xcodebuild \
-            -project EnsWilde.xcodeproj \
-            -scheme EnsWilde \
-            -configuration Release \
-            -sdk iphoneos \
-            -archivePath build/EnsWilde.xcarchive \
-            archive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
-
-          mkdir -p build/Payload
-          cp -R build/EnsWilde.xcarchive/Products/Applications/EnsWilde.app build/Payload/
-          cd build
-          zip -r EnsWilde.ipa Payload
-    artifacts:
-      - build/EnsWilde.ipa
+git add codemagic.yaml
+git commit -m 'Add first workflow'
+git push
