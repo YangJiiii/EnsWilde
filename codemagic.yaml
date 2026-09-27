@@ -1,0 +1,33 @@
+workflows:
+  ios-release:
+    name: EnsWilde - Personal Ad Hoc IPA
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    environment:
+      xcode: latest
+
+      ios_signing:
+        distribution_type: ad_hoc
+        bundle_identifier: app.lemon2974.peach9464
+
+    scripts:
+      - name: Set up personal code signing
+        script: |
+          xcode-project use-profiles \
+            --project "$CM_BUILD_DIR/EnsWilde.xcodeproj"
+
+      - name: Verify bundle identifier
+        script: |
+          echo "Bundle ID:"
+          xcode-project detect-bundle-id --project "$CM_BUILD_DIR/EnsWilde.xcodeproj"
+
+      - name: Build signed IPA
+        script: |
+          xcode-project build-ipa \
+            --project "$CM_BUILD_DIR/EnsWilde.xcodeproj" \
+            --scheme "EnsWilde"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
