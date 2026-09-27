@@ -21,3 +21,5 @@ LSApplicationWorkspace *LSApplicationWorkspaceDefaultWorkspace(void);
 @property(nonatomic, strong, readonly) NSString *buildVersion;
 + (BOOL)_hasHomeButton;
 @end
+int bad_query(const char *path, bool flag1, void *arg, bool flag2);
+void bad_query_release(int handle);
