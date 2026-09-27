@@ -33,14 +33,6 @@ struct MyApp: App {
         // Check iOS version compatibility on launch
         let versionSupported = Utils.isIOSVersionSupported()
         let versionString = Utils.getIOSVersionString()
-        
-        if !versionSupported {
-            print("⚠️ [VERSION CHECK] Unsupported iOS version detected: \(versionString)")
-            print("⚠️ [VERSION CHECK] App requires iOS 18.0 or later")
-        } else {
-            print("✅ [VERSION CHECK] iOS version \(versionString) is supported")
-        }
-        
         Task.detached { @MainActor in
             do {
                 Utils.port = try Utils.reservePort()
