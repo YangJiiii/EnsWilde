@@ -74,7 +74,6 @@ struct ContentView: View {
     // Tools (shared from MainViewWithNavigation)
     @ObservedObject var toolStore: ToolStore
     @ObservedObject var toolRunner: ToolRunner
-    @ObservedObject var walletStore: AppleWalletStore
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var featureFlagsStore: FeatureFlagsStore
 
@@ -108,7 +107,6 @@ struct ContentView: View {
         themeStore: PasscodeThemeStore,
         toolStore: ToolStore,
         toolRunner: ToolRunner,
-        walletStore: AppleWalletStore,
         featureFlagsStore: FeatureFlagsStore,
         showApplySheetBinding: Binding<Bool>? = nil,
         showStatusSheetBinding: Binding<Bool>? = nil,
@@ -121,7 +119,6 @@ struct ContentView: View {
         self.themeStore = themeStore
         self.toolStore = toolStore
         self.toolRunner = toolRunner
-        self.walletStore = walletStore
         self.featureFlagsStore = featureFlagsStore
         self.showApplySheetBinding = showApplySheetBinding
         self.showStatusSheetBinding = showStatusSheetBinding
@@ -358,35 +355,11 @@ struct ContentView: View {
             )
 
             toolNavigationLink(
-                value: "DisableSound",
-                title: L("tool_disable_sound"),
-                subtitle: L("tool_disable_sound_desc"),
-                icon: "speaker.slash",
-                isEnabled: toolStore.disableSoundEnabled
-            )
-
-            toolNavigationLink(
-                value: "AppleWallet",
-                title: L("tool_apple_wallet"),
-                subtitle: L("tool_apple_wallet_desc"),
-                icon: "wallet.pass",
-                isEnabled: walletStore.appleWalletEnabled
-            )
-
-            toolNavigationLink(
                 value: "FeatureFlags",
                 title: L("tool_feature_flags"),
                 subtitle: L("tool_feature_flags_desc"),
                 icon: "flag",
                 isEnabled: featureFlagsStore.featureFlagsEnabled
-            )
-
-            toolNavigationLink(
-                value: "zPatchCustom",
-                title: L("tool_zpatch_custom"),
-                subtitle: L("tool_zpatch_custom_desc"),
-                icon: "wrench.and.screwdriver",
-                isEnabled: toolStore.zPatchCustomEnabled
             )
         }
     }
@@ -395,18 +368,12 @@ struct ContentView: View {
 
     @ViewBuilder
     private func destinationView(for route: String) -> some View {
-        if route == "DisableSound" {
-            DisableSoundView()
-        } else if route == "MobileGestalt" {
+        if route == "MobileGestalt" {
             MobileGestaltView(toolStore: toolStore)
-        } else if route == "AppleWallet" {
-            AppleWalletView(walletStore: walletStore)
         } else if route == "PasscodeTheme" {
             PasscodeThemeView(themeStore: themeStore)
         } else if route == "ThemesUI" {
             ThemesUIView(toolStore: toolStore)
-        } else if route == "zPatchCustom" {
-            zPatchCustomView()
         } else if route == "FeatureFlags" {
             FeatureFlagsView(store: featureFlagsStore)
         }
@@ -441,7 +408,7 @@ struct ContentView: View {
                         return
                     }
                     
-                    await toolRunner.applyAll(isSystemReady: _isSystemReady, store: toolStore, walletStore: walletStore, themeStore: themeStore, featureFlagsStore: featureFlagsStore)
+                    await toolRunner.applyAll(isSystemReady: _isSystemReady, store: toolStore, themeStore: themeStore, featureFlagsStore: featureFlagsStore)
                     
                     if case .success = toolRunner.state {
                         try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -488,7 +455,7 @@ struct ContentView: View {
                     Task {
                         try? await Task.sleep(nanoseconds: 1_000_000_000)
                         
-                        await self.toolRunner.applyAll(isSystemReady: self._isSystemReady, store: self.toolStore, walletStore: self.walletStore, themeStore: self.themeStore, featureFlagsStore: self.featureFlagsStore)
+                        await self.toolRunner.applyAll(isSystemReady: self._isSystemReady, store: self.toolStore, themeStore: self.themeStore, featureFlagsStore: self.featureFlagsStore)
                         
                         if case .success = self.toolRunner.state {
                             try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -997,297 +964,3 @@ struct ContentView: View {
                 // When network changes (VPN connects/disconnects), refresh system status
                 if path.status == .satisfied {
                     // Network is available, check if we need to restart heartbeat
-                    if self.pairingFile != nil && !self.heartbeatRunning {
-                        self.startHeartbeatOnce()
-                    }
-                    self.refreshSystemStatus()
-                }
-            }
-        }
-        
-        monitor.start(queue: queue)
-        networkMonitor = monitor
-    }
-    
-    /// Stop network monitoring
-    private func stopNetworkMonitoring() {
-        networkMonitor?.cancel()
-        networkMonitor = nil
-    }
-    
-    /// Start DDI status monitoring
-    private func startDDIMonitoring() {
-        // Stop any existing timer
-        stopDDIMonitoring()
-        
-        guard pairingFile != nil && heartbeatRunning else {
-            print("[DDI Monitor] Not starting - pairing or heartbeat not ready")
-            return
-        }
-        
-        print("[DDI Monitor] Starting periodic DDI status checks")
-        
-        // Set initial state
-        lastKnownDDIMountState = ddiMounted
-        
-        // Reset retry counter when starting monitoring (fresh start)
-        ddiMountRetryCount = 0
-        lastDDIMountAttempt = nil
-        print("[DDI Monitor] Reset retry counter for fresh start")
-        
-        // Check DDI status every 5 seconds
-        ddiMonitorTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [self] _ in
-            // Only monitor if pairing and heartbeat are active
-            guard self.pairingFile != nil && self.heartbeatRunning else {
-                print("[DDI Monitor] Stopping - pairing or heartbeat lost")
-                self.stopDDIMonitoring()
-                return
-            }
-            
-            let currentDDIState = self.computeDDIMounted()
-            
-            // Detect state change
-            if currentDDIState != self.lastKnownDDIMountState {
-                print("[DDI Monitor] DDI state changed: \(self.lastKnownDDIMountState) -> \(currentDDIState)")
-                
-                self.lastKnownDDIMountState = currentDDIState
-                self.ddiMounted = currentDDIState
-                
-                // If DDI became unmounted, try to remount it
-                if !currentDDIState {
-                    print("[DDI Monitor] DDI was unmounted (likely due to device reboot). Attempting auto-remount...")
-                    self.attemptAutoMountDDIWithRetry()
-                } else {
-                    // DDI successfully mounted
-                    print("[DDI Monitor] DDI is now mounted")
-                    self.ddiMountRetryCount = 0
-                }
-            } else if !currentDDIState {
-                // DDI still not mounted, check if we should retry
-                self.checkAndRetryDDIMount()
-            }
-        }
-    }
-    
-    /// Stop DDI monitoring
-    private func stopDDIMonitoring() {
-        ddiMonitorTimer?.invalidate()
-        ddiMonitorTimer = nil
-        print("[DDI Monitor] Stopped")
-    }
-    
-    /// Attempt to mount DDI with retry logic
-    private func attemptAutoMountDDIWithRetry() {
-        // Check if we should rate-limit attempts
-        if let lastAttempt = lastDDIMountAttempt {
-            let timeSinceLastAttempt = Date().timeIntervalSince(lastAttempt)
-            
-            // Exponential backoff: wait 2^retryCount seconds (minimum 5 seconds)
-            let waitTime = max(5.0, pow(2.0, Double(ddiMountRetryCount)))
-            
-            if timeSinceLastAttempt < waitTime {
-                print("[DDI Mount Retry] Waiting before next attempt (waited \(Int(timeSinceLastAttempt))s / need \(Int(waitTime))s)")
-                return
-            }
-        }
-        
-        lastDDIMountAttempt = Date()
-        ddiMountRetryCount += 1
-        
-        print("[DDI Mount Retry] Attempt #\(ddiMountRetryCount)")
-        
-        // Don't show error alerts for automatic retry attempts
-        attemptAutoMountDDI(showErrorAlert: false)
-    }
-    
-    /// Check if we should retry DDI mount
-    private func checkAndRetryDDIMount() {
-        // Only retry up to 5 times
-        guard ddiMountRetryCount < 5 else {
-            // At max retries - log once and wait for external trigger (network change, manual retry, etc.)
-            if ddiMountRetryCount == 5 {
-                print("[DDI Mount Retry] Reached max attempts (5/5). Waiting for manual retry or network change.")
-            }
-            return
-        }
-        
-        attemptAutoMountDDIWithRetry()
-    }
-
-    private func respringNow() throws {
-        try RespringHelper.respring()
-    }
-
-    private func getRunningProcesses() throws -> [Int32 : String?] {
-        try RespringHelper.getRunningProcesses()
-    }
-
-    private struct RemoteVersion: Decodable {
-        let version: String
-        let build: Int
-        let url: String
-        let notes: String?
-    }
-
-    private func checkForUpdate() {
-        let buildNow = currentBuildInt
-        if lastCheckedBuild == buildNow { return }
-        lastCheckedBuild = buildNow
-        let request = URLRequest(url: versionJSONURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            guard let data else { return }
-            guard let remote = try? JSONDecoder().decode(RemoteVersion.self, from: data) else { return }
-            guard let url = URL(string: remote.url) else { return }
-            if remote.build == ignoredUpdateBuild { return }
-            if remote.build > buildNow {
-                DispatchQueue.main.async {
-                    pendingRemoteBuild = remote.build
-                    updateURL = url
-                    if let notes = remote.notes, !notes.isEmpty {
-                        updateMessage = "New version \(remote.version) (\(remote.build)) is available.\n\n\(notes)"
-                    } else {
-                        updateMessage = "New version \(remote.version) (\(remote.build)) is available."
-                    }
-                    showUpdateAlert = true
-                }
-            }
-        }.resume()
-    }
-}
-
-// MARK: - Status Sheet (Feather-style)
-struct StatusSheet: View {
-    @ObservedObject private var localizationManager = LocalizationManager.shared
-    @Binding var pairingFileLoaded: Bool
-    @Binding var heartbeatRunning: Bool
-    @Binding var ddiMounted: Bool
-    var onImportPairing: () -> Void
-    var onResetPairing: () -> Void
-    var onMountDDI: () -> Void
-    var onClose: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section(header: Text(L("system_status"))) {
-                    CardRow(title: L("status_pairing_file"), subtitle: pairingFileLoaded ? L("status_pairing_loaded") : L("status_pairing_missing"), ok: pairingFileLoaded, showChevron: false, trailing: nil)
-
-                    CardRow(title: L("status_heartbeat"), subtitle: heartbeatRunning ? L("status_heartbeat_running") : L("status_heartbeat_stopped"), ok: heartbeatRunning, showChevron: false, trailing: nil)
-
-                    CardRow(title: L("status_ddi"), subtitle: ddiMounted ? L("status_ddi_mounted") : L("status_ddi_unmounted"), ok: ddiMounted, showChevron: false, trailing: nil)
-                }
-
-                Section(header: Text(L("section_actions"))) {
-                    if heartbeatRunning && !ddiMounted {
-                        Button(L("button_mount_ddi")) {
-                            onMountDDI()
-                        }
-                    }
-                    
-                    Button(pairingFileLoaded ? L("button_reset_pairing") : L("button_select_pairing")) {
-                        if pairingFileLoaded { onResetPairing() } else { onImportPairing() }
-                        onClose()
-                    }
-                    .tint(pairingFileLoaded ? .red : .accentColor)
-                }
-            }
-            .headerProminence(.increased)
-            .navigationTitle(L("system_status"))
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: onClose) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Apply Sheet (Feather-style)
-struct ApplySheet: View {
-    @ObservedObject private var localizationManager = LocalizationManager.shared
-    @Binding var logs: [String]
-    @Binding var isRunning: Bool
-    @Binding var progressText: String
-    @Binding var enableRespring: Bool
-    @Binding var bookassetdUUID: String
-    var onApply: () -> Void
-    var onClearUUID: () -> Void
-    var onClose: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                optionsSection
-                statusSection
-                if !logs.isEmpty {
-                    logsSection
-                }
-                actionsSection
-            }
-            .headerProminence(.increased)
-            .navigationTitle(L("apply_tweaks"))
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: onClose) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var optionsSection: some View {
-        Section {
-            Toggle(L("respring_after_apply"), isOn: $enableRespring)
-        }
-    }
-
-    @ViewBuilder
-    private var statusSection: some View {
-        Section(header: Text(L("section_status"))) {
-            HStack(spacing: 12) {
-                if isRunning {
-                    ProgressView()
-                }
-                Text(progressText)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var logsSection: some View {
-        Section(header: Text(L("logs"))) {
-            ForEach(logs, id: \.self) { log in
-                Text(log)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var actionsSection: some View {
-        Section(header: Text(L("section_actions"))) {
-            Button(L("clear_uuid"), role: .destructive) {
-                onClearUUID()
-            }
-            .disabled(bookassetdUUID.isEmpty)
-        }
-
-        Section {
-            WalletStyleButton(
-                title: isRunning ? L("applying") : L("apply_enabled_tweaks"),
-                isLoading: isRunning,
-                disabled: isRunning,
-                action: onApply
-            )
-        }
-    }
-}
