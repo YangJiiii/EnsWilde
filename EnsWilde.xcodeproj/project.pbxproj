@@ -474,7 +474,7 @@
 					"$(PROJECT_DIR)/Sources/idevice",
 				);
 				MARKETING_VERSION = 3.1.3;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yangjiii.EnsWilde;
+				PRODUCT_BUNDLE_IDENTIFIER = app.lemon2974.peach9464;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "EnsWilde-Bridging-Header.h";
