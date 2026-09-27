@@ -74,6 +74,7 @@ struct ContentView: View {
     // Tools (shared from MainViewWithNavigation)
     @ObservedObject var toolStore: ToolStore
     @ObservedObject var toolRunner: ToolRunner
+    @ObservedObject var walletStore: AppleWalletStore
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var featureFlagsStore: FeatureFlagsStore
 
@@ -107,6 +108,7 @@ struct ContentView: View {
         themeStore: PasscodeThemeStore,
         toolStore: ToolStore,
         toolRunner: ToolRunner,
+        walletStore: AppleWalletStore,
         featureFlagsStore: FeatureFlagsStore,
         showApplySheetBinding: Binding<Bool>? = nil,
         showStatusSheetBinding: Binding<Bool>? = nil,
@@ -119,6 +121,7 @@ struct ContentView: View {
         self.themeStore = themeStore
         self.toolStore = toolStore
         self.toolRunner = toolRunner
+        self.walletStore = walletStore
         self.featureFlagsStore = featureFlagsStore
         self.showApplySheetBinding = showApplySheetBinding
         self.showStatusSheetBinding = showStatusSheetBinding
@@ -408,7 +411,7 @@ struct ContentView: View {
                         return
                     }
                     
-                    await toolRunner.applyAll(isSystemReady: _isSystemReady, store: toolStore, themeStore: themeStore, featureFlagsStore: featureFlagsStore)
+                    await toolRunner.applyAll(isSystemReady: _isSystemReady, store: toolStore, walletStore: walletStore, themeStore: themeStore, featureFlagsStore: featureFlagsStore)
                     
                     if case .success = toolRunner.state {
                         try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -455,7 +458,7 @@ struct ContentView: View {
                     Task {
                         try? await Task.sleep(nanoseconds: 1_000_000_000)
                         
-                        await self.toolRunner.applyAll(isSystemReady: self._isSystemReady, store: self.toolStore, themeStore: self.themeStore, featureFlagsStore: self.featureFlagsStore)
+                        await self.toolRunner.applyAll(isSystemReady: self._isSystemReady, store: self.toolStore, walletStore: self.walletStore, themeStore: self.themeStore, featureFlagsStore: self.featureFlagsStore)
                         
                         if case .success = self.toolRunner.state {
                             try? await Task.sleep(nanoseconds: 8_000_000_000)
