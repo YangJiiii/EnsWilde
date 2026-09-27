@@ -962,4 +962,3 @@ struct ContentView: View {
             // Check if network status changed
             DispatchQueue.main.async {
                 // When network changes (VPN connects/disconnects), refresh system status
-                if path.status == .satisfied {
