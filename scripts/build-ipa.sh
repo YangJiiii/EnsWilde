@@ -5,7 +5,6 @@ CONFIG="${1:-Release}"
 SCHEME="EnsWilde"
 PROJECT="EnsWilde.xcodeproj"
 BUILD_DIR="$(pwd)/build"
-ARCHIVE_PATH="$BUILD_DIR/EnsWilde.xcarchive"
 APP_NAME="EnsWilde"
 IPA_PATH="$BUILD_DIR/${APP_NAME}.ipa"
 
@@ -18,14 +17,15 @@ GRAPPA_DIR="$(dirname "$GRAPPA_H")"
 echo "==> [1/4] Checking files..."
 for f in "$AIRCARD_LIB" "$AIRCARD_HEADERS/airlift.h" "$GRAPPA_H" "$GRAPPA_M"; do
   if [ ! -f "$f" ]; then
-    echo "❌ LỖI: Đéo tìm thấy $f. Push file .a lên Git LFS đi boss man."
+    echo "❌ LỖI: Đéo tìm thấy $f"
     exit 1
   fi
 done
 
 echo "==> [2/4] Setting up build directory..."
 rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
+mkdir -p "$BUILD_DIR/dd"
+mkdir -p "$BUILD_DIR/Payload"
 
 echo "==> [3/4] Injecting Airlift.a + GrappaHelper.m & Fixing Linker..."
 gem install xcodeproj --no-document >/dev/null 2>&1 || true
@@ -71,15 +71,11 @@ ruby -e '
     ld_flags = config.build_settings["OTHER_LDFLAGS"] || ["$(inherited)"]
     ld_flags << "-ObjC"
     ld_flags << "-lairlift_ffi"
-    
-    # BÙA CHÚ ÉP LINKER GIỮ SYMBOL GRAPPA
     ld_flags << "-Wl,-all_load"
     ld_flags << "-Wl,-exported_symbol,_ALGetGrappaToken"
     ld_flags << "-Wl,-u,_ALGetGrappaToken"
-    
     config.build_settings["OTHER_LDFLAGS"] = ld_flags.uniq
     
-    # Ép chết code signing
     config.build_settings["CODE_SIGN_STYLE"] = "Manual"
     config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"
     config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"
@@ -91,30 +87,27 @@ ruby -e '
   project.save
 '
 
-echo "==> [4/4] Archiving and STRIPPING SIGNATURES..."
-XCB_ARGS=(
-  -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" -sdk iphoneos
-  -archivePath "$ARCHIVE_PATH" -destination "generic/platform=iOS"
-  CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
-  CODE_SIGN_ENTITLEMENTS="" EXPANDED_CODE_SIGN_IDENTITY=""
-  DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER=""
+echo "==> [4/4] Building .app (BỎ QUA BƯỚC ARCHIVE ĐỂ TRÁNH BỊ KÝ)..."
+# DÙNG BUILD THAY VÌ ARCHIVE
+xcodebuild build \
+  -project "$PROJECT" \
+  -scheme "$SCHEME" \
+  -configuration "$CONFIG" \
+  -sdk iphoneos \
+  -derivedDataPath "$BUILD_DIR/dd" \
+  -destination "generic/platform=iOS" \
+  CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGN_ENTITLEMENTS="" EXPANDED_CODE_SIGN_IDENTITY="" \
+  DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
-)
 
-if command -v xcbeautify >/dev/null 2>&1; then
-  xcodebuild archive "${XCB_ARGS[@]}" | xcbeautify
-else
-  xcodebuild archive "${XCB_ARGS[@]}"
-fi
-
-APP_PATH="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -name '*.app' | head -n 1)"
+APP_PATH="$(find "$BUILD_DIR/dd/Build/Products/$CONFIG-iphoneos" -maxdepth 1 -name '*.app' | head -n 1)"
 if [[ -z "$APP_PATH" ]]; then
-  echo "❌ LỖI: Đéo tìm thấy file .app!" >&2
+  echo "❌ LỖI: Đéo tìm thấy file .app sau khi build!" >&2
   exit 1
 fi
 
 APP_BASENAME="$(basename "$APP_PATH")"
-rm -rf "$BUILD_DIR/Payload" && mkdir -p "$BUILD_DIR/Payload"
 cp -R "$APP_PATH" "$BUILD_DIR/Payload/"
 
 echo "==> [Stripping] Cạo sạch mọi dấu vết chữ ký..."
