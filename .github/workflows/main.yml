@@ -1,66 +1,34 @@
-name: Build IPA
+name: Build Unsigned IPA
 
 on:
   push:
-  pull_request:
+    branches: [main, master]
   workflow_dispatch:
-
-# Hủy bản build cũ nếu m có push liên tục, nhả slot queue ra cho người khác
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
-    name: Build unsigned IPA
     runs-on: macos-latest
-    timeout-minutes: 350
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: true # Bắt buộc nếu có file to như libairlift_ffi.a
+          lfs: true # Bắt buộc nếu có file .a nặng
 
-      - name: Show toolchain
+      - name: Show Toolchain
         run: |
           xcodebuild -version
           swift --version
 
-      # CACHE ĐỂ BUILD NHANH LÚC CÓ MÁY, TRÁNH QUÁ 6 TIẾNG
-      - name: Cache SPM
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/org.swift.swiftpm
-            ~/Library/org.swift.swiftpm
-          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-spm-
+      - name: Build Unsigned IPA
+        run: |
+          chmod +x ./scripts/build-ipa.sh
+          bash ./scripts/build-ipa.sh Release
 
-      - name: Cache DerivedData
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Developer/Xcode/DerivedData
-          key: ${{ runner.os }}-dd-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-dd-
-
-      - name: List schemes
-        run: xcodebuild -list -project EnsWilde.xcodeproj
-
-      # TỰ ĐỘNG RETRY NẾU LỠ RỚT MẠNG
-      - name: Build IPA (Retry 3 lần)
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 340
-          max_attempts: 3
-          retry_wait_seconds: 120
-          command: bash ./scripts/build-ipa.sh Release
-
-      - name: Upload artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: EnsWilde
+          name: EnsWilde-Unsigned
           path: build/EnsWilde.ipa
           if-no-files-found: error
