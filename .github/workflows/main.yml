@@ -9,6 +9,7 @@ jobs:
   build:
     name: Build unsigned IPA
     runs-on: macos-latest
+    # TĂNG THỜI GIAN CHỜ TỐI ĐA (Sát trần 360 phút của GitHub)
     timeout-minutes: 350
 
     steps:
@@ -25,6 +26,7 @@ jobs:
       - name: List schemes
         run: xcodebuild -list -project EnsWilde.xcodeproj
 
+      # TỰ ĐỘNG RETRY NẾU BỊ QUEUE ĐÁ HOẶC RỚT MẠNG
       - name: Build IPA (Retry 3 lần)
         uses: nick-fields/retry@v3
         with:
