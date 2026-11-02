@@ -130,9 +130,6 @@ class PasscodeThemeViewModel: ObservableObject {
         var targetPath = globalTelephony.cachePath
         if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
         
-        onLogUpdate("Ensuring target directory exists...")
-        _ = BadQuery().grantAccess(atPath: targetPath)
-        
         onLogUpdate("Đang dò tunnel IP...")
         guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else { 
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."]) 
@@ -142,11 +139,12 @@ class PasscodeThemeViewModel: ObservableObject {
         let pairingPath = pairingURL.path
         let srcDir = tempDir.path
         
-        // Gán sink
+        // Gán sink để hứng log
         airliftLogSink = { message in
-            DispatchQueue.main.async { onLogUpdate(message) }
+            DispatchQueue.main.async { onLogUpdate("[Airlift] \(message)") }
         }
         
+        // GỌI THẲNG C-FFI CỦA AIRLIFT
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
@@ -165,10 +163,11 @@ class PasscodeThemeViewModel: ObservableObject {
                     &errPtr
                 )
                 
+                airliftLogSink = nil
+                
                 if res != 0 {
                     let msg = errPtr != nil ? String(cString: errPtr!) : "Mã lỗi FFI: \(res)"
                     if let e = errPtr { al_string_free(e) }
-                    // NÉM LỖI RA NGOÀI CHO TOOLRUNNER BẮT
                     continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
                 } else {
                     continuation.resume()
@@ -176,7 +175,6 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
         
-        airliftLogSink = nil
         onLogUpdate("✅ Passcode applied successfully.")
     }
 }
