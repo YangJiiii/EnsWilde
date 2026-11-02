@@ -5,7 +5,7 @@ workflows:
     max_build_duration: 45
     environment:
       xcode: latest
-      # ĐÉO KHAI BÁO BẤT KỲ THÔNG TIN KÝ NÀO Ở ĐÂY
+      # ĐÉO CẦN KHAI BÁO CERT GÌ HẾT
     scripts:
       - name: Build Unsigned IPA
         script: |
