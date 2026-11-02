@@ -8,6 +8,10 @@
 #import "mount.h"
 #import "JITEnableContext.h"
 
+// --- AIRLIFT & GRAPPA ---
+#import "airlift.h"
+#import "GrappaHelper.h"
+
 long FindCacheDataOffset(const char *mgKey);
 
 #pragma mark - Private API
