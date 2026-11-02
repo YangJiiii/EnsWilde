@@ -27,7 +27,7 @@ echo "==> [2/4] Setting up build directory..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-echo "==> [3/4] Injecting Airlift + Grappa & XÓA SỔ libidevice_ffi.a..."
+echo "==> [3/4] Injecting Airlift + Grappa & Fixing Duplicate..."
 gem install xcodeproj --no-document >/dev/null 2>&1 || true
 export AIRCARD_LIB AIRCARD_HEADERS GRAPPA_M GRAPPA_DIR
 
@@ -77,7 +77,7 @@ ruby -e '
     config.build_settings["LIBRARY_SEARCH_PATHS"] = lib_paths.uniq
     
     ld_flags = config.build_settings["OTHER_LDFLAGS"] || ["$(inherited)"]
-    # Lọc sạch mấy cái flag độc hại
+    # Lọc sạch mấy cái flag độc hại gây duplicate
     ld_flags = ld_flags.reject { |s| s.to_s.include?("airlift_ffi") || s.to_s.include?("idevice_ffi") || s.to_s.include?("-all_load") }
     ld_flags << "-ObjC"
     ld_flags << "-lairlift_ffi"
