@@ -5,8 +5,6 @@ import ZIPFoundation
 import AirliftFFI
 import Network
 
-private var airliftLogSink: ((String) -> Void)?
-
 @MainActor
 class PasscodeThemeViewModel: ObservableObject {
     @Published var isProcessing = false
@@ -139,19 +137,22 @@ class PasscodeThemeViewModel: ObservableObject {
         let pairingPath = pairingURL.path
         let srcDir = tempDir.path
         
-        // Gán sink để hứng log
-        airliftLogSink = { message in
-            DispatchQueue.main.async { onLogUpdate("[Airlift] \(message)") }
+        // Chuẩn bị context cho C function pointer
+        let logCtx = LogCallbackContext { line in
+            onLogUpdate("[Airlift] \(line)")
         }
+        let ctxPtr = Unmanaged.passUnretained(logCtx).toOpaque()
         
-        // GỌI THẲNG C-FFI CỦA AIRLIFT
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
                 
-                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { _, msgPtr in
-                    guard let msgPtr else { return }
-                    airliftLogSink?(String(cString: msgPtr))
+                // Callback không capture context
+                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { ctx, msgPtr in
+                    guard let ctx = ctx, let msgPtr = msgPtr else { return }
+                    let line = String(cString: msgPtr)
+                    let logCtx = Unmanaged<LogCallbackContext>.fromOpaque(ctx).takeUnretainedValue()
+                    logCtx.onLogUpdate(line)
                 }
                 
                 let res = al_exploit_write_dir(
@@ -159,11 +160,9 @@ class PasscodeThemeViewModel: ObservableObject {
                     srcDir, 
                     targetPath, 
                     logCallback,
-                    nil,
+                    ctxPtr,
                     &errPtr
                 )
-                
-                airliftLogSink = nil
                 
                 if res != 0 {
                     let msg = errPtr != nil ? String(cString: errPtr!) : "Mã lỗi FFI: \(res)"
