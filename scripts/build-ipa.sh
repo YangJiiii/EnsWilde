@@ -10,36 +10,37 @@ APP_NAME="EnsWilde"
 IPA_PATH="$BUILD_DIR/${APP_NAME}.ipa"
 
 # =============================================================================
-# ĐƯỜNG DẪN TỚI FILE MÀY ĐÃ NÉM VÔ
+# CẤU HÌNH ĐƯỜNG DẪN (MÀY CHECK KỸ 2 DÒNG GRAPPA)
 # =============================================================================
-# Dựa theo ảnh, mày đang có cấu trúc XCFramework:
-# Frameworks/ios-arm64/libairlift_ffi.a
-# Frameworks/ios-arm64/Headers/airlift.h
 AIRCARD_LIB="Frameworks/ios-arm64/libairlift_ffi.a"
 AIRCARD_HEADERS="Frameworks/ios-arm64/Headers"
 
-# Mày để GrappaHelper.h/.m ở đâu thì sửa lại 2 dòng này:
-GRAPPA_H="GrappaHelper/GrappaHelper.h"
-GRAPPA_M="GrappaHelper/GrappaHelper.m"
+# Sửa lại nếu Grappa của mày nằm ở chỗ khác (vd: "EnsWilde/GrappaHelper.m")
+GRAPPA_H="Sources/GrappaHelper.h" 
+GRAPPA_M="Sources/GrappaHelper.m"
+GRAPPA_DIR="$(dirname "$GRAPPA_H")"
 
-echo "==> Checking files..."
+echo "==> [1/4] Checking files..."
 for f in "$AIRCARD_LIB" "$AIRCARD_HEADERS/airlift.h" "$GRAPPA_H" "$GRAPPA_M"; do
   if [ ! -f "$f" ]; then
-    echo "❌ LỖI: Đéo tìm thấy $f"
+    echo "❌ LỖI CHÍ MẠNG: Đéo tìm thấy $f"
     echo "Mày phải để file đúng chỗ như trong script chỉ định."
     exit 1
   fi
 done
 
-echo "==> Building $APP_NAME ($CONFIG)"
+echo "==> [2/4] Setting up build directory..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
 # =============================================================================
 # INJECT VÀO XCODE BẰNG RUBY
 # =============================================================================
-echo "==> Injecting Airlift.a + GrappaHelper.m into Xcode project..."
-gem install xcodeproj --no-document >/dev/null
+echo "==> [3/4] Injecting Airlift.a + GrappaHelper.m into Xcode project..."
+gem install xcodeproj --no-document >/dev/null 2>&1 || true
+
+export AIRCARD_LIB AIRCARD_HEADERS GRAPPA_M GRAPPA_DIR
+
 ruby -e '
   require "xcodeproj"
   project_path = "EnsWilde.xcodeproj"
@@ -48,36 +49,47 @@ ruby -e '
   target = project.targets.find { |t| t.name == "EnsWilde" }
   exit 1 if target.nil?
 
-  # 1. Add thư viện Rust (.a) vào Link Binary With Libraries
-  lib_path = "Frameworks/ios-arm64/libairlift_ffi.a"
-  lib_ref = project.new_file(lib_path)
-  target.frameworks_build_phase.add_file_reference(lib_ref)
+  lib_path = ENV["AIRCARD_LIB"]
+  grappa_m_path = ENV["GRAPPA_M"]
+  grappa_dir = ENV["GRAPPA_DIR"]
+  header_path = ENV["AIRCARD_HEADERS"]
+
+  # 1. Link thư viện Airlift (.a)
+  lib_ref = project.files.find { |f| f.path == lib_path }
+  lib_ref ||= project.new_file(lib_path)
+  target.frameworks_build_phase.add_file_reference(lib_ref) unless target.frameworks_build_phase.files_references.include?(lib_ref)
 
   # 2. Add GrappaHelper.m vào Compile Sources
-  grappa_m_path = "GrappaHelper/GrappaHelper.m"
-  # Check nếu file đã có trong project chưa để tránh add trùng
-  existing_file = project.files.find { |f| f.path == grappa_m_path }
-  if existing_file.nil?
-    file_ref = project.new_file(grappa_m_path)
-    target.add_file_references([file_ref])
+  grappa_ref = project.files.find { |f| f.path == grappa_m_path }
+  if grappa_ref.nil?
+    grappa_ref = project.new_file(grappa_m_path)
+    target.add_file_references([grappa_ref])
+    puts "➕ Đã thêm GrappaHelper.m vào Compile Sources."
+  else
+    puts "ℹ️ GrappaHelper.m đã có sẵn, bỏ qua."
   end
 
-  # 3. Set Header Search Paths
+  # 3. Update Header Search Paths
   target.build_configurations.each do |config|
     paths = config.build_settings["HEADER_SEARCH_PATHS"] || ["$(inherited)"]
-    paths << "$(PROJECT_DIR)/Frameworks/ios-arm64/Headers"
-    paths << "$(PROJECT_DIR)/GrappaHelper"
+    paths << "$(PROJECT_DIR)/#{header_path}"
+    paths << "$(PROJECT_DIR)/#{grappa_dir}"
     config.build_settings["HEADER_SEARCH_PATHS"] = paths.uniq
+    
+    # Đảm bảo có link tới file .a nếu cần thiết
+    other_ldflags = config.build_settings["OTHER_LDFLAGS"] || ["$(inherited)"]
+    other_ldflags << "-ObjC" unless other_ldflags.include?("-ObjC")
+    config.build_settings["OTHER_LDFLAGS"] = other_ldflags
   end
 
   project.save
-  puts "✅ Đã inject xong!"
+  puts "✅ Xong phần inject!"
 '
 
 # =============================================================================
 # ARCHIVE VÀ ĐÓNG GÓI IPA
 # =============================================================================
-echo "==> Archiving..."
+echo "==> [4/4] Archiving and Packaging..."
 XCB_ARGS=(
   -project "$PROJECT"
   -scheme "$SCHEME"
@@ -102,7 +114,7 @@ fi
 
 APP_PATH="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -name '*.app' | head -n 1)"
 if [[ -z "$APP_PATH" ]]; then
-  echo "error: no .app found" >&2
+  echo "❌ LỖI: Đéo tìm thấy file .app sau khi archive!" >&2
   exit 1
 fi
 
@@ -118,4 +130,6 @@ rm -f  "$BUILD_DIR/Payload/${APP_BASENAME}/embedded.mobileprovision"
   zip -qry "$IPA_PATH" Payload
 )
 
-echo "==> Done: $IPA_PATH"
+echo "============================================================"
+echo "✅ DONE: $IPA_PATH"
+echo "============================================================"
