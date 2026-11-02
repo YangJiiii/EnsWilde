@@ -59,7 +59,7 @@ struct MainViewWithNavigation: View {
     }
 }
 
-// MARK: - APPLY TAB VIEW (ĐÃ FIX: BỎ CỤC APPLYING, THÊM NEOSPRING)
+// MARK: - APPLY TAB VIEW
 struct ApplyTabView: View {
     @ObservedObject var toolStore: ToolStore
     @ObservedObject var toolRunner: ToolRunner
@@ -71,6 +71,8 @@ struct ApplyTabView: View {
 
     @State private var showErrorAlert = false
     @State private var lastError: String?
+    @State private var fullLogText: String = ""
+    @State private var showCopiedAlert = false
     
     private var isApplying: Bool {
         if case .running = toolRunner.state { return true }
@@ -109,7 +111,6 @@ struct ApplyTabView: View {
                     Toggle(isOn: $toolStore.soundRespringEnabled) {
                         Text("Respring after apply")
                     }
-                    // THÊM CHỮ NEOSPRING VÀO ĐÂY
                     Text("Using Neospring to Respring device")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -142,8 +143,30 @@ struct ApplyTabView: View {
                         action: performApply
                     )
                 }
+
+                // LOG VIEWER MỚI
+                Section(header: HStack {
+                    Text("Execution Log").font(.headline).textCase(nil)
+                    Spacer()
+                    Button(action: { fullLogText = "" }) {
+                        Text("Clear").font(.caption).foregroundStyle(.red)
+                    }
+                }) {
+                    LogViewer(logText: $fullLogText)
+                        .frame(minHeight: 200)
+                }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
             }
             .navigationTitle(L("nav_apply"))
+            .onReceive(NotificationCenter.default.publisher(for: .airliftLog)) { notif in
+                if let line = notif.userInfo?["line"] as? String {
+                    fullLogText += line + "\n"
+                }
+            }
+            .onChange(of: isApplying) { applying in
+                if applying { fullLogText = "" } // Xoá log cũ khi bắt đầu chạy
+            }
         }
         .alert(L("alert_error"), isPresented: $showErrorAlert) {
             Button(L("alert_ok"), role: .cancel) { }
@@ -174,5 +197,51 @@ struct ApplyTabView: View {
                 try? RespringHelper.respring()
             }
         }
+    }
+}
+
+// MARK: - LOG VIEWER COMPONENT
+struct LogViewer: View {
+    @Binding var logText: String
+    @State private var showCopiedAlert = false
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button(action: {
+                    UIPasteboard.general.string = logText
+                    showCopiedAlert = true
+                }) {
+                    Label("Copy", systemImage: "doc.on.doc")
+                        .font(.caption.bold())
+                }
+                .padding(.trailing, 8)
+                
+                ShareLink(item: logText, preview: SharePreview("Log", image: Image(systemName: "doc.text"))) {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                        .font(.caption.bold())
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            
+            Divider()
+            
+            ScrollView {
+                Text(logText.isEmpty ? "Chưa có log..." : logText)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .textSelection(.enabled)
+            }
+            .frame(minHeight: 150, maxHeight: 300)
+            .background(Color(UIColor.systemBackground))
+        }
+        .cornerRadius(10)
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.gray.opacity(0.3), lineWidth: 1))
+        .alert("Đã copy!", isPresented: $showCopiedAlert) { Button("OK", role: .cancel) {} }
     }
 }
