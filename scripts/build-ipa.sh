@@ -48,17 +48,18 @@ ruby -e '
     puts "🗑️ Đã xóa vĩnh viễn: #{file_ref.path}"
   end
 
-  # 2. DỌN SẠCH FRAMEWORKS VÀ COMPILE SOURCES
-  target.frameworks_build_phase.files_references.dup.each do |f|
-    next unless f
-    target.frameworks_build_phase.remove_file_reference(f) if f.path&.end_with?("libairlift_ffi.a")
-  end
-  target.source_build_phase.files_references.dup.each do |f|
-    next unless f
-    target.source_build_phase.remove_file_reference(f) if f.path&.end_with?("GrappaHelper.m")
+  # 2. NUKE TOÀN BỘ PBXBuildFile ĐANG TRỎ TỚI libairlift_ffi.a VÀ GrappaHelper.m
+  #    (Xóa ở cấp PBXBuildFile object để chắc chắn không còn bản trùng trong bất kỳ phase nào.)
+  project.objects.dup.each do |_uuid, obj|
+    next unless obj.is_a?(Xcodeproj::Project::Object::PBXBuildFile)
+    path = obj.file_ref&.path.to_s
+    next if path.empty?
+    if path.end_with?("libairlift_ffi.a") || path.end_with?("GrappaHelper.m")
+      obj.remove_from_project
+    end
   end
 
-  # 3. CHỈ ADD AIRLIFT VÀ GRAPPA
+  # 3. CHỈ ADD AIRLIFT VÀ GRAPPA (một lần duy nhất)
   lib_ref = project.files.find { |f| f.path == lib_path } || project.new_file(lib_path)
   target.frameworks_build_phase.add_file_reference(lib_ref)
 
