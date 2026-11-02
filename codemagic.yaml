@@ -1,0 +1,23 @@
+workflows:
+  ios-unsigned-build:
+    name: EnsWilde Unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      xcode: latest
+      # QUAN TRỌNG: TẮT TỰ ĐỘNG KÝ
+      vars:
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+    scripts:
+      - name: Build Unsigned IPA
+        script: |
+          # Script build-ipa.sh của mày đã có sẵn CODE_SIGNING_ALLOWED=NO
+          # Nhưng tao ép thêm biến môi trường cho chắc cú
+          export CODE_SIGNING_ALLOWED=NO
+          export CODE_SIGNING_REQUIRED=NO
+          chmod +x ./scripts/build-ipa.sh
+          bash ./scripts/build-ipa.sh Release
+    artifacts:
+      - build/*.ipa
+      - build/*.xcarchive
