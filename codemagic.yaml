@@ -5,14 +5,14 @@ workflows:
     max_build_duration: 45
     environment:
       xcode: latest
-      # Ép môi trường không nhận Cert
+      # Bỏ EXPANDED_CODE_SIGN_IDENTITY đi, chỉ giữ 2 biến chuỗi "NO" này thôi
       vars:
         CODE_SIGNING_ALLOWED: "NO"
         CODE_SIGNING_REQUIRED: "NO"
-        EXPANDED_CODE_SIGN_IDENTITY: ""
     scripts:
       - name: Build Unsigned IPA
         script: |
+          # Script đã tự động export các biến môi trường cần thiết
           chmod +x ./scripts/build-ipa.sh
           bash ./scripts/build-ipa.sh Release
     artifacts:
