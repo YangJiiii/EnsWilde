@@ -9,118 +9,75 @@ ARCHIVE_PATH="$BUILD_DIR/EnsWilde.xcarchive"
 APP_NAME="EnsWilde"
 IPA_PATH="$BUILD_DIR/${APP_NAME}.ipa"
 
+# =============================================================================
+# ĐƯỜNG DẪN TỚI FILE MÀY ĐÃ NÉM VÔ
+# =============================================================================
+# Dựa theo ảnh, mày đang có cấu trúc XCFramework:
+# Frameworks/ios-arm64/libairlift_ffi.a
+# Frameworks/ios-arm64/Headers/airlift.h
+AIRCARD_LIB="Frameworks/ios-arm64/libairlift_ffi.a"
+AIRCARD_HEADERS="Frameworks/ios-arm64/Headers"
+
+# Mày để GrappaHelper.h/.m ở đâu thì sửa lại 2 dòng này:
+GRAPPA_H="GrappaHelper/GrappaHelper.h"
+GRAPPA_M="GrappaHelper/GrappaHelper.m"
+
+echo "==> Checking files..."
+for f in "$AIRCARD_LIB" "$AIRCARD_HEADERS/airlift.h" "$GRAPPA_H" "$GRAPPA_M"; do
+  if [ ! -f "$f" ]; then
+    echo "❌ LỖI: Đéo tìm thấy $f"
+    echo "Mày phải để file đúng chỗ như trong script chỉ định."
+    exit 1
+  fi
+done
+
 echo "==> Building $APP_NAME ($CONFIG)"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
 # =============================================================================
-# BUILD AIRLIFT TỪ SOURCE CODE TRONG REPO
+# INJECT VÀO XCODE BẰNG RUBY
 # =============================================================================
-echo "==> Building AirliftFFI from local source in AirCardCore..."
-
-if ! rustup target list --installed | grep -q "aarch64-apple-ios"; then
-  rustup target add aarch64-apple-ios
-fi
-
-cd AirCardCore
-cargo build --release --target aarch64-apple-ios
-cd ..
-
-# Tạo framework bundle
-FRAMEWORK_DIR="Frameworks/AirliftFFI.framework"
-rm -rf "$FRAMEWORK_DIR"
-mkdir -p "$FRAMEWORK_DIR/Headers"
-mkdir -p "$FRAMEWORK_DIR/Modules"
-
-cp AirCardCore/target/aarch64-apple-ios/release/libairlift_ffi.a "$FRAMEWORK_DIR/AirliftFFI"
-
-# Tự động dò tìm và copy header (dù nó nằm ở đâu trong AirCardCore)
-AIRLIFT_H=$(find AirCardCore -name "airlift.h" | head -n 1)
-GRAPPA_H=$(find AirCardCore -name "GrappaHelper.h" | head -n 1)
-
-if [ -n "$AIRLIFT_H" ]; then
-  cp "$AIRLIFT_H" "$FRAMEWORK_DIR/Headers/airlift.h"
-else
-  echo "ERROR: Cannot find airlift.h in AirCardCore!"
-  exit 1
-fi
-
-if [ -n "$GRAPPA_H" ]; then
-  cp "$GRAPPA_H" "$FRAMEWORK_DIR/Headers/GrappaHelper.h"
-else
-  echo "WARNING: Cannot find GrappaHelper.h in AirCardCore!"
-fi
-
-cat > "$FRAMEWORK_DIR/Modules/module.modulemap" <<EOF
-framework module AirliftFFI {
-    umbrella header "airlift.h"
-    export *
-    module * { export * }
-}
-EOF
-
-cat > "$FRAMEWORK_DIR/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>AirliftFFI</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.enswilde.AirliftFFI</string>
-    <key>CFBundleName</key>
-    <string>AirliftFFI</string>
-    <key>CFBundlePackageType</key>
-    <string>FMWK</string>
-    <key>CFBundleVersion</key>
-    <string>1.0</string>
-</dict>
-</plist>
-EOF
-
-echo "✅ Built AirliftFFI framework!"
-
-# =============================================================================
-# INJECT VÀO XCODE
-# =============================================================================
-echo "==> Injecting AirliftFFI into Xcode project..."
-gem install xcodeproj --no-document
+echo "==> Injecting Airlift.a + GrappaHelper.m into Xcode project..."
+gem install xcodeproj --no-document >/dev/null
 ruby -e '
   require "xcodeproj"
   project_path = "EnsWilde.xcodeproj"
-  framework_path = "Frameworks/AirliftFFI.framework"
   
   project = Xcodeproj::Project.open(project_path)
   target = project.targets.find { |t| t.name == "EnsWilde" }
-  
-  unless target.nil?
-    file_ref = project.new_file(framework_path)
-    target.frameworks_build_phase.add_file_reference(file_ref)
-    
-    embed_phase = target.copy_files_build_phases.find { |p| p.name == "Embed Frameworks" } 
-    if embed_phase.nil?
-      embed_phase = target.new_copy_files_build_phase("Embed Frameworks")
-      embed_phase.dst_subfolder_spec = "10"
-    end
-    build_file = embed_phase.add_file_reference(file_ref)
-    build_file.settings = { "ATTRIBUTES" => ["CodeSignOnCopy", "RemoveHeadersOnCopy"] }
-    
-    target.build_configurations.each do |config|
-      config.build_settings["FRAMEWORK_SEARCH_PATHS"] ||= ["$(inherited)"]
-      config.build_settings["FRAMEWORK_SEARCH_PATHS"] << "$(PROJECT_DIR)/Frameworks"
-    end
-    
-    project.save
-    puts "✅ Thành công: Đã nhúng AirliftFFI vào project!"
-  else
-    puts "❌ Lỗi: Không tìm thấy target EnsWilde"
-    exit 1
+  exit 1 if target.nil?
+
+  # 1. Add thư viện Rust (.a) vào Link Binary With Libraries
+  lib_path = "Frameworks/ios-arm64/libairlift_ffi.a"
+  lib_ref = project.new_file(lib_path)
+  target.frameworks_build_phase.add_file_reference(lib_ref)
+
+  # 2. Add GrappaHelper.m vào Compile Sources
+  grappa_m_path = "GrappaHelper/GrappaHelper.m"
+  # Check nếu file đã có trong project chưa để tránh add trùng
+  existing_file = project.files.find { |f| f.path == grappa_m_path }
+  if existing_file.nil?
+    file_ref = project.new_file(grappa_m_path)
+    target.add_file_references([file_ref])
   end
+
+  # 3. Set Header Search Paths
+  target.build_configurations.each do |config|
+    paths = config.build_settings["HEADER_SEARCH_PATHS"] || ["$(inherited)"]
+    paths << "$(PROJECT_DIR)/Frameworks/ios-arm64/Headers"
+    paths << "$(PROJECT_DIR)/GrappaHelper"
+    config.build_settings["HEADER_SEARCH_PATHS"] = paths.uniq
+  end
+
+  project.save
+  puts "✅ Đã inject xong!"
 '
 
 # =============================================================================
 # ARCHIVE VÀ ĐÓNG GÓI IPA
 # =============================================================================
+echo "==> Archiving..."
 XCB_ARGS=(
   -project "$PROJECT"
   -scheme "$SCHEME"
