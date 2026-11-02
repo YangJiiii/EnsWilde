@@ -34,7 +34,7 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
 # =============================================================================
-# INJECT VÀO XCODE BẰNG RUBY (ĐÃ FIX LỖI LINKER)
+# INJECT VÀO XCODE BẰNG RUBY (ĐÃ FIX LỖI NIL)
 # =============================================================================
 echo "==> [3/4] Injecting Airlift.a + GrappaHelper.m into Xcode project..."
 gem install xcodeproj --no-document >/dev/null 2>&1 || true
@@ -54,8 +54,9 @@ ruby -e '
   grappa_dir = ENV["GRAPPA_DIR"]
   header_path = ENV["AIRCARD_HEADERS"]
 
-  # 1. Dọn dẹp file .a cũ trong Frameworks Phase (nếu chạy lại nhiều lần)
+  # 1. Dọn dẹp file .a cũ trong Frameworks Phase (tránh lỗi nil path)
   target.frameworks_build_phase.files_references.dup.each do |f|
+    next unless f # Bỏ qua nếu f bị nil
     if f.path && f.path.end_with?("libairlift_ffi.a")
       target.frameworks_build_phase.remove_file_reference(f)
     end
@@ -63,6 +64,7 @@ ruby -e '
 
   # 2. Dọn dẹp GrappaHelper.m cũ trong Compile Sources (tránh lỗi Duplicate)
   target.source_build_phase.files_references.dup.each do |f|
+    next unless f # Bỏ qua nếu f bị nil
     if f.path && f.path.end_with?("GrappaHelper.m")
       target.source_build_phase.remove_file_reference(f)
     end
