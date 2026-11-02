@@ -98,22 +98,18 @@ class PasscodeThemeViewModel: ObservableObject {
         try? fm.removeItem(at: telephonyFolderURL)
     }
     
-    func importDefaultPasscode(from sourceURL: URL, name: String, themeStore: PasscodeThemeStore) async throws {}
-    
     func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         let globalTelephony = self.store.globalTelephonyVersion
-        
         onLogUpdate("Preparing Passcode Theme...")
+        
         let processedFiles = try processThemeFiles(theme: theme, globalPrefix: self.store.globalCustomPrefix)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
         
-        guard NetworkStatus.isVPNTunnelPresent() else { 
-            throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."]) 
-        }
+        guard NetworkStatus.isVPNTunnelPresent() else { throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."]) }
         
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
-        guard FileManager.default.fileExists(atPath: pairingURL.path) else { 
-            throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."]) 
+        guard FileManager.default.fileExists(atPath: pairingURL.path) else {
+            throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."])
         }
         
         let tempFolderName = "AirLiftPayload_\(UUID().uuidString)"
@@ -129,39 +125,28 @@ class PasscodeThemeViewModel: ObservableObject {
         if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
         
         onLogUpdate("Đang dò tunnel IP...")
-        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else { 
-            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."]) 
+        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else {
+            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."])
         }
         
         onLogUpdate("Đang ghi qua AirTraffic...")
         let pairingPath = pairingURL.path
         let srcDir = tempDir.path
         
-        // Chuẩn bị context cho C function pointer
-        let logCtx = LogCallbackContext { line in
-            onLogUpdate("[Airlift] \(line)")
-        }
-        let ctxPtr = Unmanaged.passUnretained(logCtx).toOpaque()
+        // CỐ GẮNG GỌI GRAPPA BẰNG SWIFT TRƯỚC, NẾU FAIL THÌ RUST TỰ FALLBACK
+        _ = try? ALGetGrappaToken(0, 0, 0, nil, 0, nil, nil, 0)
         
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
-                
-                // Callback không capture context
-                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { ctx, msgPtr in
-                    guard let ctx = ctx, let msgPtr = msgPtr else { return }
+                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { _, msgPtr in
+                    guard let msgPtr else { return }
                     let line = String(cString: msgPtr)
-                    let logCtx = Unmanaged<LogCallbackContext>.fromOpaque(ctx).takeUnretainedValue()
-                    logCtx.onLogUpdate(line)
+                    DispatchQueue.main.async { onLogUpdate("[Airlift] \(line)") }
                 }
                 
                 let res = al_exploit_write_dir(
-                    pairingPath, 
-                    srcDir, 
-                    targetPath, 
-                    logCallback,
-                    ctxPtr,
-                    &errPtr
+                    pairingPath, srcDir, targetPath, logCallback, nil, &errPtr
                 )
                 
                 if res != 0 {
@@ -173,7 +158,6 @@ class PasscodeThemeViewModel: ObservableObject {
                 }
             }
         }
-        
         onLogUpdate("✅ Passcode applied successfully.")
     }
 }
