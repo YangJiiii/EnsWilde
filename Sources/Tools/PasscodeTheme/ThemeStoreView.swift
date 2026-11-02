@@ -4,9 +4,8 @@ struct ThemeStoreView: View {
     @ObservedObject var themeStore: PasscodeThemeStore
     @StateObject private var storeManager = ThemeStoreManager()
     @State private var selectedRemoteTheme: RemoteTheme?
-    
-    // SỬA LỖI 1: Truyền themeStore vào khởi tạo ViewModel
     @StateObject private var viewModel: PasscodeThemeViewModel
+    @State private var selectedType: RemoteTheme.ThemeType = .passcode
     
     init(themeStore: PasscodeThemeStore) {
         self.themeStore = themeStore
@@ -14,42 +13,58 @@ struct ThemeStoreView: View {
     }
 
     var body: some View {
-        Group {
-            if storeManager.isLoading {
-                ProgressView("Loading themes...")
-            } else if let error = storeManager.errorMessage {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.largeTitle)
-                        .foregroundStyle(.red)
-                    Text(error)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-                    Button("Retry") {
-                        Task { await storeManager.fetchThemes() }
+        VStack {
+            // Picker chọn loại theme
+            Picker("Loại Theme", selection: $selectedType) {
+                Text("Passcode").tag(RemoteTheme.ThemeType.passcode)
+                Text("Wallet").tag(RemoteTheme.ThemeType.wallet)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.top, 8)
+            
+            Group {
+                if storeManager.isLoading {
+                    ProgressView("Loading themes...")
+                } else if let error = storeManager.errorMessage {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.largeTitle)
+                            .foregroundStyle(.red)
+                        Text(error)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                        Button("Retry") {
+                            Task { await storeManager.fetchThemes() }
+                        }
                     }
-                }
-                .padding()
-            } else if storeManager.themes.isEmpty {
-                ContentUnavailableView("No Themes", systemImage: "paintpalette", description: Text("No themes found in the store."))
-            } else {
-                List(storeManager.themes) { theme in
-                    Button {
-                        selectedRemoteTheme = theme
-                    } label: {
-                        HStack(spacing: 12) {
-                            // Sửa lại URL preview cho đúng (nếu cần)
-                            AsyncImage(url: URL(string: theme.preview)) { image in
-                                image.resizable().aspectRatio(contentMode: .fill)
-                            } placeholder: {
-                                Color.gray.opacity(0.3)
-                            }
-                            .frame(width: 60, height: 60)
-                            .cornerRadius(8)
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(theme.name).font(.headline)
-                                Text(theme.authors).font(.caption).foregroundStyle(.secondary)
+                    .padding()
+                } else {
+                    let filteredThemes = storeManager.themes.filter { $0.type == selectedType || $0.type == .unknown }
+                    if filteredThemes.isEmpty {
+                        ContentUnavailableView("No Themes", systemImage: "paintpalette", description: Text("Không có theme nào cho loại này."))
+                    } else {
+                        List(filteredThemes) { theme in
+                            Button {
+                                selectedRemoteTheme = theme
+                            } label: {
+                                HStack(spacing: 12) {
+                                    AsyncImage(url: URL(string: theme.preview)) { image in
+                                        image.resizable().aspectRatio(contentMode: .fill)
+                                    } placeholder: {
+                                        Color.gray.opacity(0.3)
+                                    }
+                                    .frame(width: 60, height: 60)
+                                    .cornerRadius(8)
+                                    
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(theme.name).font(.headline)
+                                        Text(theme.authors).font(.caption).foregroundStyle(.secondary)
+                                        Text(theme.type == .passcode ? "Passcode" : theme.type == .wallet ? "Wallet" : "Unknown")
+                                            .font(.caption2)
+                                            .foregroundStyle(.blue)
+                                    }
+                                }
                             }
                         }
                     }
@@ -62,20 +77,18 @@ struct ThemeStoreView: View {
                 await storeManager.fetchThemes()
             }
         }
-        // SỬA LỖI 2: Hiển thị sheet tải theme từ xa
         .sheet(item: $selectedRemoteTheme) { remoteTheme in
             RemoteThemeDownloadView(remoteTheme: remoteTheme, themeStore: themeStore, viewModel: viewModel)
         }
     }
 }
 
-// Thêm View mới để xử lý việc tải RemoteTheme
+// MARK: - Remote Theme Download View (Xử lý import đúng loại)
 struct RemoteThemeDownloadView: View {
     let remoteTheme: RemoteTheme
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var viewModel: PasscodeThemeViewModel
     @Environment(\.dismiss) var dismiss
-    
     @State private var isDownloading = false
     @State private var errorMessage: String?
     
@@ -92,6 +105,9 @@ struct RemoteThemeDownloadView: View {
                 
                 Text(remoteTheme.name).font(.title2.bold())
                 Text(remoteTheme.description ?? "").foregroundStyle(.secondary)
+                Text("Loại: \(remoteTheme.type == .passcode ? "Passcode" : remoteTheme.type == .wallet ? "Wallet" : "Không rõ")")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
                 
                 if let errorMessage = errorMessage {
                     Text(errorMessage).foregroundStyle(.red)
@@ -128,13 +144,24 @@ struct RemoteThemeDownloadView: View {
                 throw PasscodeThemeError.invalidFormat
             }
             
-            // Tải file ZIP về bộ nhớ tạm
             let (tempURL, _) = try await URLSession.shared.download(from: url)
             
-            // Gọi hàm import có sẵn trong ViewModel của bạn
-            try await viewModel.importTheme(from: tempURL, name: remoteTheme.name)
+            // Xử lý theo loại theme
+            switch remoteTheme.type {
+            case .passcode:
+                // Import theme passcode (.passthm)
+                try await viewModel.importTheme(from: tempURL, name: remoteTheme.name)
+            case .wallet:
+                // Import theme wallet (có thể là .zip chứa ảnh card)
+                // Tạm thời dùng logic import wallet nếu có, hoặc báo lỗi
+                errorMessage = "Wallet theme import chưa được hỗ trợ trong view này. Vui lòng dùng AirCard."
+                isDownloading = false
+                return
+            case .unknown:
+                // Thử import như passcode
+                try await viewModel.importTheme(from: tempURL, name: remoteTheme.name)
+            }
             
-            // Import thành công, đóng view
             dismiss()
             
         } catch {
