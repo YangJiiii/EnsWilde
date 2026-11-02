@@ -42,6 +42,56 @@ class PasscodeThemeViewModel: ObservableObject {
         store.addTheme(themeWithSize)
     }
     
+    /// Import a stock/default passcode ZIP (e.g. dumped from /System/Library/PrivateFrameworks/TelephonyUI.framework).
+    /// Behaves like `importTheme`, but also auto-detects the language prefix embedded in filenames
+    /// (e.g. "en-1@3x.png" -> prefix "en") and pushes it into the passed store so the user
+    /// doesn't have to set it manually from the picker afterwards.
+    func importDefaultPasscode(from sourceURL: URL, name: String, themeStore: PasscodeThemeStore) async throws {
+        isProcessing = true
+        defer { isProcessing = false }
+        let accessing = sourceURL.startAccessingSecurityScopedResource()
+        defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
+        
+        let tempDir = FileManager.default.temporaryDirectory
+        let tempFileURL = tempDir.appendingPathComponent(sourceURL.lastPathComponent)
+        try? FileManager.default.removeItem(at: tempFileURL)
+        do { try FileManager.default.copyItem(at: sourceURL, to: tempFileURL) } catch { throw PasscodeThemeError.accessDenied }
+        
+        let newTheme = PasscodeTheme(name: name)
+        let themeFolder = newTheme.themeFolderURL
+        if !FileManager.default.fileExists(atPath: themeFolder.path) {
+            try FileManager.default.createDirectory(at: themeFolder, withIntermediateDirectories: true)
+        }
+        let detectedSize = detectSizeFromZIP(at: tempFileURL)
+        do { try FileManager.default.unzipItem(at: tempFileURL, to: themeFolder) } catch {
+            try? FileManager.default.removeItem(at: themeFolder)
+            throw PasscodeThemeError.invalidFormat
+        }
+        try extractImagesFromTelephonySubfolder(themeFolder: themeFolder)
+        try? FileManager.default.removeItem(at: tempFileURL)
+        
+        // Auto-detect the language prefix from any "<lang>-<key>@<scale>.png" filename and
+        // push it into the store so the global picker reflects the imported bundle.
+        if let files = try? FileManager.default.contentsOfDirectory(atPath: themeFolder.path) {
+            for file in files {
+                let ext = (file as NSString).pathExtension.lowercased()
+                guard ext == "png" || ext == "jpg" || ext == "jpeg" else { continue }
+                if let firstHyphen = file.firstIndex(of: "-") {
+                    let prefix = String(file[file.startIndex..<firstHyphen])
+                    if !prefix.isEmpty,
+                       let lang = PasscodeTheme.PrefixLanguage(rawValue: prefix) {
+                        themeStore.globalCustomPrefixRaw = lang.rawValue
+                    }
+                    break
+                }
+            }
+        }
+        
+        var themeWithSize = newTheme
+        themeWithSize.detectedSize = detectedSize
+        themeStore.addTheme(themeWithSize)
+    }
+    
     func processThemeFiles(theme: PasscodeTheme, globalPrefix: PasscodeTheme.PrefixLanguage? = nil) throws -> [(sourceURL: URL, processedData: Data, targetFilename: String)] {
         var processedFiles: [(URL, Data, String)] = []
         let imageFiles = theme.getImageFiles()
@@ -133,8 +183,9 @@ class PasscodeThemeViewModel: ObservableObject {
         let pairingPath = pairingURL.path
         let srcDir = tempDir.path
         
-        // CỐ GẮNG GỌI GRAPPA BẰNG SWIFT TRƯỚC, NẾU FAIL THÌ RUST TỰ FALLBACK
-        _ = try? ALGetGrappaToken(0, 0, 0, nil, 0, nil, nil, 0)
+        // Force the Swift-side Grappa symbol to stay linked even if the Rust path short-circuits.
+        // (With out_buf == nil this returns -1 immediately — intentional: it's a link anchor.)
+        _ = ALGetGrappaToken(0, 0, 0, nil, 0, nil, nil, 0)
         
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
