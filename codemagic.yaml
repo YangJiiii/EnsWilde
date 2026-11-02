@@ -7,19 +7,27 @@ workflows:
       xcode: latest
       cocoapods: default
       ios_signing:
-        distribution_type: ad_hoc # Hoặc development tùy cert mày mua
-        bundle_identifier: app.lemon2974.peach9464 # SỬA LẠI ĐÚNG BUNDLE ID TRONG PROFILE CỦA MÀY
+        # Nếu profile là Development thì đổi thành "development"
+        # Nếu profile là Ad-Hoc (mua cert dài hạn) thì để "ad_hoc"
+        distribution_type: development
+        # CỰC KỲ QUAN TRỌNG: Phải KHỚP CHÍNH XÁC bundle ID trong profile
+        bundle_identifier: com.yangjiii.EnsWilde
     scripts:
+      - name: Apply Profile to Xcode Project
+        script: |
+          # Tự động set Provisioning Profile và Team vào project
+          xcode-project use-profiles
+
       - name: Build & Sign IPA
         script: |
           chmod +x ./scripts/build-ipa.sh
           bash ./scripts/build-ipa.sh Release
+
     artifacts:
       - build/ota/*.ipa
       - build/ota/*.plist
       - build/ota/*.html
     publishing:
-      # Tự động đẩy thư mục build/ota lên GitHub Pages để lấy link HTTPS
       scripts:
         - name: Publish OTA to GitHub Pages
           script: |
