@@ -1,6 +1,21 @@
 import SwiftUI
 import AirliftFFI
 
+// =============================================================================
+// BÙA CHÚ ÉP LINKER PHẢI GIỮ HÀM ALGETGRAPPATOKEN (Chống dead-strip)
+// =============================================================================
+@_silgen_name("ALGetGrappaToken")
+func _forceLinkALGetGrappaToken(
+    _ version: UInt32,
+    _ deviceType: UInt32,
+    _ protocolVersion: UInt32,
+    _ out_buf: UnsafeMutablePointer<UInt8>?,
+    _ max_len: Int,
+    _ out_len: UnsafeMutablePointer<Int>?,
+    _ err_buf: UnsafeMutablePointer<CChar>?,
+    _ err_len: Int
+) -> Int32
+
 extension Notification.Name {
     static let airliftLog = Notification.Name("airlift.log")
 }
