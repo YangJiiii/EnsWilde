@@ -27,7 +27,7 @@ echo "==> [2/4] Setting up build directory..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-echo "==> [3/4] Injecting Airlift + Grappa & Dọn Sạch Duplicate..."
+echo "==> [3/4] Injecting Airlift + Grappa & XÓA SỔ libidevice_ffi.a..."
 gem install xcodeproj --no-document >/dev/null 2>&1 || true
 export AIRCARD_LIB AIRCARD_HEADERS GRAPPA_M GRAPPA_DIR
 
@@ -42,32 +42,30 @@ ruby -e '
   grappa_dir = ENV["GRAPPA_DIR"]
   header_path = ENV["AIRCARD_HEADERS"]
 
-  # 1. DỌN SẠCH: Xoá MỌI reference tới libidevice_ffi.a và libairlift_ffi.a khỏi Frameworks Phase
+  # 1. TÌM VÀ XÓA TẬN GỐC MỌI REF CỦA libidevice_ffi.a TRONG PROJECT
+  project.files.select { |f| f.path && f.path.end_with?("libidevice_ffi.a") }.each do |file_ref|
+    file_ref.remove_from_project
+    puts "🗑️ Đã xóa vĩnh viễn: #{file_ref.path}"
+  end
+
+  # 2. DỌN SẠCH FRAMEWORKS PHASE VÀ COMPILE SOURCES
   target.frameworks_build_phase.files_references.dup.each do |f|
-    next unless f && f.path
-    if f.path.end_with?("libidevice_ffi.a") || f.path.end_with?("libairlift_ffi.a")
-      target.frameworks_build_phase.remove_file_reference(f)
-      puts "🗑️ Đã xoá ref: #{f.path}"
-    end
+    next unless f
+    target.frameworks_build_phase.remove_file_reference(f) if f.path&.end_with?("libairlift_ffi.a")
   end
-
-  # 2. Xoá MỌI ref cũ tới GrappaHelper.m
   target.source_build_phase.files_references.dup.each do |f|
-    next unless f && f.path
-    if f.path.end_with?("GrappaHelper.m")
-      target.source_build_phase.remove_file_reference(f)
-    end
+    next unless f
+    target.source_build_phase.remove_file_reference(f) if f.path&.end_with?("GrappaHelper.m")
   end
 
-  # 3. Chỉ add Airlift (nó đã chứa idevice_ffi bên trong)
+  # 3. CHỈ ADD AIRLIFT VÀ GRAPPA
   lib_ref = project.files.find { |f| f.path == lib_path } || project.new_file(lib_path)
   target.frameworks_build_phase.add_file_reference(lib_ref)
 
-  # 4. Add GrappaHelper.m vào compile sources
   grappa_ref = project.files.find { |f| f.path == grappa_m_path } || project.new_file(grappa_m_path)
   target.source_build_phase.add_file_reference(grappa_ref)
 
-  # 5. Build settings — DỌN SẠCH mọi flag cũ có thể gây conflict
+  # 4. BUILD SETTINGS - LỌC SẠCH LDFLAGS
   target.build_configurations.each do |config|
     # Header paths
     h_paths = config.build_settings["HEADER_SEARCH_PATHS"] || ["$(inherited)"]
@@ -82,20 +80,19 @@ ruby -e '
     lib_paths << "$(PROJECT_DIR)/Frameworks/ios-arm64"
     config.build_settings["LIBRARY_SEARCH_PATHS"] = lib_paths.uniq
     
-    # OTHER_LDFLAGS — LỌC SẠCH cái gì liên quan tới idevice, all_load, airlift cũ
+    # OTHER_LDFLAGS — XÓA SẠCH MỌI THỨ CÓ THỂ GÂY LỖI
     ld_flags = config.build_settings["OTHER_LDFLAGS"] || ["$(inherited)"]
     ld_flags = ld_flags.reject { |f| 
       s = f.to_s
       s.include?("airlift_ffi") || 
       s.include?("idevice_ffi") ||
       s.include?("-all_load") ||
-      s.include?("-exported_symbol") ||
-      s.include?("-u,_ALGetGrappaToken") ||
-      s == "-ObjC"
+      s.include?("-exported_symbol")
     }
+    # Chỉ add lại những flag cần thiết
     ld_flags << "-ObjC"
     ld_flags << "-lairlift_ffi"
-    ld_flags << "-Wl,-u,_ALGetGrappaToken"   # Ép linker giữ symbol Grappa
+    ld_flags << "-Wl,-u,_ALGetGrappaToken"
     config.build_settings["OTHER_LDFLAGS"] = ld_flags.uniq
     
     # Tắt chữ ký
@@ -108,7 +105,7 @@ ruby -e '
     config.build_settings["PROVISIONING_PROFILE_SPECIFIER"] = ""
   end
   project.save
-  puts "✅ Dọn dẹp xong! Chỉ còn Airlift là thằng duy nhất chứa idevice_ffi."
+  puts "✅ Đã dọn sạch libidevice_ffi.a khỏi project!"
 '
 
 echo "==> [4/4] Archiving (Unsigned)..."
