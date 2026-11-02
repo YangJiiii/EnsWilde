@@ -27,7 +27,7 @@ echo "==> [2/4] Setting up build directory..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-echo "==> [3/4] Injecting Airlift + Grappa & XÓA SỔ libidevice_ffi.a..."
+echo "==> [3/4] Injecting Airlift + Grappa & Fixing Duplicate..."
 gem install xcodeproj --no-document >/dev/null 2>&1 || true
 export AIRCARD_LIB AIRCARD_HEADERS GRAPPA_M GRAPPA_DIR
 
@@ -67,26 +67,37 @@ ruby -e '
 
   # 4. BUILD SETTINGS
   target.build_configurations.each do |config|
+    # Header Search Paths
     h_paths = config.build_settings["HEADER_SEARCH_PATHS"] || ["$(inherited)"]
+    h_paths = h_paths.reject { |p| p.to_s.include?("Frameworks/ios-arm64/Headers") || p.to_s.include?(grappa_dir.to_s) }
     h_paths << "$(PROJECT_DIR)/#{header_path}"
     h_paths << "$(PROJECT_DIR)/#{grappa_dir}"
     config.build_settings["HEADER_SEARCH_PATHS"] = h_paths.uniq
 
+    # Library Search Paths
     lib_paths = config.build_settings["LIBRARY_SEARCH_PATHS"] || ["$(inherited)"]
+    lib_paths = lib_paths.reject { |p| p.to_s.include?("Frameworks/ios-arm64") || p.to_s.include?("Sources/idevice") }
     lib_paths << "$(PROJECT_DIR)/Frameworks/ios-arm64"
     config.build_settings["LIBRARY_SEARCH_PATHS"] = lib_paths.uniq
-    
+
+    # OTHER_LDFLAGS — Lọc sạch flag cũ, thêm flag ép giữ Grappa symbol
     ld_flags = config.build_settings["OTHER_LDFLAGS"] || ["$(inherited)"]
-    # Lọc sạch mấy cái flag độc hại
-    ld_flags = ld_flags.reject { |s| s.to_s.include?("airlift_ffi") || s.to_s.include?("idevice_ffi") || s.to_s.include?("-all_load") || s.to_s.include?("-exported_symbol") || s.to_s.include?("-Wl,-u,") }
+    ld_flags = ld_flags.reject { |s|
+      str = s.to_s
+      str.include?("airlift_ffi") ||
+      str.include?("idevice_ffi") ||
+      str.include?("-all_load") ||
+      str.include?("-exported_symbol") ||
+      str.include?("-Wl,-u,") ||
+      str == "-ObjC"
+    }
     ld_flags << "-ObjC"
     ld_flags << "-lairlift_ffi"
-    # ÉP LINKER XUẤT KHẨU HÀM GRAPPA ĐỂ RUST MÒ THẤY
     ld_flags << "-Wl,-exported_symbol,_ALGetGrappaToken"
     ld_flags << "-Wl,-u,_ALGetGrappaToken"
     config.build_settings["OTHER_LDFLAGS"] = ld_flags.uniq
-    
-    # Ép chết code signing
+
+    # Ép chết code signing (unsigned IPA)
     config.build_settings["CODE_SIGN_STYLE"] = "Manual"
     config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"
     config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"
@@ -96,6 +107,7 @@ ruby -e '
     config.build_settings["PROVISIONING_PROFILE_SPECIFIER"] = ""
   end
   project.save
+  puts "✅ Project config xong. Chỉ dùng Airlift, ép Linker giữ ALGetGrappaToken."
 '
 
 echo "==> [4/4] Archiving (Unsigned)..."
