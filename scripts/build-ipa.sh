@@ -72,7 +72,9 @@ ruby -e '
     ld_flags << "-ObjC"
     ld_flags << "-lairlift_ffi"
     
-    # CỰC KỲ QUAN TRỌNG: Ép Linker giữ lại symbol ALGetGrappaToken
+    # BÙA CHÚ ÉP LINKER GIỮ SYMBOL GRAPPA
+    ld_flags << "-Wl,-all_load"
+    ld_flags << "-Wl,-exported_symbol,_ALGetGrappaToken"
     ld_flags << "-Wl,-u,_ALGetGrappaToken"
     
     config.build_settings["OTHER_LDFLAGS"] = ld_flags.uniq
@@ -97,8 +99,6 @@ XCB_ARGS=(
   CODE_SIGN_ENTITLEMENTS="" EXPANDED_CODE_SIGN_IDENTITY=""
   DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER=""
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
-  # Thêm flag ở đây để chắc chắn 100%
-  OTHER_LDFLAGS="-Wl,-u,_ALGetGrappaToken"
 )
 
 if command -v xcbeautify >/dev/null 2>&1; then
