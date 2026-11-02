@@ -83,12 +83,15 @@ ruby -e '
 '
 
 echo "==> [4/4] Archiving and Packaging..."
+# THÊM CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO ĐỂ CHẶN XCODE KÝ CHUI
 XCB_ARGS=(
   -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" -sdk iphoneos
   -archivePath "$ARCHIVE_PATH" -destination "generic/platform=iOS"
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
   CODE_SIGN_ENTITLEMENTS="" EXPANDED_CODE_SIGN_IDENTITY=""
   DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER=""
+  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
+  OTHER_CODE_SIGN_FLAGS="--no-strict"
 )
 
 if command -v xcbeautify >/dev/null 2>&1; then
@@ -106,8 +109,22 @@ fi
 APP_BASENAME="$(basename "$APP_PATH")"
 rm -rf "$BUILD_DIR/Payload" && mkdir -p "$BUILD_DIR/Payload"
 cp -R "$APP_PATH" "$BUILD_DIR/Payload/"
+
+# =============================================================================
+# QUÉT SẠCH CHỮ KÝ TRÊN MAIN APP VÀ CÁC FRAMEWORK NHÚNG
+# =============================================================================
+echo "==> [Stripping] Xóa sạch code signature để đảm bảo Unsigned 100%..."
 rm -rf "$BUILD_DIR/Payload/${APP_BASENAME}/_CodeSignature"
 rm -f  "$BUILD_DIR/Payload/${APP_BASENAME}/embedded.mobileprovision"
+
+if [ -d "$BUILD_DIR/Payload/${APP_BASENAME}/Frameworks" ]; then
+    find "$BUILD_DIR/Payload/${APP_BASENAME}/Frameworks" -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
+    find "$BUILD_DIR/Payload/${APP_BASENAME}/Frameworks" -name "embedded.mobileprovision" -delete 2>/dev/null || true
+    find "$BUILD_DIR/Payload/${APP_BASENAME}/Frameworks" -type f -perm +111 -exec codesign --remove-signature {} \; 2>/dev/null || true
+fi
+
+# Gỡ luôn chữ ký của file app chính (nếu có)
+codesign --remove-signature "$BUILD_DIR/Payload/${APP_BASENAME}/${APP_NAME}" 2>/dev/null || true
 
 (cd "$BUILD_DIR" && zip -qry "$IPA_PATH" Payload)
 echo "✅ DONE: $IPA_PATH"
