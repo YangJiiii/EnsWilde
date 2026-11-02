@@ -134,7 +134,7 @@ cp "$EXPORT_DIR/$APP_NAME.ipa" "$OTA_DIR/"
 
 # 6. Tạo manifest.plist cho OTA
 # LƯU Ý: Thay "USERNAME" bằng username Github của mày
-GITHUB_PAGES_URL="https://USERNAME.github.io/REPO_NAME/ota"
+GITHUB_PAGES_URL="https://github.com/nguyenls3005-cell/EnsWilde"
 cat > "$OTA_DIR/manifest.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
