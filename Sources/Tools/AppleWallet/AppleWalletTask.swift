@@ -18,16 +18,12 @@ enum AppleWalletTask {
             throw ToolTaskError.generic("Không tìm thấy RSD tunnel.")
         }
         
-        let observer = NotificationCenter.default.addObserver(forName: .airliftLog, object: nil, queue: .main) { note in
-            if let line = note.userInfo?["line"] as? String { onLogUpdate("[Airlift] \(line)") }
-        }
-        defer { NotificationCenter.default.removeObserver(observer) }
-        
         let tempFolderName = "AirLiftWallet_\(UUID().uuidString)"
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(tempFolderName)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         
+        // Tạo cấu trúc thư mục cho Wallet
         for card in enabledCards {
             let cardBasePath = tempDir.appendingPathComponent("Passes/Cards").appendingPathComponent(card.id)
             try FileManager.default.createDirectory(at: cardBasePath.appendingPathExtension("pkpass"), withIntermediateDirectories: true)
@@ -44,13 +40,27 @@ enum AppleWalletTask {
         let srcDir = tempDir.appendingPathComponent("Passes/Cards").path
         let targetParentDir = "/var/mobile/Library/Passes"
         
-        _ = BadQuery().grantAccess(atPath: targetParentDir)
-        
-        // GỌI THẲNG C-FFI, KHÔNG QUA BRIDGE
+        // GỌI THẲNG C-FFI CỦA AIRLIFT
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
-                let res = al_exploit_write_dir(pairingURL.path, srcDir, targetParentDir + "/Cards", nil, nil, &errPtr)
+                
+                // Callback để hứng log từ Rust
+                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { _, msgPtr in
+                    guard let msgPtr else { return }
+                    let line = String(cString: msgPtr)
+                    DispatchQueue.main.async { onLogUpdate("[Airlift] \(line)") }
+                }
+                
+                // al_exploit_write_dir(pairing_path, source_dir, target_dir, log_cb, ctx, out_error)
+                let res = al_exploit_write_dir(
+                    pairingURL.path,
+                    srcDir,
+                    targetParentDir + "/Cards",
+                    logCallback,
+                    nil,
+                    &errPtr
+                )
                 
                 if res != 0 {
                     let msg = errPtr != nil ? String(cString: errPtr!) : "Airlift Error (Code: \(res))"
