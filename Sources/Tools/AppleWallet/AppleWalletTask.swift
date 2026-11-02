@@ -2,6 +2,14 @@ import Foundation
 import AirliftFFI
 import Network
 
+// Class dùng để gửi context qua C function pointer
+class LogCallbackContext {
+    let onLogUpdate: (String) -> Void
+    init(onLogUpdate: @escaping (String) -> Void) {
+        self.onLogUpdate = onLogUpdate
+    }
+}
+
 enum AppleWalletTask {
     static func run(store: ToolStore, walletStore: AppleWalletStore, onLogUpdate: @escaping (String) -> Void) async throws {
         let enabledCards = walletStore.enabledCards()
@@ -40,25 +48,30 @@ enum AppleWalletTask {
         let srcDir = tempDir.appendingPathComponent("Passes/Cards").path
         let targetParentDir = "/var/mobile/Library/Passes"
         
-        // GỌI THẲNG C-FFI CỦA AIRLIFT
+        // Chuẩn bị context cho C function pointer
+        let logCtx = LogCallbackContext { line in
+            onLogUpdate("[Airlift] \(line)")
+        }
+        let ctxPtr = Unmanaged.passUnretained(logCtx).toOpaque()
+        
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
                 
-                // Callback để hứng log từ Rust
-                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { _, msgPtr in
-                    guard let msgPtr else { return }
+                // Callback không capture context, chỉ dùng ctxPtr
+                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { ctx, msgPtr in
+                    guard let ctx = ctx, let msgPtr = msgPtr else { return }
                     let line = String(cString: msgPtr)
-                    DispatchQueue.main.async { onLogUpdate("[Airlift] \(line)") }
+                    let logCtx = Unmanaged<LogCallbackContext>.fromOpaque(ctx).takeUnretainedValue()
+                    logCtx.onLogUpdate(line)
                 }
                 
-                // al_exploit_write_dir(pairing_path, source_dir, target_dir, log_cb, ctx, out_error)
                 let res = al_exploit_write_dir(
                     pairingURL.path,
                     srcDir,
                     targetParentDir + "/Cards",
                     logCallback,
-                    nil,
+                    ctxPtr,
                     &errPtr
                 )
                 
