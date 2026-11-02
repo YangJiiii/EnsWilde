@@ -107,7 +107,7 @@ struct ThemeDetailView: View {
             Section(header: Text(L("section_theme_settings"))) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L("passcode_theme_name")).font(.caption).foregroundStyle(.secondary)
-                    TextField(L("passcode_theme_name"), text: $theme.name).onChange(of: theme.name) { _ in themeStore.updateTheme(theme) }
+                    TextField(L("passcode_theme_name"), text: $theme.name).onChange(of: theme.name) { _, _ in themeStore.updateTheme(theme) }
                 }
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -120,7 +120,7 @@ struct ThemeDetailView: View {
                     Text(L("passcode_target_key_size")).font(.caption).foregroundStyle(.secondary)
                     Picker("Key Size", selection: $theme.keySize) {
                         ForEach(PasscodeTheme.KeySize.allCases, id: \.self) { size in Text(size.rawValue).tag(size) }
-                    }.pickerStyle(.segmented).onChange(of: theme.keySize) { _ in themeStore.updateTheme(theme) }
+                    }.pickerStyle(.segmented).onChange(of: theme.keySize) { _, _ in themeStore.updateTheme(theme) }
                     Text(scalingDescription(from: theme.detectedSize, to: theme.keySize)).font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
@@ -259,7 +259,12 @@ struct ImportDefaultPasscodeSheet: View {
         try? FileManager.default.removeItem(at: tempURL)
         guard let _ = try? FileManager.default.copyItem(at: url, to: tempURL) else { return }
         defer { try? FileManager.default.removeItem(at: tempURL) }
-        guard let archive = try? Archive(url: tempURL, accessMode: .read) else { return }
+        let archive: Archive
+        do {
+            archive = try Archive(url: tempURL, accessMode: .read)
+        } catch {
+            return
+        }
         var telephonyFolder: String?; var languageCode: String?
         for entry in archive {
             let path = entry.path; let components = path.split(separator: "/")
