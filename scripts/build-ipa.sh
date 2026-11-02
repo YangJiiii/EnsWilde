@@ -11,7 +11,7 @@ IPA_PATH="$BUILD_DIR/${APP_NAME}.ipa"
 
 AIRCARD_LIB="Frameworks/ios-arm64/libairlift_ffi.a"
 AIRCARD_HEADERS="Frameworks/ios-arm64/Headers"
-GRAPPA_H="Sources/GrappaHelper.h" 
+GRAPPA_H="Sources/GrappaHelper.h"
 GRAPPA_M="Sources/GrappaHelper.m"
 GRAPPA_DIR="$(dirname "$GRAPPA_H")"
 
@@ -27,7 +27,7 @@ echo "==> [2/4] Setting up build directory..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-echo "==> [3/4] Injecting Airlift + Grappa & Fixing Duplicate..."
+echo "==> [3/4] Injecting Airlift + Grappa & XÓA SỔ libidevice_ffi.a..."
 gem install xcodeproj --no-document >/dev/null 2>&1 || true
 export AIRCARD_LIB AIRCARD_HEADERS GRAPPA_M GRAPPA_DIR
 
@@ -77,10 +77,12 @@ ruby -e '
     config.build_settings["LIBRARY_SEARCH_PATHS"] = lib_paths.uniq
     
     ld_flags = config.build_settings["OTHER_LDFLAGS"] || ["$(inherited)"]
-    # Lọc sạch mấy cái flag độc hại gây duplicate
-    ld_flags = ld_flags.reject { |s| s.to_s.include?("airlift_ffi") || s.to_s.include?("idevice_ffi") || s.to_s.include?("-all_load") }
+    # Lọc sạch mấy cái flag độc hại
+    ld_flags = ld_flags.reject { |s| s.to_s.include?("airlift_ffi") || s.to_s.include?("idevice_ffi") || s.to_s.include?("-all_load") || s.to_s.include?("-exported_symbol") || s.to_s.include?("-Wl,-u,") }
     ld_flags << "-ObjC"
     ld_flags << "-lairlift_ffi"
+    # ÉP LINKER XUẤT KHẨU HÀM GRAPPA ĐỂ RUST MÒ THẤY
+    ld_flags << "-Wl,-exported_symbol,_ALGetGrappaToken"
     ld_flags << "-Wl,-u,_ALGetGrappaToken"
     config.build_settings["OTHER_LDFLAGS"] = ld_flags.uniq
     
