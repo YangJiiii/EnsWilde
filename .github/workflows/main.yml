@@ -9,10 +9,13 @@ jobs:
   build:
     name: Build unsigned IPA
     runs-on: macos-latest
+    timeout-minutes: 350
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Show toolchain
         run: |
@@ -22,8 +25,13 @@ jobs:
       - name: List schemes
         run: xcodebuild -list -project EnsWilde.xcodeproj
 
-      - name: Build IPA
-        run: bash ./scripts/build-ipa.sh Release
+      - name: Build IPA (Retry 3 lần)
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 340        # Thời gian tối đa cho mỗi lần build
+          max_attempts: 3             # Thử tối đa 3 lần nếu gãy
+          retry_wait_seconds: 120     # Đợi 2 phút rồi thử lại
+          command: bash ./scripts/build-ipa.sh Release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
