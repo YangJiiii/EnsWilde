@@ -18,7 +18,7 @@ GRAPPA_DIR="$(dirname "$GRAPPA_H")"
 echo "==> [1/4] Checking files..."
 for f in "$AIRCARD_LIB" "$AIRCARD_HEADERS/airlift.h" "$GRAPPA_H" "$GRAPPA_M"; do
   if [ ! -f "$f" ]; then
-    echo "❌ LỖI: Đéo tìm thấy $f"
+    echo "❌ LỖI: Đéo tìm thấy $f. Push file .a lên Git LFS đi boss man."
     exit 1
   fi
 done
@@ -27,7 +27,7 @@ echo "==> [2/4] Setting up build directory..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-echo "==> [3/4] Injecting Airlift.a + GrappaHelper.m and DISABLING SIGNING..."
+echo "==> [3/4] Injecting Airlift.a + GrappaHelper.m & Fixing Linker..."
 gem install xcodeproj --no-document >/dev/null 2>&1 || true
 export AIRCARD_LIB AIRCARD_HEADERS GRAPPA_M GRAPPA_DIR
 
@@ -71,9 +71,13 @@ ruby -e '
     ld_flags = config.build_settings["OTHER_LDFLAGS"] || ["$(inherited)"]
     ld_flags << "-ObjC"
     ld_flags << "-lairlift_ffi"
+    
+    # CỰC KỲ QUAN TRỌNG: Ép Linker giữ lại symbol ALGetGrappaToken
+    ld_flags << "-Wl,-u,_ALGetGrappaToken"
+    
     config.build_settings["OTHER_LDFLAGS"] = ld_flags.uniq
     
-    # ÉP CHẾT CODE SIGNING Ở CẤP PROJECT
+    # Ép chết code signing
     config.build_settings["CODE_SIGN_STYLE"] = "Manual"
     config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"
     config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"
@@ -86,7 +90,6 @@ ruby -e '
 '
 
 echo "==> [4/4] Archiving and STRIPPING SIGNATURES..."
-# THÊM CODE_SIGNING_ALLOWED=NO VÀ CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
 XCB_ARGS=(
   -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" -sdk iphoneos
   -archivePath "$ARCHIVE_PATH" -destination "generic/platform=iOS"
@@ -94,6 +97,8 @@ XCB_ARGS=(
   CODE_SIGN_ENTITLEMENTS="" EXPANDED_CODE_SIGN_IDENTITY=""
   DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER=""
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
+  # Thêm flag ở đây để chắc chắn 100%
+  OTHER_LDFLAGS="-Wl,-u,_ALGetGrappaToken"
 )
 
 if command -v xcbeautify >/dev/null 2>&1; then
@@ -113,21 +118,15 @@ rm -rf "$BUILD_DIR/Payload" && mkdir -p "$BUILD_DIR/Payload"
 cp -R "$APP_PATH" "$BUILD_DIR/Payload/"
 
 echo "==> [Stripping] Cạo sạch mọi dấu vết chữ ký..."
-# 1. Xóa file ký của app chính
 rm -rf "$BUILD_DIR/Payload/${APP_BASENAME}/_CodeSignature"
 rm -rf "$BUILD_DIR/Payload/${APP_BASENAME}/SC_Info"
 rm -f  "$BUILD_DIR/Payload/${APP_BASENAME}/embedded.mobileprovision"
 
-# 2. Quét và xóa chữ ký của toàn bộ file thực thi bên trong (Frameworks, dylib, app chính)
 find "$BUILD_DIR/Payload/${APP_BASENAME}" -type f -perm +111 | while read -r file; do
     codesign --remove-signature "$file" 2>/dev/null || true
 done
-
-# 3. Quét xóa _CodeSignature và mobileprovision ở mọi ngóc ngách
 find "$BUILD_DIR/Payload/${APP_BASENAME}" -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
 find "$BUILD_DIR/Payload/${APP_BASENAME}" -name "embedded.mobileprovision" -type f -delete 2>/dev/null || true
 
-# 4. Đóng gói thành IPA
 (cd "$BUILD_DIR" && zip -qry "$IPA_PATH" Payload)
-
 echo "✅ DONE: $IPA_PATH (UNSIGNED 100%)"
