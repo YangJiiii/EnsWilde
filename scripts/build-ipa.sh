@@ -18,8 +18,7 @@ GRAPPA_DIR="$(dirname "$GRAPPA_H")"
 echo "==> [1/4] Checking files..."
 for f in "$AIRCARD_LIB" "$AIRCARD_HEADERS/airlift.h" "$GRAPPA_H" "$GRAPPA_M"; do
   if [ ! -f "$f" ]; then
-    echo "❌ LỖI CHÍ MẠNG: Đéo tìm thấy $f"
-    echo "=> Nếu là file .a, mày phải push nó lên GitHub (xài Git LFS)."
+    echo "❌ LỖI: Đéo tìm thấy $f. Push file .a lên Git LFS đi boss man."
     exit 1
   fi
 done
@@ -28,9 +27,8 @@ echo "==> [2/4] Setting up build directory..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-echo "==> [3/4] Injecting Airlift.a + GrappaHelper.m into Xcode project..."
+echo "==> [3/4] Injecting Airlift.a + GrappaHelper.m..."
 gem install xcodeproj --no-document >/dev/null 2>&1 || true
-
 export AIRCARD_LIB AIRCARD_HEADERS GRAPPA_M GRAPPA_DIR
 
 ruby -e '
@@ -78,12 +76,17 @@ ruby -e '
     ld_flags << "-ObjC"
     ld_flags << "-lairlift_ffi"
     config.build_settings["OTHER_LDFLAGS"] = ld_flags.uniq
+    
+    # Ép Xcode từ chối ký ở cấp độ Project
+    config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"
+    config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"
+    config.build_settings["CODE_SIGN_IDENTITY"] = ""
+    config.build_settings["CODE_SIGN_ENTITLEMENTS"] = ""
   end
   project.save
 '
 
-echo "==> [4/4] Archiving and Packaging..."
-# THÊM CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO ĐỂ CHẶN XCODE KÝ CHUI
+echo "==> [4/4] Archiving (Ép ra Unsigned)..."
 XCB_ARGS=(
   -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" -sdk iphoneos
   -archivePath "$ARCHIVE_PATH" -destination "generic/platform=iOS"
@@ -91,7 +94,6 @@ XCB_ARGS=(
   CODE_SIGN_ENTITLEMENTS="" EXPANDED_CODE_SIGN_IDENTITY=""
   DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER=""
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
-  OTHER_CODE_SIGN_FLAGS="--no-strict"
 )
 
 if command -v xcbeautify >/dev/null 2>&1; then
@@ -110,21 +112,18 @@ APP_BASENAME="$(basename "$APP_PATH")"
 rm -rf "$BUILD_DIR/Payload" && mkdir -p "$BUILD_DIR/Payload"
 cp -R "$APP_PATH" "$BUILD_DIR/Payload/"
 
-# =============================================================================
-# QUÉT SẠCH CHỮ KÝ TRÊN MAIN APP VÀ CÁC FRAMEWORK NHÚNG
-# =============================================================================
-echo "==> [Stripping] Xóa sạch code signature để đảm bảo Unsigned 100%..."
+echo "==> [Stripping] Cạo sạch chữ ký để đảm bảo Unsigned..."
+# Xóa chữ ký của app chính
 rm -rf "$BUILD_DIR/Payload/${APP_BASENAME}/_CodeSignature"
 rm -f  "$BUILD_DIR/Payload/${APP_BASENAME}/embedded.mobileprovision"
+codesign --remove-signature "$BUILD_DIR/Payload/${APP_BASENAME}/${APP_NAME}" 2>/dev/null || true
 
+# Xóa chữ ký của toàn bộ Framework nhúng (nếu có)
 if [ -d "$BUILD_DIR/Payload/${APP_BASENAME}/Frameworks" ]; then
     find "$BUILD_DIR/Payload/${APP_BASENAME}/Frameworks" -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
     find "$BUILD_DIR/Payload/${APP_BASENAME}/Frameworks" -name "embedded.mobileprovision" -delete 2>/dev/null || true
     find "$BUILD_DIR/Payload/${APP_BASENAME}/Frameworks" -type f -perm +111 -exec codesign --remove-signature {} \; 2>/dev/null || true
 fi
 
-# Gỡ luôn chữ ký của file app chính (nếu có)
-codesign --remove-signature "$BUILD_DIR/Payload/${APP_BASENAME}/${APP_NAME}" 2>/dev/null || true
-
 (cd "$BUILD_DIR" && zip -qry "$IPA_PATH" Payload)
-echo "✅ DONE: $IPA_PATH"
+echo "✅ DONE: $IPA_PATH (UNSIGNED 100%)"
