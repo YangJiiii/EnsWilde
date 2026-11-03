@@ -1,21 +1,6 @@
 import SwiftUI
 import AirliftFFI
 
-// =============================================================================
-// BÙA CHÚ ÉP LINKER PHẢI GIỮ HÀM ALGETGRAPPATOKEN (Chống dead-strip)
-// =============================================================================
-@_silgen_name("ALGetGrappaToken")
-func _forceLinkALGetGrappaToken(
-    _ version: UInt32,
-    _ deviceType: UInt32,
-    _ protocolVersion: UInt32,
-    _ out_buf: UnsafeMutablePointer<UInt8>?,
-    _ max_len: Int,
-    _ out_len: UnsafeMutablePointer<Int>?,
-    _ err_buf: UnsafeMutablePointer<CChar>?,
-    _ err_len: Int
-) -> Int32
-
 extension Notification.Name {
     static let airliftLog = Notification.Name("airlift.log")
 }
@@ -69,18 +54,15 @@ struct MyApp: App {
     }
     
     private func getCleanBuildNumber() -> String {
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let machineMirror = Mirror(reflecting: systemInfo.version)
-        let rawString = machineMirror.children.reduce("") { identifier, element in
-            guard let value = element.value as? Int8, value != 0 else { return identifier }
-            return identifier + String(UnicodeScalar(UInt8(value)))
-        }
-        return rawString.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\0", with: "")
+        var size: size_t = 0
+        sysctlbyname("kern.osversion", nil, &size, nil, 0)
+        var build = [CChar](repeating: 0, count: size)
+        sysctlbyname("kern.osversion", &build, &size, nil, 0)
+        return String(cString: build).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
-// MARK: - MÀN HÌNH CHẶN
+// MARK: - MÀN HÌNH CHẶN (Giữ nguyên UI)
 struct VersionBlockedView: View {
     @AppStorage("isAirLiftMode") private var isAirLiftMode: Bool = false
     @AppStorage("hasChosenMode") private var hasChosenMode: Bool = false
