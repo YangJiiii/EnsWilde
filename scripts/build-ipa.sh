@@ -41,7 +41,6 @@ GRAPPA_H=$(find AirCardCore -name "GrappaHelper.h" | head -n 1)
 [ -n "$AIRLIFT_H" ] && cp "$AIRLIFT_H" "$FRAMEWORK_DIR/Headers/airlift.h"
 [ -n "$GRAPPA_H" ] && cp "$GRAPPA_H" "$FRAMEWORK_DIR/Headers/GrappaHelper.h"
 
-# Tạo modulemap và Info.plist
 cat > "$FRAMEWORK_DIR/Modules/module.modulemap" <<EOF
 framework module AirliftFFI {
     umbrella header "airlift.h"
@@ -55,16 +54,11 @@ cat > "$FRAMEWORK_DIR/Info.plist" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleExecutable</key>
-    <string>AirliftFFI</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.enswilde.AirliftFFI</string>
-    <key>CFBundleName</key>
-    <string>AirliftFFI</string>
-    <key>CFBundlePackageType</key>
-    <string>FMWK</string>
-    <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <key>CFBundleExecutable</key><string>AirliftFFI</string>
+    <key>CFBundleIdentifier</key><string>com.enswilde.AirliftFFI</string>
+    <key>CFBundleName</key><string>AirliftFFI</string>
+    <key>CFBundlePackageType</key><string>FMWK</string>
+    <key>CFBundleVersion</key><string>1.0</string>
 </dict>
 </plist>
 EOF
@@ -85,7 +79,6 @@ ruby -e '
   target = project.targets.find { |t| t.name == "EnsWilde" }
   
   unless target.nil?
-    # Add framework
     file_ref = project.new_file(framework_path)
     target.frameworks_build_phase.add_file_reference(file_ref)
     
