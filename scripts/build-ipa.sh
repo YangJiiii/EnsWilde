@@ -14,48 +14,68 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
 # =============================================================================
-# KIỂM TRA FRAMEWORK ĐÃ CÓ SẴN CHƯA (Không build Rust nữa)
+# TỰ ĐỘNG DÒ TÌM STATIC LIB VÀ HEADERS (Bám sát cấu trúc thực tế)
 # =============================================================================
-FRAMEWORK_DIR="Frameworks/AirliftFFI.framework"
-if [ ! -d "$FRAMEWORK_DIR" ]; then
-    echo "❌ Đ*o thấy thư mục $FRAMEWORK_DIR đâu cả. Boss man kiểm tra lại xem đã kéo thư mục Frameworks vào chưa?"
+echo "==> Locating libairlift_ffi.a and headers..."
+
+# Tìm file .a ở bất kỳ đâu trong folder Frameworks (hoặc toàn repo)
+LIB_PATH=$(find . -name "libairlift_ffi.a" -not -path "*/target/*" | head -n 1)
+if [ -z "$LIB_PATH" ]; then
+    echo "❌ Đ*o tìm thấy libairlift_ffi.a đâu cả. Boss man xem lại xem file build sẵn để đâu rồi?"
     exit 1
 fi
-echo "✅ Đã tìm thấy AirliftFFI.framework sẵn có!"
+LIB_DIR=$(dirname "$LIB_PATH")
+echo "✅ Found lib: $LIB_PATH"
+
+# Tìm folder chứa airlift.h
+HEADER_FILE=$(find "$LIB_DIR" -name "airlift.h" | head -n 1)
+if [ -z "$HEADER_FILE" ]; then
+    # Nếu không thấy trong folder lib, tìm toàn repo
+    HEADER_FILE=$(find . -name "airlift.h" -not -path "*/target/*" | head -n 1)
+fi
+
+if [ -z "$HEADER_FILE" ]; then
+    echo "❌ Đ*o tìm thấy airlift.h. Thiếu header thì build bằng niềm tin à?"
+    exit 1
+fi
+HEADER_DIR=$(dirname "$HEADER_FILE")
+echo "✅ Found headers: $HEADER_DIR"
+
+# Export biến môi trường để Ruby đọc được
+export LIB_PATH
+export LIB_DIR
+export HEADER_DIR
 
 # =============================================================================
 # INJECT VÀO XCODE BẰNG RUBY
 # =============================================================================
-echo "==> Injecting AirliftFFI & GrappaHelper vào Xcode project..."
+echo "==> Injecting Airlift Static Lib & GrappaHelper vào Xcode project..."
 gem install xcodeproj --no-document
 ruby -e '
   require "xcodeproj"
   project_path = "EnsWilde.xcodeproj"
-  framework_path = "Frameworks/AirliftFFI.framework"
+  
+  lib_path = ENV["LIB_PATH"]
+  lib_dir = ENV["LIB_DIR"]
+  header_dir = ENV["HEADER_DIR"]
   
   project = Xcodeproj::Project.open(project_path)
   target = project.targets.find { |t| t.name == "EnsWilde" }
   
   unless target.nil?
-    # 1. Thêm Framework vào Link Binary With Libraries
-    file_ref = project.new_file(framework_path)
-    target.frameworks_build_phase.add_file_reference(file_ref)
+    # 1. Add static lib (.a) vào Link Binary With Libraries
+    # Dùng path tuyệt đối để tránh lỗi Xcode không tìm thấy
+    abs_lib_path = File.expand_path(lib_path)
+    lib_ref = project.new_file(abs_lib_path)
+    target.frameworks_build_phase.add_file_reference(lib_ref)
+    puts "✅ Đã link: #{lib_path}"
     
-    # 2. Nhúng Framework (Embed Frameworks)
-    embed_phase = target.copy_files_build_phases.find { |p| p.name == "Embed Frameworks" } 
-    if embed_phase.nil?
-      embed_phase = target.new_copy_files_build_phase("Embed Frameworks")
-      embed_phase.dst_subfolder_spec = "10"
-    end
-    build_file = embed_phase.add_file_reference(file_ref)
-    build_file.settings = { "ATTRIBUTES" => ["CodeSignOnCopy", "RemoveHeadersOnCopy"] }
-    
-    # 3. Tìm và add GrappaHelper.m vào Compile Sources
+    # 2. Tìm và add GrappaHelper.m vào Compile Sources
     grappa_m_path = Dir.glob("**/GrappaHelper.m").first
     if grappa_m_path
-      # Kiểm tra xem đã có trong project chưa để tránh duplicate
-      unless project.files.any? { |f| f.path == grappa_m_path }
-        grappa_ref = project.new_file(grappa_m_path)
+      abs_grappa_path = File.expand_path(grappa_m_path)
+      unless project.files.any? { |f| f.path == abs_grappa_path || f.path == grappa_m_path }
+        grappa_ref = project.new_file(abs_grappa_path)
         target.add_file_references([grappa_ref])
         puts "✅ Đã add GrappaHelper.m vào Compile Sources"
       end
@@ -63,17 +83,26 @@ ruby -e '
       puts "⚠️ CẢNH BÁO: Đ*o tìm thấy file GrappaHelper.m trong repo!"
     end
 
-    # 4. Cấu hình Build Settings cho Target
+    # 3. Cấu hình Build Settings
+    abs_lib_dir = File.expand_path(lib_dir)
+    abs_header_dir = File.expand_path(header_dir)
+    
     target.build_configurations.each do |config|
-      config.build_settings["FRAMEWORK_SEARCH_PATHS"] ||= ["$(inherited)"]
-      config.build_settings["FRAMEWORK_SEARCH_PATHS"] << "$(PROJECT_DIR)/Frameworks"
+      config.build_settings["LIBRARY_SEARCH_PATHS"] ||= ["$(inherited)"]
+      config.build_settings["LIBRARY_SEARCH_PATHS"] << abs_lib_dir
+      
+      config.build_settings["HEADER_SEARCH_PATHS"] ||= ["$(inherited)"]
+      config.build_settings["HEADER_SEARCH_PATHS"] << abs_header_dir
       
       config.build_settings["OTHER_LDFLAGS"] ||= ["$(inherited)"]
-      config.build_settings["OTHER_LDFLAGS"] << "-ObjC" # Load Obj-C classes (Grappa)
+      # Lấy tên file bỏ chữ "lib" và đuôi ".a" (ví dụ: libairlift_ffi.a -> -lairlift_ffi)
+      lib_name = File.basename(lib_path).gsub(/^lib/, "").gsub(/\.a$/, "")
+      config.build_settings["OTHER_LDFLAGS"] << "-l#{lib_name}"
+      config.build_settings["OTHER_LDFLAGS"] << "-ObjC"
     end
     
     project.save
-    puts "✅ Xong! Đã cấu hình Xcode project."
+    puts "✅ Xong! Đã cấu hình Xcode project thành công."
   else
     puts "❌ Lỗi: Đ*o tìm thấy target EnsWilde trong project."
     exit 1
