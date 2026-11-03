@@ -2,11 +2,8 @@ import Foundation
 import Network
 import AirliftFFI
 
-// MARK: - Log sink toàn cục
-// Closure C không được capture context, phải dùng global var để lưu handler
 private var airliftLogSink: ((String) -> Void)?
 
-// MARK: - C Callback
 private let airliftLogCallback: ALLogCallback = { (ctx, msg) in
     guard let msg = msg else { return }
     let line = String(cString: msg)
@@ -60,8 +57,6 @@ enum AirliftHostResolver {
     
     static func bestAvailable(log: @escaping (String) -> Void) async -> String? {
         airliftLogSink = log
-        
-        // Đăng ký log callback 1 lần duy nhất
         al_log_init(airliftLogCallback, nil)
         
         let hosts = candidates()
