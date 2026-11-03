@@ -42,21 +42,23 @@ ruby -e '
   grappa_dir = ENV["GRAPPA_DIR"]
   header_path = ENV["AIRCARD_HEADERS"]
 
-  # 1. XÓA TẬN GỐC libidevice_ffi.a ĐỂ KHÔNG BỊ TRÙNG SYMBOL VỚI AIRLIFT
-  project.files.select { |f| f.path && f.path.end_with?("libidevice_ffi.a") }.each do |file_ref|
-    file_ref.remove_from_project
-    puts "🗑️ Đã xóa vĩnh viễn: #{file_ref.path}"
-  end
-
-  # 2. NUKE TOÀN BỘ PBXBuildFile ĐANG TRỎ TỚI libairlift_ffi.a VÀ GrappaHelper.m
-  #    (Xóa ở cấp PBXBuildFile object để chắc chắn không còn bản trùng trong bất kỳ phase nào.)
+  # 1. NUKE TẬN GỐC mọi PBXBuildFile trỏ tới libairlift_ffi.a / libidevice_ffi.a / GrappaHelper.m
+  #    để chắc chắn không còn bản trùng nào trong bất kỳ phase nào.
   project.objects.dup.each do |_uuid, obj|
     next unless obj.is_a?(Xcodeproj::Project::Object::PBXBuildFile)
     path = obj.file_ref&.path.to_s
     next if path.empty?
-    if path.end_with?("libairlift_ffi.a") || path.end_with?("GrappaHelper.m")
+    if path.end_with?("libairlift_ffi.a") ||
+       path.end_with?("libidevice_ffi.a") ||
+       path.end_with?("GrappaHelper.m")
       obj.remove_from_project
     end
+  end
+
+  # 2. XÓA file ref libidevice_ffi.a để khỏi trùng symbol với Airlift
+  project.files.select { |f| f.path && f.path.end_with?("libidevice_ffi.a") }.each do |file_ref|
+    file_ref.remove_from_project
+    puts "🗑️ Đã xóa vĩnh viễn: #{file_ref.path}"
   end
 
   # 3. CHỈ ADD AIRLIFT VÀ GRAPPA (một lần duy nhất)
