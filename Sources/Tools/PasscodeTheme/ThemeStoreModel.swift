@@ -9,24 +9,6 @@ struct RemoteTheme: Identifiable, Codable {
     let preview: String
     let authors: String
     var baseURL: String = ""
-    var type: ThemeType = .unknown
-    
-    enum ThemeType: String, Codable {
-        case passcode = "passcode"
-        case wallet = "wallet"
-        case unknown = "unknown"
-    }
-    
-    enum CodingKeys: String, CodingKey {
-        case name, description, url, preview, authors, type
-    }
-}
-
-// MARK: - Theme Source Model
-struct ThemeSource: Codable {
-    let name: String
-    let baseURL: String
-    let themesURL: String
 }
 
 // MARK: - Theme Store Manager
@@ -36,12 +18,8 @@ class ThemeStoreManager: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    // Link index.json của Nugget store (Cowabun.ga)
-    // Đây là link chuẩn dùng cho cả Wallet và Passcode
-    private let indexURLs = [
-        URL(string: "https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/main/wallpapers-apple.json")!, // Passcode themes
-        URL(string: "https://cowabun.ga/wallpapers/themes.json")! // Fallback
-    ]
+    // FIX: Sửa lại cái URL bị sai cú pháp và sửa lại username cho đúng
+    private let indexURL = URL(string: "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde/main/themes-storeview/index.json")!
 
     func fetchThemes() async {
         isLoading = true
@@ -49,50 +27,32 @@ class ThemeStoreManager: ObservableObject {
         themes = []
 
         do {
+            let (data, _) = try await URLSession.shared.data(from: indexURL)
+            let sources = try JSONDecoder().decode([ThemeSource].self, from: data)
+            
             var allThemes: [RemoteTheme] = []
             
-            for indexURL in indexURLs {
-                do {
-                    let (data, _) = try await URLSession.shared.data(from: indexURL)
-                    
-                    // Thử decode như một mảng ThemeSource trước
-                    if let sources = try? JSONDecoder().decode([ThemeSource].self, from: data) {
-                        for source in sources {
-                            guard let themesURL = URL(string: source.themesURL) else { continue }
-                            let (themesData, _) = try await URLSession.shared.data(from: themesURL)
-                            var fetchedThemes = try JSONDecoder().decode([RemoteTheme].self, from: themesData)
-                            for i in 0..<fetchedThemes.count {
-                                fetchedThemes[i].baseURL = source.baseURL
-                                // Tự phân loại dựa trên URL hoặc tên
-                                if fetchedThemes[i].url.hasSuffix(".passthm") {
-                                    fetchedThemes[i].type = .passcode
-                                } else if fetchedThemes[i].url.hasSuffix(".zip") {
-                                    fetchedThemes[i].type = .wallet
-                                }
-                            }
-                            allThemes.append(contentsOf: fetchedThemes)
-                        }
-                    } 
-                    // Nếu không phải ThemeSource, thử decode trực tiếp như mảng RemoteTheme
-                    else if let directThemes = try? JSONDecoder().decode([RemoteTheme].self, from: data) {
-                        var parsedThemes = directThemes
-                        for i in 0..<parsedThemes.count {
-                            if parsedThemes[i].url.hasSuffix(".passthm") {
-                                parsedThemes[i].type = .passcode
-                            } else if parsedThemes[i].url.hasSuffix(".zip") {
-                                parsedThemes[i].type = .wallet
-                            }
-                        }
-                        allThemes.append(contentsOf: parsedThemes)
-                    }
-                } catch {
-                    print("Failed to load from \(indexURL): \(error)")
-                    continue
+            for source in sources {
+                guard let themesURL = URL(string: source.themesURL) else { continue }
+                let (themesData, _) = try await URLSession.shared.data(from: themesURL)
+                
+                var fetchedThemes = try JSONDecoder().decode([RemoteTheme].self, from: themesData)
+                
+                for i in 0..<fetchedThemes.count {
+                    fetchedThemes[i].baseURL = source.baseURL
                 }
+                
+                allThemes.append(contentsOf: fetchedThemes)
             }
             
-            if allThemes.isEmpty {
-                throw NSError(domain: "ThemeStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tải được theme nào từ các nguồn."])
+            // FIX: Tự động sort đẩy mấy cái tên/desc có chữ "Wallet" lên đầu
+            allThemes.sort { a, b in
+                let aIsWallet = a.name.localizedCaseInsensitiveContains("wallet") || (a.description?.localizedCaseInsensitiveContains("wallet") ?? false)
+                let bIsWallet = b.name.localizedCaseInsensitiveContains("wallet") || (b.description?.localizedCaseInsensitiveContains("wallet") ?? false)
+                
+                if aIsWallet && !bIsWallet { return true }
+                if !aIsWallet && bIsWallet { return false }
+                return false
             }
             
             self.themes = allThemes
@@ -103,4 +63,11 @@ class ThemeStoreManager: ObservableObject {
             self.isLoading = false
         }
     }
+}
+
+// MARK: - Theme Source Model
+struct ThemeSource: Codable {
+    let name: String
+    let baseURL: String
+    let themesURL: String
 }
