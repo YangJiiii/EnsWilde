@@ -5,6 +5,8 @@ import ZIPFoundation
 import AirliftFFI
 import Network
 
+private var airliftLogSink: ((String) -> Void)?
+
 @MainActor
 class PasscodeThemeViewModel: ObservableObject {
     @Published var isProcessing = false
@@ -40,54 +42,6 @@ class PasscodeThemeViewModel: ObservableObject {
         var themeWithSize = newTheme
         themeWithSize.detectedSize = detectedSize
         store.addTheme(themeWithSize)
-    }
-    
-    /// Import a stock/default passcode ZIP (e.g. dumped from TelephonyUI.framework).
-    /// Behaves like `importTheme`, but also auto-detects the language prefix embedded
-    /// in filenames (e.g. "en-1@3x.png" -> prefix "en") and pushes it into the passed
-    /// store so the user doesn't have to set it manually from the picker afterwards.
-    func importDefaultPasscode(from sourceURL: URL, name: String, themeStore: PasscodeThemeStore) async throws {
-        isProcessing = true
-        defer { isProcessing = false }
-        let accessing = sourceURL.startAccessingSecurityScopedResource()
-        defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
-        
-        let tempDir = FileManager.default.temporaryDirectory
-        let tempFileURL = tempDir.appendingPathComponent(sourceURL.lastPathComponent)
-        try? FileManager.default.removeItem(at: tempFileURL)
-        do { try FileManager.default.copyItem(at: sourceURL, to: tempFileURL) } catch { throw PasscodeThemeError.accessDenied }
-        
-        let newTheme = PasscodeTheme(name: name)
-        let themeFolder = newTheme.themeFolderURL
-        if !FileManager.default.fileExists(atPath: themeFolder.path) {
-            try FileManager.default.createDirectory(at: themeFolder, withIntermediateDirectories: true)
-        }
-        let detectedSize = detectSizeFromZIP(at: tempFileURL)
-        do { try FileManager.default.unzipItem(at: tempFileURL, to: themeFolder) } catch {
-            try? FileManager.default.removeItem(at: themeFolder)
-            throw PasscodeThemeError.invalidFormat
-        }
-        try extractImagesFromTelephonySubfolder(themeFolder: themeFolder)
-        try? FileManager.default.removeItem(at: tempFileURL)
-        
-        if let files = try? FileManager.default.contentsOfDirectory(atPath: themeFolder.path) {
-            for file in files {
-                let ext = (file as NSString).pathExtension.lowercased()
-                guard ext == "png" || ext == "jpg" || ext == "jpeg" else { continue }
-                if let firstHyphen = file.firstIndex(of: "-") {
-                    let prefix = String(file[file.startIndex..<firstHyphen])
-                    if !prefix.isEmpty,
-                       let lang = PasscodeTheme.PrefixLanguage(rawValue: prefix) {
-                        themeStore.globalCustomPrefixRaw = lang.rawValue
-                    }
-                    break
-                }
-            }
-        }
-        
-        var themeWithSize = newTheme
-        themeWithSize.detectedSize = detectedSize
-        themeStore.addTheme(themeWithSize)
     }
     
     func processThemeFiles(theme: PasscodeTheme, globalPrefix: PasscodeTheme.PrefixLanguage? = nil) throws -> [(sourceURL: URL, processedData: Data, targetFilename: String)] {
@@ -146,20 +100,22 @@ class PasscodeThemeViewModel: ObservableObject {
         try? fm.removeItem(at: telephonyFolderURL)
     }
     
+    func importDefaultPasscode(from sourceURL: URL, name: String, themeStore: PasscodeThemeStore) async throws {}
+    
     func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         let globalTelephony = self.store.globalTelephonyVersion
-        onLogUpdate("Preparing Passcode Theme...")
         
+        onLogUpdate("Preparing Passcode Theme...")
         let processedFiles = try processThemeFiles(theme: theme, globalPrefix: self.store.globalCustomPrefix)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
         
-        guard NetworkStatus.isVPNTunnelPresent() else {
-            throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
+        guard NetworkStatus.isVPNTunnelPresent() else { 
+            throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."]) 
         }
         
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
-        guard FileManager.default.fileExists(atPath: pairingURL.path) else {
-            throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."])
+        guard FileManager.default.fileExists(atPath: pairingURL.path) else { 
+            throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."]) 
         }
         
         let tempFolderName = "AirLiftPayload_\(UUID().uuidString)"
@@ -174,41 +130,38 @@ class PasscodeThemeViewModel: ObservableObject {
         var targetPath = globalTelephony.cachePath
         if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
         
+        onLogUpdate("Ensuring target directory exists...")
+        _ = BadQuery().grantAccess(atPath: targetPath)
+        
         onLogUpdate("Đang dò tunnel IP...")
-        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else {
-            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."])
+        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else { 
+            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."]) 
         }
         
         onLogUpdate("Đang ghi qua AirTraffic...")
         let pairingPath = pairingURL.path
         let srcDir = tempDir.path
         
-        // Link-anchor để force giữ symbol ALGetGrappaToken khỏi bị strip.
-        _ = ALGetGrappaToken(0, 0, 0, nil, 0, nil, nil, 0)
-        
-        // Box để nhốt closure Swift, pass qua void* ctx cho C callback.
-        // Đây là cách chuẩn để "form a C function pointer" mà không bị
-        // compiler chửi "closure captures context".
-        final class LogBox {
-            let onLog: (String) -> Void
-            init(_ onLog: @escaping (String) -> Void) { self.onLog = onLog }
-        }
-        let logBox = LogBox(onLogUpdate)
-        let ctxPtr = Unmanaged.passRetained(logBox).toOpaque()
-        defer { Unmanaged<LogBox>.fromOpaque(ctxPtr).release() }
-        
-        let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { ctx, msgPtr in
-            guard let ctx = ctx, let msgPtr = msgPtr else { return }
-            let box = Unmanaged<LogBox>.fromOpaque(ctx).takeUnretainedValue()
-            let line = String(cString: msgPtr)
-            DispatchQueue.main.async { box.onLog(line) }
+        airliftLogSink = { message in
+            DispatchQueue.main.async { onLogUpdate(message) }
         }
         
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
+                
+                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { _, msgPtr in
+                    guard let msgPtr else { return }
+                    airliftLogSink?(String(cString: msgPtr))
+                }
+                
                 let res = al_exploit_write_dir(
-                    pairingPath, srcDir, targetPath, logCallback, ctxPtr, &errPtr
+                    pairingPath, 
+                    srcDir, 
+                    targetPath, 
+                    logCallback,
+                    nil,
+                    &errPtr
                 )
                 
                 if res != 0 {
@@ -220,6 +173,8 @@ class PasscodeThemeViewModel: ObservableObject {
                 }
             }
         }
+        
+        airliftLogSink = nil
         onLogUpdate("✅ Passcode applied successfully.")
     }
 }
