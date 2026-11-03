@@ -42,10 +42,10 @@ class PasscodeThemeViewModel: ObservableObject {
         store.addTheme(themeWithSize)
     }
     
-    /// Import a stock/default passcode ZIP (e.g. dumped from /System/Library/PrivateFrameworks/TelephonyUI.framework).
-    /// Behaves like `importTheme`, but also auto-detects the language prefix embedded in filenames
-    /// (e.g. "en-1@3x.png" -> prefix "en") and pushes it into the passed store so the user
-    /// doesn't have to set it manually from the picker afterwards.
+    /// Import a stock/default passcode ZIP (e.g. dumped from TelephonyUI.framework).
+    /// Behaves like `importTheme`, but also auto-detects the language prefix embedded
+    /// in filenames (e.g. "en-1@3x.png" -> prefix "en") and pushes it into the passed
+    /// store so the user doesn't have to set it manually from the picker afterwards.
     func importDefaultPasscode(from sourceURL: URL, name: String, themeStore: PasscodeThemeStore) async throws {
         isProcessing = true
         defer { isProcessing = false }
@@ -70,8 +70,6 @@ class PasscodeThemeViewModel: ObservableObject {
         try extractImagesFromTelephonySubfolder(themeFolder: themeFolder)
         try? FileManager.default.removeItem(at: tempFileURL)
         
-        // Auto-detect the language prefix from any "<lang>-<key>@<scale>.png" filename and
-        // push it into the store so the global picker reflects the imported bundle.
         if let files = try? FileManager.default.contentsOfDirectory(atPath: themeFolder.path) {
             for file in files {
                 let ext = (file as NSString).pathExtension.lowercased()
@@ -155,7 +153,9 @@ class PasscodeThemeViewModel: ObservableObject {
         let processedFiles = try processThemeFiles(theme: theme, globalPrefix: self.store.globalCustomPrefix)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
         
-        guard NetworkStatus.isVPNTunnelPresent() else { throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."]) }
+        guard NetworkStatus.isVPNTunnelPresent() else {
+            throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
+        }
         
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         guard FileManager.default.fileExists(atPath: pairingURL.path) else {
@@ -183,21 +183,32 @@ class PasscodeThemeViewModel: ObservableObject {
         let pairingPath = pairingURL.path
         let srcDir = tempDir.path
         
-        // Force the Swift-side Grappa symbol to stay linked even if the Rust path short-circuits.
-        // (With out_buf == nil this returns -1 immediately — intentional: it's a link anchor.)
+        // Link-anchor để force giữ symbol ALGetGrappaToken khỏi bị strip.
         _ = ALGetGrappaToken(0, 0, 0, nil, 0, nil, nil, 0)
+        
+        // Box để nhốt closure Swift, pass qua void* ctx cho C callback.
+        // Đây là cách chuẩn để "form a C function pointer" mà không bị
+        // compiler chửi "closure captures context".
+        final class LogBox {
+            let onLog: (String) -> Void
+            init(_ onLog: @escaping (String) -> Void) { self.onLog = onLog }
+        }
+        let logBox = LogBox(onLogUpdate)
+        let ctxPtr = Unmanaged.passRetained(logBox).toOpaque()
+        defer { Unmanaged<LogBox>.fromOpaque(ctxPtr).release() }
+        
+        let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { ctx, msgPtr in
+            guard let ctx = ctx, let msgPtr = msgPtr else { return }
+            let box = Unmanaged<LogBox>.fromOpaque(ctx).takeUnretainedValue()
+            let line = String(cString: msgPtr)
+            DispatchQueue.main.async { box.onLog(line) }
+        }
         
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
-                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { _, msgPtr in
-                    guard let msgPtr else { return }
-                    let line = String(cString: msgPtr)
-                    DispatchQueue.main.async { onLogUpdate("[Airlift] \(line)") }
-                }
-                
                 let res = al_exploit_write_dir(
-                    pairingPath, srcDir, targetPath, logCallback, nil, &errPtr
+                    pairingPath, srcDir, targetPath, logCallback, ctxPtr, &errPtr
                 )
                 
                 if res != 0 {
