@@ -2,13 +2,19 @@ import Foundation
 import Network
 import AirliftFFI
 
-// MARK: - Log sink (fix lỗi @convention(c) capture context)
-// Closure C không được capture biến bên ngoài, nên ta dùng global để chứa handler.
+// MARK: - Log sink toàn cục
+// Closure C không được capture context, phải dùng global var để lưu handler
 private var airliftLogSink: ((String) -> Void)?
+
+// MARK: - C Callback
+private let airliftLogCallback: ALLogCallback = { (ctx, msg) in
+    guard let msg = msg else { return }
+    let line = String(cString: msg)
+    airliftLogSink?(line)
+}
 
 enum AirliftHostResolver {
     
-    /// Danh sách candidate — KHÔNG BAO GIỜ chứa 127.0.0.1
     static func candidates() -> [String] {
         var out: [String] = []
         
@@ -52,12 +58,11 @@ enum AirliftHostResolver {
         return nil
     }
     
-    /// Tìm host khả dụng nhất bằng TCP probe port RSD (49152).
     static func bestAvailable(log: @escaping (String) -> Void) async -> String? {
-        // Gán handler log vào global sink — closure C sẽ gọi qua đây
-        airliftLogSink = { message in
-            log(message)
-        }
+        airliftLogSink = log
+        
+        // Đăng ký log callback 1 lần duy nhất
+        al_log_init(airliftLogCallback, nil)
         
         let hosts = candidates()
         log("[Airlift] Probing hosts: \(hosts.joined(separator: ", "))")
@@ -74,7 +79,6 @@ enum AirliftHostResolver {
         return nil
     }
     
-    /// TCP probe dùng poll() — không dùng fd_set/select() để tránh lỗi Swift 6.
     private static func canConnect(host: String, port: UInt16, timeout: TimeInterval) async -> Bool {
         return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -93,7 +97,6 @@ enum AirliftHostResolver {
                 }
                 defer { close(fd) }
                 
-                // Set non-blocking
                 let flags = fcntl(fd, F_GETFL, 0)
                 _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
                 
@@ -113,7 +116,6 @@ enum AirliftHostResolver {
                     return
                 }
                 
-                // poll() thay vì select()
                 var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
                 let timeoutMs = Int32(timeout * 1000)
                 let pollResult = poll(&pfd, 1, timeoutMs)
