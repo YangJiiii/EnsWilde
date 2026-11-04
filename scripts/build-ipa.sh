@@ -26,6 +26,11 @@ export LIB_PATH
 export LIB_DIR
 export HEADER_DIR
 
+# FIX: Tạo file exported_symbols.txt để force export
+EXPORT_SYMBOLS_FILE="$BUILD_DIR/exported_symbols.txt"
+echo "_ALGetGrappaToken" > "$EXPORT_SYMBOLS_FILE"
+export EXPORT_SYMBOLS_FILE
+
 # INJECT VÀO XCODE
 gem install xcodeproj --no-document
 ruby -e '
@@ -51,6 +56,9 @@ ruby -e '
     end
 
     target.build_configurations.each do |config|
+      # FIX: -fvisibility=default cho GrappaHelper.m qua COMPILER_FLAGS
+      # (Sẽ được thêm ở bước dưới bằng file riêng)
+      
       config.build_settings["LIBRARY_SEARCH_PATHS"] ||= ["$(inherited)"]
       config.build_settings["LIBRARY_SEARCH_PATHS"] << File.expand_path(ENV["LIB_DIR"])
       config.build_settings["HEADER_SEARCH_PATHS"] ||= ["$(inherited)"]
@@ -59,12 +67,39 @@ ruby -e '
       config.build_settings["OTHER_LDFLAGS"] ||= ["$(inherited)"]
       lib_name = File.basename(ENV["LIB_PATH"]).gsub(/^lib/, "").gsub(/\.a$/, "")
       
-      # FIX: Ép export động và giữ lại symbol cụ thể
+      # FIX CORE: Đảm bảo symbol ALGetGrappaToken được export ra dynamic symbol table
       config.build_settings["OTHER_LDFLAGS"] << "-l#{lib_name}"
       config.build_settings["OTHER_LDFLAGS"] << "-ObjC"
-      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-export_dynamic"
-      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-exported_symbol,_ALGetGrappaToken"
-      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-force_load,\"#{abs_lib_path}\""
+      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-export_dynamic"                             # Export all symbols
+      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-exported_symbol,_ALGetGrappaToken"          # Export cụ thể
+      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-exported_symbols_list,\"#{ENV["EXPORT_SYMBOLS_FILE"]}\""  # Export list
+      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-u,_ALGetGrappaToken"                        # Force link (prevent dead_strip)
+      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-no_dead_strip_inits_and_terms"              # Prevent strip
+      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-force_load,\"#{abs_lib_path}\""              # Force load static lib
+      
+      # FIX: Tắt strip để không mất symbol
+      config.build_settings["STRIP_INSTALLED_PRODUCT"] = "NO"
+      config.build_settings["COPY_PHASE_STRIP"] = "NO"
+      config.build_settings["DEAD_CODE_STRIPPING"] = "NO"
+      config.build_settings["STRIP_STYLE"] = "non-global"
+    end
+    project.save
+    puts "✅ Đã cấu hình với export_dynamic, exported_symbols_list, no_dead_strip, strip=NO"
+  end
+'
+
+# FIX: Set -fvisibility=default cho GrappaHelper.m ở build phase
+ruby -e '
+  require "xcodeproj"
+  project = Xcodeproj::Project.open("EnsWilde.xcodeproj")
+  target = project.targets.find { |t| t.name == "EnsWilde" }
+  
+  if target
+    target.source_build_phase.files.each do |build_file|
+      if build_file.file_ref && build_file.file_ref.path && build_file.file_ref.path.include?("GrappaHelper.m")
+        build_file.settings = { "COMPILER_FLAGS" => "-fvisibility=default" }
+        puts "✅ Đã set -fvisibility=default cho GrappaHelper.m"
+      end
     end
     project.save
   end
