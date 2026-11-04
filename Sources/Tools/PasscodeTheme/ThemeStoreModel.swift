@@ -10,7 +10,6 @@ struct RemoteTheme: Identifiable, Codable {
     let authors: String
     var baseURL: String = ""
     
-    // FIX: Tự động handle data thiếu
     enum CodingKeys: String, CodingKey {
         case name, description, url, preview, authors
     }
