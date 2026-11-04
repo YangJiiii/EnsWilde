@@ -34,10 +34,7 @@ struct PasscodeThemeView: View {
             }
             Section(header: Text(L("section_theme_library"))) {
                 if themeStore.themes.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "photo.on.rectangle.angled").font(.system(size: 48)).foregroundStyle(.secondary)
-                        Text(L("passcode_no_themes")).font(.subheadline).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity).padding(.vertical, 40)
+                    emptyThemeState
                 } else {
                     ForEach(themeStore.themes) { theme in
                         NavigationLink(destination: ThemeDetailView(theme: theme, themeStore: themeStore, viewModel: viewModel)) {
@@ -77,6 +74,19 @@ struct PasscodeThemeView: View {
         } message: {
             Text("Are you sure you want to delete all themes and reset to default?")
         }
+    }
+
+    private var emptyThemeState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text(L("passcode_no_themes"))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
     }
     
     private func resetAllThemes() {
