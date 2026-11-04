@@ -52,7 +52,7 @@ struct MainViewWithNavigation: View {
     }
 }
 
-// MARK: - APPLY TAB VIEW (Fix Loading & Log)
+// MARK: - APPLY TAB VIEW (FIX UI LOG)
 struct ApplyTabView: View {
     @ObservedObject var toolStore: ToolStore
     @ObservedObject var toolRunner: ToolRunner
@@ -64,7 +64,7 @@ struct ApplyTabView: View {
 
     @State private var showErrorAlert = false
     @State private var lastError: String?
-    @State private var statusLog: String = "Ready to apply."
+    @State private var statusLogs: [String] = ["Ready to apply."]
     
     private var isApplying: Bool {
         if case .running = toolRunner.state { return true }
@@ -102,23 +102,25 @@ struct ApplyTabView: View {
                 }
                 .listRowBackground(Color(.secondarySystemGroupedBackground))
 
-                // FIX: Status hiển thị Log trực tiếp
+                // FIX: Status hiển thị FULL LOG bằng ScrollView
                 Section(header: Text("Status").font(.headline).textCase(nil)) {
-                    HStack(spacing: 12) {
-                        if isApplying {
-                            ProgressView().progressViewStyle(CircularProgressViewStyle(tint: Color.orange))
-                        } else {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.secondary)
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(statusLogs.indices, id: \.self) { index in
+                                    Text(statusLogs[index])
+                                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                                        .foregroundStyle(statusLogs[index].hasPrefix("✅") ? .green : (statusLogs[index].hasPrefix("❌") ? .red : .secondary))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                Spacer().id("bottom")
+                            }
                         }
-                        
-                        Text(statusLog) // Hiển thị log thay vì chữ tĩnh
-                            .font(.subheadline)
-                            .foregroundStyle(isApplying ? .primary : .secondary)
-                            .lineLimit(2)
-                            .truncationMode(.tail)
-                            .animation(.easeInOut, value: statusLog)
+                        .frame(height: 150)
+                        .onChange(of: statusLogs.count) { _ in
+                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                        }
                     }
-                    .padding(.vertical, 4)
                 }
                 .listRowBackground(Color(.secondarySystemGroupedBackground))
 
@@ -126,7 +128,7 @@ struct ApplyTabView: View {
                     WalletStyleButton(
                         title: isApplying ? "Applying..." : L("apply_enabled_tweaks"),
                         isLoading: isApplying,
-                        disabled: isApplying, // FIX: Button xám và disable khi đang apply
+                        disabled: isApplying, // FIX: Xám và không cho ấn khi đang chạy
                         action: performApply
                     )
                 }
@@ -141,32 +143,30 @@ struct ApplyTabView: View {
     }
 
     private func performApply() {
-        // Reset log và chạy trong background thread hoàn toàn
-        statusLog = "Preparing..."
+        statusLogs = ["Starting Apply sequence..."]
         
         Task.detached(priority: .userInitiated) {
-            // Dùng applyAll, nó sẽ chạy các Task ngầm không block Main Thread
+            // Gọi toolRunner với closure log
             await toolRunner.applyAll(
                 isSystemReady: true,
                 store: toolStore,
                 walletStore: walletStore,
                 themeStore: themeStore,
-                featureFlagsStore: featureFlagsStore
+                featureFlagsStore: featureFlagsStore,
+                onLogUpdate: { message in
+                    DispatchQueue.main.async {
+                        self.statusLogs.append(message)
+                    }
+                }
             )
             
-            // Lấy log mới nhất từ Global Log (LogView đã bị xoá nên phải dùng callback hoặc đọc mảng)
-            // Vì ToolRunner không support callback onLog, ta lấy dòng cuối của GLOBAL_LOG
             await MainActor.run {
-                let logLines = GLOBAL_LOG.text.components(separatedBy: "\n").filter { !$0.isEmpty }
-                if let lastLine = logLines.last {
-                    statusLog = lastLine
-                }
-                
                 if case .failed(let msg) = toolRunner.state {
                     lastError = msg
+                    statusLogs.append("❌ Lỗi: \(msg)")
                     showErrorAlert = true
                 } else if toolRunner.state == .success {
-                    statusLog = "✅ Applied successfully."
+                    statusLogs.append("✅ Applied successfully.")
                 }
             }
             
