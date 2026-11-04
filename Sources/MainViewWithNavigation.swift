@@ -17,28 +17,21 @@ struct MainViewWithNavigation: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            NavigationStack {
-                ContentView(themeStore: themeStore, toolStore: toolStore, toolRunner: toolRunner, walletStore: walletStore, featureFlagsStore: featureFlagsStore)
-            }
-            .tabItem { Label(L("nav_home"), systemImage: "house.fill") }
-            .tag(NavigationTab.home)
+            NavigationStack { ContentView(themeStore: themeStore, toolStore: toolStore, toolRunner: toolRunner, walletStore: walletStore, featureFlagsStore: featureFlagsStore) }
+                .tabItem { Label(L("nav_home"), systemImage: "house.fill") }.tag(NavigationTab.home)
             
             NavigationStack { ThemeStoreView(themeStore: themeStore) }
-            .tabItem { Label(L("nav_theme_store"), systemImage: "square.grid.2x2.fill") }
-            .tag(NavigationTab.themeStore)
+                .tabItem { Label(L("nav_theme_store"), systemImage: "square.grid.2x2.fill") }.tag(NavigationTab.themeStore)
             
             NavigationStack { SettingsView(toolStore: toolStore) }
-            .tabItem { Label(L("nav_settings"), systemImage: "gearshape.fill") }
-            .tag(NavigationTab.settings)
+                .tabItem { Label(L("nav_settings"), systemImage: "gearshape.fill") }.tag(NavigationTab.settings)
             
             NavigationStack { AboutView() }
-            .tabItem { Label("About", systemImage: "info.circle.fill") }
-            .tag(NavigationTab.about)
+                .tabItem { Label("About", systemImage: "info.circle.fill") }.tag(NavigationTab.about)
             
             if showApplyTab {
                 ApplyTabView(toolStore: toolStore, toolRunner: toolRunner, walletStore: walletStore, themeStore: themeStore, featureFlagsStore: featureFlagsStore)
-                .tabItem { Label(L("nav_apply"), systemImage: "checkmark.circle.fill") }
-                .tag(NavigationTab.apply)
+                .tabItem { Label(L("nav_apply"), systemImage: "checkmark.circle.fill") }.tag(NavigationTab.apply)
             }
         }
         .tint(Color(hex: userTintColorHex))
@@ -59,7 +52,7 @@ struct MainViewWithNavigation: View {
     }
 }
 
-// MARK: - APPLY TAB VIEW
+// MARK: - APPLY TAB VIEW (Fix Loading & Log)
 struct ApplyTabView: View {
     @ObservedObject var toolStore: ToolStore
     @ObservedObject var toolRunner: ToolRunner
@@ -71,8 +64,7 @@ struct ApplyTabView: View {
 
     @State private var showErrorAlert = false
     @State private var lastError: String?
-    @State private var fullLogText: String = ""
-    @State private var showCopiedAlert = false
+    @State private var statusLog: String = "Ready to apply."
     
     private var isApplying: Bool {
         if case .running = toolRunner.state { return true }
@@ -86,11 +78,6 @@ struct ApplyTabView: View {
         if toolStore.replaceMobileGestaltEnabled { list.append((L("tool_mobile_gestalt"), "cpu")) }
         if toolStore.configTweaksEnabled { list.append((L("tool_config_tweaks"), "textformat")) }
         return list
-    }
-    
-    private var currentStatus: String {
-        if isApplying { return "Applying..." }
-        return "Ready to apply."
     }
 
     var body: some View {
@@ -111,12 +98,11 @@ struct ApplyTabView: View {
                     Toggle(isOn: $toolStore.soundRespringEnabled) {
                         Text("Respring after apply")
                     }
-                    Text("Using Neospring to Respring device")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text("Using Neospring to Respring device").font(.caption).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Color(.secondarySystemGroupedBackground))
 
+                // FIX: Status hiển thị Log trực tiếp
                 Section(header: Text("Status").font(.headline).textCase(nil)) {
                     HStack(spacing: 12) {
                         if isApplying {
@@ -125,11 +111,12 @@ struct ApplyTabView: View {
                             Image(systemName: "checkmark.circle.fill").foregroundStyle(.secondary)
                         }
                         
-                        Text(currentStatus)
+                        Text(statusLog) // Hiển thị log thay vì chữ tĩnh
                             .font(.subheadline)
                             .foregroundStyle(isApplying ? .primary : .secondary)
-                            .lineLimit(1)
+                            .lineLimit(2)
                             .truncationMode(.tail)
+                            .animation(.easeInOut, value: statusLog)
                     }
                     .padding(.vertical, 4)
                 }
@@ -139,34 +126,12 @@ struct ApplyTabView: View {
                     WalletStyleButton(
                         title: isApplying ? "Applying..." : L("apply_enabled_tweaks"),
                         isLoading: isApplying,
-                        disabled: isApplying,
+                        disabled: isApplying, // FIX: Button xám và disable khi đang apply
                         action: performApply
                     )
                 }
-
-                // LOG VIEWER MỚI
-                Section(header: HStack {
-                    Text("Execution Log").font(.headline).textCase(nil)
-                    Spacer()
-                    Button(action: { fullLogText = "" }) {
-                        Text("Clear").font(.caption).foregroundStyle(.red)
-                    }
-                }) {
-                    LogViewer(logText: $fullLogText)
-                        .frame(minHeight: 200)
-                }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
             }
             .navigationTitle(L("nav_apply"))
-            .onReceive(NotificationCenter.default.publisher(for: .airliftLog)) { notif in
-                if let line = notif.userInfo?["line"] as? String {
-                    fullLogText += line + "\n"
-                }
-            }
-            .onChange(of: isApplying) { applying in
-                if applying { fullLogText = "" } // Xoá log cũ khi bắt đầu chạy
-            }
         }
         .alert(L("alert_error"), isPresented: $showErrorAlert) {
             Button(L("alert_ok"), role: .cancel) { }
@@ -176,7 +141,11 @@ struct ApplyTabView: View {
     }
 
     private func performApply() {
-        Task {
+        // Reset log và chạy trong background thread hoàn toàn
+        statusLog = "Preparing..."
+        
+        Task.detached(priority: .userInitiated) {
+            // Dùng applyAll, nó sẽ chạy các Task ngầm không block Main Thread
             await toolRunner.applyAll(
                 isSystemReady: true,
                 store: toolStore,
@@ -185,10 +154,19 @@ struct ApplyTabView: View {
                 featureFlagsStore: featureFlagsStore
             )
             
+            // Lấy log mới nhất từ Global Log (LogView đã bị xoá nên phải dùng callback hoặc đọc mảng)
+            // Vì ToolRunner không support callback onLog, ta lấy dòng cuối của GLOBAL_LOG
             await MainActor.run {
+                let logLines = GLOBAL_LOG.text.components(separatedBy: "\n").filter { !$0.isEmpty }
+                if let lastLine = logLines.last {
+                    statusLog = lastLine
+                }
+                
                 if case .failed(let msg) = toolRunner.state {
                     lastError = msg
                     showErrorAlert = true
+                } else if toolRunner.state == .success {
+                    statusLog = "✅ Applied successfully."
                 }
             }
             
@@ -197,51 +175,5 @@ struct ApplyTabView: View {
                 try? RespringHelper.respring()
             }
         }
-    }
-}
-
-// MARK: - LOG VIEWER COMPONENT
-struct LogViewer: View {
-    @Binding var logText: String
-    @State private var showCopiedAlert = false
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button(action: {
-                    UIPasteboard.general.string = logText
-                    showCopiedAlert = true
-                }) {
-                    Label("Copy", systemImage: "doc.on.doc")
-                        .font(.caption.bold())
-                }
-                .padding(.trailing, 8)
-                
-                ShareLink(item: logText, preview: SharePreview("Log", image: Image(systemName: "doc.text"))) {
-                    Label("Export", systemImage: "square.and.arrow.up")
-                        .font(.caption.bold())
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(UIColor.secondarySystemGroupedBackground))
-            
-            Divider()
-            
-            ScrollView {
-                Text(logText.isEmpty ? "Chưa có log..." : logText)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .textSelection(.enabled)
-            }
-            .frame(minHeight: 150, maxHeight: 300)
-            .background(Color(UIColor.systemBackground))
-        }
-        .cornerRadius(10)
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.gray.opacity(0.3), lineWidth: 1))
-        .alert("Đã copy!", isPresented: $showCopiedAlert) { Button("OK", role: .cancel) {} }
     }
 }
