@@ -85,3 +85,4 @@ rm -rf "$BUILD_DIR/Payload" && mkdir -p "$BUILD_DIR/Payload"
 cp -R "$APP_PATH" "$BUILD_DIR/Payload/"
 rm -rf "$BUILD_DIR/Payload/${APP_BASENAME}/_CodeSignature"
 (cd "$BUILD_DIR" && zip -qry "$IPA_PATH" Payload)
+echo "🔥 Done: $IPA_PATH"
