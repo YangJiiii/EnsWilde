@@ -121,38 +121,47 @@ struct PasscodeThemeView: View {
             }
         }
 
-        // 3. Đợi xíu rồi reboot
+        // 3. Cần VPN để reboot qua device
+        guard NetworkStatus.isVPNTunnelPresent() else {
+            errorMessage = "VPN chưa bật. Bật VPN (SideStore/StikDebug) để khởi động lại máy."
+            showErrorAlert = true
+            return
+        }
+
+        // 4. Đợi xíu để UI kịp update
         try? await Task.sleep(nanoseconds: 500_000_000)
-        rebootDevice()
+
+        // 5. Reboot thật
+        let ok = rebootDevice()
+        if !ok {
+            errorMessage = "Không thể khởi động lại máy. Kiểm tra VPN và pairing file."
+            showErrorAlert = true
+        }
     }
 
-    // MARK: - Reboot (thử nhiều method)
-    private func rebootDevice() {
-        // Method 1: JITEnableContext.rebootDevice()
-        let ctx = JITEnableContext.shared as AnyObject
-        let sel1 = NSSelectorFromString("rebootDevice")
-        let sel2 = NSSelectorFromString("reboot")
-        if ctx.responds(to: sel1) {
-            _ = ctx.perform(sel1)
-            return
-        }
-        if ctx.responds(to: sel2) {
-            _ = ctx.perform(sel2)
-            return
+    // MARK: - Real Reboot (không phải respring)
+
+    /// Trả về `true` nếu lệnh reboot đã được gửi thành công.
+    @discardableResult
+    private func rebootDevice() -> Bool {
+        // Method 1: Kill launchd (PID 1) bằng SIGKILL
+        //   → kernel panic → userspace reboot. Đây là cách "force reboot" chuẩn của iOS.
+        var nsErr: NSError?
+        if JITEnableContext.shared.killProcessWithPID(1, signal: 9, error: &nsErr) {
+            return true
         }
 
-        // Method 2: Airlift qua pairing file
+        // Method 2: Diagnostics Relay "Restart" qua Airlift
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         if FileManager.default.fileExists(atPath: pairingURL.path) {
             var errPtr: UnsafeMutablePointer<CChar>? = nil
-            // Một số bản AirliftFFI có al_reboot(pairing, &err)
-            // Nếu bản của m không có function này thì phải comment lại
-            // let res = al_reboot(pairingURL.path, &errPtr)
-            // if res == 0 { return }
-            _ = errPtr
+            let res = al_device_respring(pairingURL.path, nil, nil, &errPtr)
+            if let e = errPtr { al_string_free(e) }
+            if res == 0 { return true }
         }
 
-        // Method 3: fallback — respring (không đủ nhưng đỡ hơn không)
+        // Method 3: NeoSpring (respring thôi, không xoá được TelephonyUI cache triệt để)
         try? RespringHelper.respring()
+        return false
     }
 }
