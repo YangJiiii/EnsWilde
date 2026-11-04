@@ -103,78 +103,85 @@ class PasscodeThemeViewModel: ObservableObject {
     func importDefaultPasscode(from sourceURL: URL, name: String, themeStore: PasscodeThemeStore) async throws {}
     
     func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
-        let globalTelephony = self.store.globalTelephonyVersion
+        isProcessing = true
+        defer { isProcessing = false }
         
-        onLogUpdate("Preparing Passcode Theme...")
-        let processedFiles = try processThemeFiles(theme: theme, globalPrefix: self.store.globalCustomPrefix)
-        guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
-        
-        guard NetworkStatus.isVPNTunnelPresent() else { 
-            throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."]) 
-        }
-        
-        let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
-        guard FileManager.default.fileExists(atPath: pairingURL.path) else { 
-            throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."]) 
-        }
-        
-        let tempFolderName = "AirLiftPayload_\(UUID().uuidString)"
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(tempFolderName)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        
-        for (_, imageData, targetFilename) in processedFiles {
-            try imageData.write(to: tempDir.appendingPathComponent(targetFilename))
-        }
-        
-        var targetPath = globalTelephony.cachePath
-        if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
-        
-        onLogUpdate("Ensuring target directory exists...")
-        _ = BadQuery().grantAccess(atPath: targetPath)
-        
-        onLogUpdate("Đang dò tunnel IP...")
-        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else { 
-            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."]) 
-        }
-        
-        onLogUpdate("Đang ghi qua AirTraffic...")
-        let pairingPath = pairingURL.path
-        let srcDir = tempDir.path
-        
-        airliftLogSink = { message in
-            DispatchQueue.main.async { onLogUpdate(message) }
-        }
-        
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var errPtr: UnsafeMutablePointer<CChar>? = nil
-                
-                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { _, msgPtr in
-                    guard let msgPtr else { return }
-                    airliftLogSink?(String(cString: msgPtr))
-                }
-                
-                let res = al_exploit_write_dir(
-                    pairingPath, 
-                    srcDir, 
-                    targetPath, 
-                    logCallback,
-                    nil,
-                    &errPtr
-                )
-                
-                if res != 0 {
-                    let msg = errPtr != nil ? String(cString: errPtr!) : "Mã lỗi FFI: \(res)"
-                    if let e = errPtr { al_string_free(e) }
-                    continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
-                } else {
-                    continuation.resume()
+        // Đẩy toàn bộ logic nặng ra background để không đơ UI
+        try await Task.detached(priority: .userInitiated) {
+            let globalTelephony = self.store.globalTelephonyVersion
+            
+            await MainActor.run { onLogUpdate("Preparing Passcode Theme...") }
+            let processedFiles = try self.processThemeFiles(theme: theme, globalPrefix: self.store.globalCustomPrefix)
+            guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
+            
+            guard NetworkStatus.isVPNTunnelPresent() else { 
+                throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."]) 
+            }
+            
+            let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
+            guard FileManager.default.fileExists(atPath: pairingURL.path) else { 
+                throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."]) 
+            }
+            
+            let tempFolderName = "AirLiftPayload_\(UUID().uuidString)"
+            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(tempFolderName)
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: tempDir) }
+            
+            for (_, imageData, targetFilename) in processedFiles {
+                try imageData.write(to: tempDir.appendingPathComponent(targetFilename))
+            }
+            
+            var targetPath = globalTelephony.cachePath
+            if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
+            
+            await MainActor.run { onLogUpdate("Ensuring target directory exists...") }
+            _ = BadQuery().grantAccess(atPath: targetPath)
+            
+            await MainActor.run { onLogUpdate("Đang dò tunnel IP...") }
+            guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else { 
+                throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."]) 
+            }
+            
+            await MainActor.run { onLogUpdate("Đang ghi qua AirTraffic...") }
+            let pairingPath = pairingURL.path
+            let srcDir = tempDir.path
+            
+            airliftLogSink = { message in
+                DispatchQueue.main.async { onLogUpdate(message) }
+            }
+            
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    var errPtr: UnsafeMutablePointer<CChar>? = nil
+                    
+                    let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { _, msgPtr in
+                        guard let msgPtr else { return }
+                        airliftLogSink?(String(cString: msgPtr))
+                    }
+                    
+                    let res = al_exploit_write_dir(
+                        pairingPath, 
+                        srcDir, 
+                        targetPath, 
+                        logCallback,
+                        nil,
+                        &errPtr
+                    )
+                    
+                    if res != 0 {
+                        let msg = errPtr != nil ? String(cString: errPtr!) : "Mã lỗi FFI: \(res)"
+                        if let e = errPtr { al_string_free(e) }
+                        continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
+                    } else {
+                        continuation.resume()
+                    }
                 }
             }
-        }
+            
+            airliftLogSink = nil
+        }.value
         
-        airliftLogSink = nil
         onLogUpdate("✅ Passcode applied successfully.")
     }
 }
