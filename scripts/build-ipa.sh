@@ -18,7 +18,6 @@ mkdir -p "$BUILD_DIR"
 # =============================================================================
 echo "==> Locating libairlift_ffi.a (Device ARM64) and headers..."
 
-# Ép buộc chỉ tìm trong ios-arm64, loại bỏ simulator
 LIB_PATH=$(find ./Frameworks/ios-arm64 -name "libairlift_ffi.a" 2>/dev/null | head -n 1)
 if [ -z "$LIB_PATH" ]; then
     echo "❌ Đ*o tìm thấy libairlift_ffi.a cho DEVICE trong ./Frameworks/ios-arm64/"
@@ -65,13 +64,11 @@ ruby -e '
     if grappa_m_path
       abs_grappa_path = File.expand_path(grappa_m_path)
       
-      # Check xem file đã có trong build phase chưa
       already_in_build = target.source_build_phase.files.any? do |f| 
         f.file_ref && f.file_ref.path && (f.file_ref.path.include?("GrappaHelper.m") || File.expand_path(f.file_ref.path) == abs_grappa_path)
       end
 
       if !already_in_build
-        # Kiểm tra xem file đã có trong project chưa, nếu chưa thì new_file
         file_ref = project.files.find { |f| f.path && f.path.include?("GrappaHelper.m") }
         file_ref ||= project.new_file(abs_grappa_path)
         target.add_file_references([file_ref])
@@ -90,12 +87,16 @@ ruby -e '
       
       config.build_settings["OTHER_LDFLAGS"] ||= ["$(inherited)"]
       lib_name = File.basename(lib_path).gsub(/^lib/, "").gsub(/\.a$/, "")
+      
+      # FIX QUAN TRỌNG: Ép export symbol ALGetGrappaToken ra để Rust core gọi dlsym
       config.build_settings["OTHER_LDFLAGS"] << "-l#{lib_name}"
       config.build_settings["OTHER_LDFLAGS"] << "-ObjC"
+      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-exported_symbol,_ALGetGrappaToken"
+      config.build_settings["OTHER_LDFLAGS"] << "-Wl,-exported_symbol,_ALGetGrappaToken" # Thêm 2 lần cho chắc (đ*o đùa được với thằng Linker)
     end
     
     project.save
-    puts "✅ Xong! Đã cấu hình Xcode project."
+    puts "✅ Xong! Đã cấu hình Xcode project (có export Grappa symbol)."
   else
     puts "❌ Lỗi: Đ*o tìm thấy target EnsWilde."
     exit 1
