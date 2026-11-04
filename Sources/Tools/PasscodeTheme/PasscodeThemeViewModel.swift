@@ -44,16 +44,16 @@ class PasscodeThemeViewModel: ObservableObject {
         store.addTheme(themeWithSize)
     }
     
-    func processThemeFiles(theme: PasscodeTheme, globalPrefix: PasscodeTheme.PrefixLanguage? = nil) throws -> [(sourceURL: URL, processedData: Data, targetFilename: String)] {
+    // FIX: mark nonisolated để có thể gọi mà không cần await ở bất cứ context nào
+    nonisolated func processThemeFiles(theme: PasscodeTheme, globalPrefix: PasscodeTheme.PrefixLanguage) throws -> [(sourceURL: URL, processedData: Data, targetFilename: String)] {
         var processedFiles: [(URL, Data, String)] = []
         let imageFiles = theme.getImageFiles()
         guard !imageFiles.isEmpty else { throw PasscodeThemeError.noImagesFound }
-        let prefix = globalPrefix ?? store.globalCustomPrefix
         for filename in imageFiles {
             let sourceURL = theme.themeFolderURL.appendingPathComponent(filename)
             guard let firstHyphen = filename.firstIndex(of: "-") else { continue }
             let suffix = String(filename[firstHyphen...])
-            let newFilename = prefix.rawValue + suffix
+            let newFilename = globalPrefix.rawValue + suffix
             guard let image = UIImage(contentsOfFile: sourceURL.path) else { continue }
             let processedImage = resizeImage(image, for: theme.keySize, detectedSize: theme.detectedSize)
             guard let imageData = processedImage.pngData() else { continue }
@@ -62,7 +62,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return processedFiles
     }
     
-    private func resizeImage(_ image: UIImage, for keySize: PasscodeTheme.KeySize, detectedSize: PasscodeTheme.DetectedSize) -> UIImage {
+    nonisolated private func resizeImage(_ image: UIImage, for keySize: PasscodeTheme.KeySize, detectedSize: PasscodeTheme.DetectedSize) -> UIImage {
         var sizeMultiplier: CGFloat = 1.0
         if detectedSize == .small && keySize == .big { sizeMultiplier = 287.0 / 202.0 }
         else if detectedSize == .big && keySize == .small { sizeMultiplier = 202.0 / 287.0 }
@@ -77,7 +77,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetPixelSize)) }
     }
     
-    private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
+    nonisolated private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
             for entry in archive { if entry.path.hasSuffix("_small") { return .small } }
@@ -86,7 +86,7 @@ class PasscodeThemeViewModel: ObservableObject {
         } catch { return .unknown }
     }
     
-    private func extractImagesFromTelephonySubfolder(themeFolder: URL) throws {
+    nonisolated private func extractImagesFromTelephonySubfolder(themeFolder: URL) throws {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(atPath: themeFolder.path) else { return }
         guard let telephonyFolder = contents.first(where: { $0.hasPrefix("Telephony") || $0.hasPrefix("TelephonyUI") }) else { return }
@@ -106,47 +106,49 @@ class PasscodeThemeViewModel: ObservableObject {
         isProcessing = true
         defer { isProcessing = false }
         
-        // Đẩy toàn bộ logic nặng ra background để không đơ UI
+        // FIX: Capture mọi thứ cần thiết TRƯỚC khi đẩy C-FFI ra background
+        let globalTelephony = self.store.globalTelephonyVersion
+        let globalPrefix = self.store.globalCustomPrefix
+        
+        onLogUpdate("Preparing Passcode Theme...")
+        let processedFiles = try processThemeFiles(theme: theme, globalPrefix: globalPrefix)
+        guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
+        
+        guard NetworkStatus.isVPNTunnelPresent() else {
+            throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
+        }
+        
+        let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
+        guard FileManager.default.fileExists(atPath: pairingURL.path) else {
+            throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."])
+        }
+        
+        let tempFolderName = "AirLiftPayload_\(UUID().uuidString)"
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(tempFolderName)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        
+        for (_, imageData, targetFilename) in processedFiles {
+            try imageData.write(to: tempDir.appendingPathComponent(targetFilename))
+        }
+        
+        var targetPath = globalTelephony.cachePath
+        if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
+        
+        onLogUpdate("Ensuring target directory exists...")
+        _ = BadQuery().grantAccess(atPath: targetPath)
+        
+        onLogUpdate("Đang dò tunnel IP...")
+        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else {
+            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."])
+        }
+        
+        onLogUpdate("Đang ghi qua AirTraffic...")
+        let pairingPath = pairingURL.path
+        let srcDir = tempDir.path
+        
+        // FIX: Chỉ đẩy cái gọi C-FFI vào background, mọi thứ khác ở MainActor
         try await Task.detached(priority: .userInitiated) {
-            let globalTelephony = self.store.globalTelephonyVersion
-            
-            await MainActor.run { onLogUpdate("Preparing Passcode Theme...") }
-            let processedFiles = try self.processThemeFiles(theme: theme, globalPrefix: self.store.globalCustomPrefix)
-            guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
-            
-            guard NetworkStatus.isVPNTunnelPresent() else { 
-                throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."]) 
-            }
-            
-            let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
-            guard FileManager.default.fileExists(atPath: pairingURL.path) else { 
-                throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."]) 
-            }
-            
-            let tempFolderName = "AirLiftPayload_\(UUID().uuidString)"
-            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(tempFolderName)
-            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: tempDir) }
-            
-            for (_, imageData, targetFilename) in processedFiles {
-                try imageData.write(to: tempDir.appendingPathComponent(targetFilename))
-            }
-            
-            var targetPath = globalTelephony.cachePath
-            if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
-            
-            await MainActor.run { onLogUpdate("Ensuring target directory exists...") }
-            _ = BadQuery().grantAccess(atPath: targetPath)
-            
-            await MainActor.run { onLogUpdate("Đang dò tunnel IP...") }
-            guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else { 
-                throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."]) 
-            }
-            
-            await MainActor.run { onLogUpdate("Đang ghi qua AirTraffic...") }
-            let pairingPath = pairingURL.path
-            let srcDir = tempDir.path
-            
             airliftLogSink = { message in
                 DispatchQueue.main.async { onLogUpdate(message) }
             }
@@ -161,9 +163,9 @@ class PasscodeThemeViewModel: ObservableObject {
                     }
                     
                     let res = al_exploit_write_dir(
-                        pairingPath, 
-                        srcDir, 
-                        targetPath, 
+                        pairingPath,
+                        srcDir,
+                        targetPath,
                         logCallback,
                         nil,
                         &errPtr
