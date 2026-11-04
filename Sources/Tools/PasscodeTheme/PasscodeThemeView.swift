@@ -12,6 +12,7 @@ struct PasscodeThemeView: View {
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
     @State private var showSavedAlert = false
+    @State private var showResetAlert = false // State cho Alert Reset
 
     init(themeStore: PasscodeThemeStore) {
         self.themeStore = themeStore
@@ -53,6 +54,13 @@ struct PasscodeThemeView: View {
                 Button { showApplyTab = true; showSavedAlert = true } label: {
                     HStack { Image(systemName: "square.and.arrow.down"); Text("Save Changes").font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
                 }.disabled(!themeStore.passcodeThemeEnabled)
+                
+                // FIX: Nút Reset Theme
+                Button(role: .destructive) {
+                    showResetAlert = true
+                } label: {
+                    HStack { Image(systemName: "trash"); Text("Reset Theme").font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
+                }
             }
         }
         .headerProminence(.increased)
@@ -62,6 +70,27 @@ struct PasscodeThemeView: View {
         .sheet(isPresented: $showDefaultImportSheet) { ImportDefaultPasscodeSheet(viewModel: viewModel, themeStore: themeStore) }
         .alert(L("alert_error"), isPresented: $showErrorAlert) { Button(L("alert_ok")) {} } message: { Text(errorMessage) }
         .alert("Saved", isPresented: $showSavedAlert) { Button("OK") {} } message: { Text("Tab Apply đã được mở. Chuyển sang tab Apply để áp dụng.") }
+        // FIX: Alert xác nhận Reset
+        .alert("Reset Theme", isPresented: $showResetAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) {
+                resetAllThemes()
+            }
+        } message: {
+            Text("Are you sure you want to delete all themes and reset to default?")
+        }
+    }
+    
+    private func resetAllThemes() {
+        themeStore.themes.removeAll()
+        themeStore.passcodeThemeEnabled = false
+        themeStore.saveThemes()
+        
+        // Xoá thư mục chứa theme
+        let themesURL = URL.documentsDirectory.appendingPathComponent("PasscodeThemes")
+        try? FileManager.default.removeItem(at: themesURL)
+        
+        // Có thể gọi API reset device nếu cần, nhưng ở đây xoá local là đủ
     }
 }
 
@@ -107,7 +136,7 @@ struct ThemeDetailView: View {
             Section(header: Text(L("section_theme_settings"))) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L("passcode_theme_name")).font(.caption).foregroundStyle(.secondary)
-                    TextField(L("passcode_theme_name"), text: $theme.name).onChange(of: theme.name) { _, _ in themeStore.updateTheme(theme) }
+                    TextField(L("passcode_theme_name"), text: $theme.name).onChange(of: theme.name) { _ in themeStore.updateTheme(theme) }
                 }
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -120,7 +149,7 @@ struct ThemeDetailView: View {
                     Text(L("passcode_target_key_size")).font(.caption).foregroundStyle(.secondary)
                     Picker("Key Size", selection: $theme.keySize) {
                         ForEach(PasscodeTheme.KeySize.allCases, id: \.self) { size in Text(size.rawValue).tag(size) }
-                    }.pickerStyle(.segmented).onChange(of: theme.keySize) { _, _ in themeStore.updateTheme(theme) }
+                    }.pickerStyle(.segmented).onChange(of: theme.keySize) { _ in themeStore.updateTheme(theme) }
                     Text(scalingDescription(from: theme.detectedSize, to: theme.keySize)).font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
@@ -259,12 +288,7 @@ struct ImportDefaultPasscodeSheet: View {
         try? FileManager.default.removeItem(at: tempURL)
         guard let _ = try? FileManager.default.copyItem(at: url, to: tempURL) else { return }
         defer { try? FileManager.default.removeItem(at: tempURL) }
-        let archive: Archive
-        do {
-            archive = try Archive(url: tempURL, accessMode: .read)
-        } catch {
-            return
-        }
+        guard let archive = try? Archive(url: tempURL, accessMode: .read) else { return }
         var telephonyFolder: String?; var languageCode: String?
         for entry in archive {
             let path = entry.path; let components = path.split(separator: "/")
