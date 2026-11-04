@@ -45,7 +45,7 @@ struct SettingsView: View {
     @AppStorage("EnsWilde.userTintColor") private var userTintColorHex: String = "#ef9f76"
     @State private var showImportBackupPicker = false
     
-    // State cho Alert báo lỗi file Pairing
+    // Alert báo lỗi file Pairing
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
     
@@ -72,7 +72,6 @@ struct SettingsView: View {
                 }
             }
 
-            // KHỐI BACKUP
             Section(header: Text("MobileGestalt Backup")) {
                 if hasBackup, let info = backupInfo {
                     VStack(alignment: .leading, spacing: 6) {
@@ -139,7 +138,6 @@ struct SettingsView: View {
         .onAppear { startMonitoringVPN(); refreshBackupInfo() }
         .onDisappear { monitor?.cancel() }
         .sheet(isPresented: $showPairingPicker) {
-            // FIX: Chỉ cho phép chọn .plist hoặc .mobiledevicepairing
             DocumentPickerView(allowedContentTypes: [
                 .propertyList,
                 UTType(filenameExtension: "mobiledevicepairing") ?? .data
@@ -148,7 +146,6 @@ struct SettingsView: View {
         .sheet(isPresented: $showImportBackupPicker) {
             DocumentPickerView(allowedContentTypes: [.data, .item]) { url in handleBackupImport(url) }
         }
-        // FIX: Thêm Alert báo lỗi khi file pairing không hợp lệ
         .alert("Pairing Error", isPresented: $showErrorAlert) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -181,23 +178,22 @@ struct SettingsView: View {
         }
     }
 
-    // FIX: Xử lý import file pairing chặt chẽ, validate bằng RPPairingParser
+    // FIX: Import RPPairing chuẩn iOS 27 - 4 key XML là đủ
     private func handlePairingImport(_ url: URL) {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
         
         do {
-            // Validate định dạng & sự tồn tại của DeviceCertificate
+            // Validate bằng parser mới (chỉ cần 4 key: public_key, private_key, identifier, alt_irk)
             _ = try RPPairingParser.parse(url: url)
             
-            // Nếu hợp lệ, copy vào Documents
+            // Copy vào Documents
             let data = try Data(contentsOf: url)
             let destURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
             try data.write(to: destURL)
             
             pairingFile = url.lastPathComponent
         } catch {
-            // Bắt lỗi và hiển thị Alert
             errorMessage = error.localizedDescription
             showErrorAlert = true
         }
@@ -257,7 +253,7 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - About View (Khôi phục)
+// MARK: - About View
 struct AboutView: View {
     @ObservedObject private var languageManager = LanguageManager.shared
     var body: some View {
