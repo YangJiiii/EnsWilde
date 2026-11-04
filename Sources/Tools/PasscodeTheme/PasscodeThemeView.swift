@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import ZIPFoundation
+import AirliftFFI
 
 struct PasscodeThemeView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
@@ -13,6 +14,7 @@ struct PasscodeThemeView: View {
     @State private var errorMessage = ""
     @State private var showSavedAlert = false
     @State private var showResetAlert = false
+    @State private var isResetting = false
 
     init(themeStore: PasscodeThemeStore) {
         self.themeStore = themeStore
@@ -55,8 +57,13 @@ struct PasscodeThemeView: View {
                 Button(role: .destructive) {
                     showResetAlert = true
                 } label: {
-                    HStack { Image(systemName: "trash"); Text("Reset Theme").font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
-                }
+                    if isResetting {
+                        HStack { ProgressView(); Text("Đang khởi tạo lại...").font(.headline) }
+                            .frame(maxWidth: .infinity).padding(.vertical, 4)
+                    } else {
+                        HStack { Image(systemName: "trash"); Text("Reset Theme").font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
+                    }
+                }.disabled(isResetting)
             }
         }
         .headerProminence(.increased)
@@ -67,12 +74,12 @@ struct PasscodeThemeView: View {
         .alert(L("alert_error"), isPresented: $showErrorAlert) { Button(L("alert_ok")) {} } message: { Text(errorMessage) }
         .alert("Saved", isPresented: $showSavedAlert) { Button("OK") {} } message: { Text("Tab Apply đã được mở. Chuyển sang tab Apply để áp dụng.") }
         .alert("Reset Theme", isPresented: $showResetAlert) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reset", role: .destructive) {
-                resetAllThemes()
+            Button("Từ chối", role: .cancel) {}
+            Button("Cho phép", role: .destructive) {
+                Task { await performFullReset() }
             }
         } message: {
-            Text("Are you sure you want to delete all themes and reset to default?")
+            Text("Máy sẽ tự khởi động lại để khởi tạo lại theme. Bạn chắc chứ?")
         }
     }
 
@@ -88,13 +95,34 @@ struct PasscodeThemeView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
     }
-    
-    private func resetAllThemes() {
+
+    private func performFullReset() async {
+        isResetting = true
+        defer { isResetting = false }
+
+        // 1. Xoá theme local + state
         themeStore.themes.removeAll()
         themeStore.passcodeThemeEnabled = false
         themeStore.saveThemes()
-        
+
         let themesURL = URL.documentsDirectory.appendingPathComponent("PasscodeThemes")
         try? FileManager.default.removeItem(at: themesURL)
+
+        // 2. Xoá cache TelephonyUI trên device (grant qua BadQuery)
+        let bq = BadQuery()
+        let cachePaths = [
+            "/var/mobile/Library/Caches/TelephonyUI-8",
+            "/var/mobile/Library/Caches/TelephonyUI-9",
+            "/var/mobile/Library/Caches/TelephonyUI-10"
+        ]
+        for path in cachePaths {
+            if bq.grantAccess(atPath: path).0 {
+                try? FileManager.default.removeItem(atPath: path)
+            }
+        }
+
+        // 3. Đợi xíu rồi respring để iOS load lại theme default
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        try? RespringHelper.respring()
     }
 }
