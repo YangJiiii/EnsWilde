@@ -38,7 +38,6 @@ struct AppleWalletView: View {
                 Button(L("wallet_import_default_zip")) { showImportZIPSheet = true }
             }
             
-            // FIX: Nút Save và Reset
             Section {
                 Button { showApplyTab = true; showSavedAlert = true } label: {
                     HStack { Image(systemName: "square.and.arrow.down"); Text("Save Changes").font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
@@ -64,7 +63,7 @@ struct AppleWalletView: View {
     }
 }
 
-// FIX: ScanCardIDSheet an toàn hơn, không crash app
+// FIX: Quét an toàn, không crash
 struct ScanCardIDSheet: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var walletStore: AppleWalletStore
@@ -123,7 +122,6 @@ struct ScanCardIDSheet: View {
     private func stopScanning() { isScanning = false; timer?.invalidate(); timer = nil; JITEnableContext.shared.stopSyslogRelay() }
 }
 
-// FIX: Bọc try-catch an toàn để không văng app
 func scanOneWalletCardIDSafe(timeout: TimeInterval = 300) async throws -> String {
     return try await withCheckedThrowingContinuation { continuation in
         var finished = false
