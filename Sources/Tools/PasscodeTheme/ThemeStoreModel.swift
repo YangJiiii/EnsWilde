@@ -1,8 +1,8 @@
 import Foundation
 
-// MARK: - Remote Theme Model (SerStars Format)
+// MARK: - Remote Theme Model (Fix Decode)
 struct RemoteTheme: Identifiable, Codable {
-    let id: Int
+    var id: String { url }
     let name: String
     let description: String?
     let url: String
@@ -10,15 +10,22 @@ struct RemoteTheme: Identifiable, Codable {
     let authors: String
     var baseURL: String = ""
     
-    var fullDownloadURL: URL? {
-        guard !baseURL.isEmpty else { return nil }
-        return URL(string: baseURL + url)
+    // FIX: Tự động handle data thiếu
+    enum CodingKeys: String, CodingKey {
+        case name, description, url, preview, authors
     }
     
-    var fullPreviewURL: URL? {
-        guard !baseURL.isEmpty else { return nil }
-        return URL(string: baseURL + preview)
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Unknown Theme"
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        url = try container.decode(String.self, forKey: .url)
+        preview = try container.decodeIfPresent(String.self, forKey: .preview) ?? ""
+        authors = try container.decodeIfPresent(String.self, forKey: .authors) ?? "Unknown Author"
     }
+    
+    var fullDownloadURL: URL? { URL(string: baseURL + url) }
+    var fullPreviewURL: URL? { URL(string: baseURL + preview) }
 }
 
 // MARK: - Theme Store Manager
@@ -45,12 +52,8 @@ class ThemeStoreManager: ObservableObject {
             }
             
             fetchedThemes.sort { a, b in
-                let aIsWallet = a.name.localizedCaseInsensitiveContains("wallet") || 
-                                (a.description?.localizedCaseInsensitiveContains("wallet") ?? false)
-                
-                let bIsWallet = b.name.localizedCaseInsensitiveContains("wallet") || 
-                                (b.description?.localizedCaseInsensitiveContains("wallet") ?? false)
-                
+                let aIsWallet = a.name.localizedCaseInsensitiveContains("wallet") || (a.description?.localizedCaseInsensitiveContains("wallet") ?? false)
+                let bIsWallet = b.name.localizedCaseInsensitiveContains("wallet") || (b.description?.localizedCaseInsensitiveContains("wallet") ?? false)
                 if aIsWallet && !bIsWallet { return true }
                 if !aIsWallet && bIsWallet { return false }
                 return false
@@ -58,7 +61,6 @@ class ThemeStoreManager: ObservableObject {
             
             self.themes = fetchedThemes
             self.isLoading = false
-            
         } catch {
             self.errorMessage = "Failed to load themes: \(error.localizedDescription)"
             self.isLoading = false
