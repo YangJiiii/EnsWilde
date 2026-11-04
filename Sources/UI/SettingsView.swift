@@ -45,6 +45,10 @@ struct SettingsView: View {
     @AppStorage("EnsWilde.userTintColor") private var userTintColorHex: String = "#ef9f76"
     @State private var showImportBackupPicker = false
     
+    // State cho Alert báo lỗi file Pairing
+    @State private var showErrorAlert = false
+    @State private var errorMessage = ""
+    
     private let tintOptions: [(name: String, hex: String)] = [
         ("Orange", "#ef9f76"), ("Pink", "#f4b8e4"), ("Mauve", "#ca9ee6"), ("Red", "#e78284"), ("Green", "#a6d189"), ("Blue", "#8caaee")
     ]
@@ -68,7 +72,7 @@ struct SettingsView: View {
                 }
             }
 
-            // KHỐI BACKUP LUÔN HIỂN THỊ (BỎ ĐIỀU KIỆN if !isAirLiftMode)
+            // KHỐI BACKUP
             Section(header: Text("MobileGestalt Backup")) {
                 if hasBackup, let info = backupInfo {
                     VStack(alignment: .leading, spacing: 6) {
@@ -135,10 +139,20 @@ struct SettingsView: View {
         .onAppear { startMonitoringVPN(); refreshBackupInfo() }
         .onDisappear { monitor?.cancel() }
         .sheet(isPresented: $showPairingPicker) {
-            DocumentPickerView(allowedContentTypes: [.data, .item]) { url in handlePairingImport(url) }
+            // FIX: Chỉ cho phép chọn .plist hoặc .mobiledevicepairing
+            DocumentPickerView(allowedContentTypes: [
+                .propertyList,
+                UTType(filenameExtension: "mobiledevicepairing") ?? .data
+            ]) { url in handlePairingImport(url) }
         }
         .sheet(isPresented: $showImportBackupPicker) {
             DocumentPickerView(allowedContentTypes: [.data, .item]) { url in handleBackupImport(url) }
+        }
+        // FIX: Thêm Alert báo lỗi khi file pairing không hợp lệ
+        .alert("Pairing Error", isPresented: $showErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(errorMessage)
         }
     }
 
@@ -167,12 +181,25 @@ struct SettingsView: View {
         }
     }
 
+    // FIX: Xử lý import file pairing chặt chẽ, validate bằng RPPairingParser
     private func handlePairingImport(_ url: URL) {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
-        if let data = try? Data(contentsOf: url) {
-            try? data.write(to: URL.documentsDirectory.appendingPathComponent("pairingFile.plist"))
+        
+        do {
+            // Validate định dạng & sự tồn tại của DeviceCertificate
+            _ = try RPPairingParser.parse(url: url)
+            
+            // Nếu hợp lệ, copy vào Documents
+            let data = try Data(contentsOf: url)
+            let destURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
+            try data.write(to: destURL)
+            
             pairingFile = url.lastPathComponent
+        } catch {
+            // Bắt lỗi và hiển thị Alert
+            errorMessage = error.localizedDescription
+            showErrorAlert = true
         }
     }
     
