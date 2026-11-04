@@ -52,7 +52,7 @@ struct MainViewWithNavigation: View {
     }
 }
 
-// MARK: - APPLY TAB VIEW (FIX UI LOG)
+// MARK: - APPLY TAB VIEW (FIX UI LOG & BUTTON)
 struct ApplyTabView: View {
     @ObservedObject var toolStore: ToolStore
     @ObservedObject var toolRunner: ToolRunner
@@ -128,7 +128,7 @@ struct ApplyTabView: View {
                     WalletStyleButton(
                         title: isApplying ? "Applying..." : L("apply_enabled_tweaks"),
                         isLoading: isApplying,
-                        disabled: isApplying, // FIX: Xám và không cho ấn khi đang chạy
+                        disabled: isApplying, // Nút xám đi khi đang apply
                         action: performApply
                     )
                 }
@@ -146,7 +146,6 @@ struct ApplyTabView: View {
         statusLogs = ["Starting Apply sequence..."]
         
         Task.detached(priority: .userInitiated) {
-            // Gọi toolRunner với closure log
             await toolRunner.applyAll(
                 isSystemReady: true,
                 store: toolStore,
