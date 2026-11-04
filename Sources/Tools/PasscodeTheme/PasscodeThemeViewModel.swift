@@ -44,11 +44,11 @@ class PasscodeThemeViewModel: ObservableObject {
         store.addTheme(themeWithSize)
     }
     
-    // FIX: mark nonisolated để có thể gọi mà không cần await ở bất cứ context nào
     nonisolated func processThemeFiles(theme: PasscodeTheme, globalPrefix: PasscodeTheme.PrefixLanguage) throws -> [(sourceURL: URL, processedData: Data, targetFilename: String)] {
         var processedFiles: [(URL, Data, String)] = []
         let imageFiles = theme.getImageFiles()
         guard !imageFiles.isEmpty else { throw PasscodeThemeError.noImagesFound }
+        
         for filename in imageFiles {
             let sourceURL = theme.themeFolderURL.appendingPathComponent(filename)
             guard let firstHyphen = filename.firstIndex(of: "-") else { continue }
@@ -106,13 +106,19 @@ class PasscodeThemeViewModel: ObservableObject {
         isProcessing = true
         defer { isProcessing = false }
         
-        // FIX: Capture mọi thứ cần thiết TRƯỚC khi đẩy C-FFI ra background
         let globalTelephony = self.store.globalTelephonyVersion
         let globalPrefix = self.store.globalCustomPrefix
         
         onLogUpdate("Preparing Passcode Theme...")
         let processedFiles = try processThemeFiles(theme: theme, globalPrefix: globalPrefix)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
+        
+        onLogUpdate("--- Danh sách file chuẩn bị ghi ---")
+        for file in processedFiles {
+            let size = UIImage(data: file.processedData)?.size ?? .zero
+            onLogUpdate("Target: \(file.targetFilename) - Size: \(Int(size.width))x\(Int(size.height))")
+        }
+        onLogUpdate("-----------------------------------")
         
         guard NetworkStatus.isVPNTunnelPresent() else {
             throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
@@ -135,8 +141,22 @@ class PasscodeThemeViewModel: ObservableObject {
         var targetPath = globalTelephony.cachePath
         if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
         
-        onLogUpdate("Ensuring target directory exists...")
-        _ = BadQuery().grantAccess(atPath: targetPath)
+        // FIX CACHE CỨNG: Xoá sạch thư mục cũ trước khi ghi
+        onLogUpdate("Clearing old cache at \(targetPath)...")
+        let bq = BadQuery()
+        if bq.grantAccess(atPath: targetPath).0 {
+            do {
+                if FileManager.default.fileExists(atPath: targetPath) {
+                    try FileManager.default.removeItem(atPath: targetPath)
+                }
+                try FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true, attributes: nil)
+                onLogUpdate("✅ Cleared old cache successfully.")
+            } catch {
+                onLogUpdate("⚠️ Warning: Could not clear cache completely. \(error.localizedDescription)")
+            }
+        } else {
+            onLogUpdate("⚠️ Warning: Could not grant BadQuery access to clear cache.")
+        }
         
         onLogUpdate("Đang dò tunnel IP...")
         guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else {
@@ -147,7 +167,6 @@ class PasscodeThemeViewModel: ObservableObject {
         let pairingPath = pairingURL.path
         let srcDir = tempDir.path
         
-        // FIX: Chỉ đẩy cái gọi C-FFI vào background, mọi thứ khác ở MainActor
         try await Task.detached(priority: .userInitiated) {
             airliftLogSink = { message in
                 DispatchQueue.main.async { onLogUpdate(message) }
