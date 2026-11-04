@@ -3,6 +3,50 @@ import PhotosUI
 import UniformTypeIdentifiers
 import ZIPFoundation
 
+// MARK: - Safe Syslog State (tránh crash stop khi chưa start + double resume)
+private let _walletSyslogLock = NSLock()
+private var _walletSyslogActive = false
+
+private func startWalletSyslogOnce(
+    handler: @escaping (String?) -> Void,
+    onError: @escaping (Error?) -> Void
+) throws -> Bool {
+    _walletSyslogLock.lock()
+    let already = _walletSyslogActive
+    if !already { _walletSyslogActive = true }
+    _walletSyslogLock.unlock()
+    if already { return false }
+    try JITEnableContext.shared.startSyslogRelay(handler, onError: onError)
+    return true
+}
+
+private func stopWalletSyslogIfActive() {
+    _walletSyslogLock.lock()
+    let was = _walletSyslogActive
+    _walletSyslogActive = false
+    _walletSyslogLock.unlock()
+    if was {
+        JITEnableContext.shared.stopSyslogRelay()
+    }
+}
+
+// Box giữ continuation, resume an toàn 1 lần duy nhất
+private final class WalletScanContinuationBox {
+    private let lock = NSLock()
+    private var _continuation: CheckedContinuation<String, Error>?
+    var continuation: CheckedContinuation<String, Error>? {
+        get { lock.lock(); defer { lock.unlock() }; return _continuation }
+        set { lock.lock(); _continuation = newValue; lock.unlock() }
+    }
+    func resume(_ result: Result<String, Error>) {
+        lock.lock()
+        let c = _continuation
+        _continuation = nil
+        lock.unlock()
+        c?.resume(with: result)
+    }
+}
+
 struct AppleWalletView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
     @ObservedObject var walletStore: AppleWalletStore
@@ -63,7 +107,7 @@ struct AppleWalletView: View {
     }
 }
 
-// FIX: Quét an toàn, không crash
+// MARK: - ScanCardIDSheet (FIXED: không crash)
 struct ScanCardIDSheet: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var walletStore: AppleWalletStore
@@ -72,6 +116,7 @@ struct ScanCardIDSheet: View {
     @State private var scanStatus = L("wallet_scan_ready")
     @State private var elapsedTime: TimeInterval = 0
     @State private var timer: Timer?
+    @State private var scanTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -81,78 +126,151 @@ struct ScanCardIDSheet: View {
                         ZStack {
                             Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 8).frame(width: 150, height: 150)
                             if isScanning {
-                                Circle().trim(from: 0, to: 0.7).stroke(LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing), style: StrokeStyle(lineWidth: 8, lineCap: .round)).frame(width: 150, height: 150).rotationEffect(.degrees(isScanning ? 360 : 0)).animation(.linear(duration: 1).repeatForever(autoreverses: false), value: isScanning)
+                                Circle().trim(from: 0, to: 0.7)
+                                    .stroke(LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing),
+                                            style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                                    .frame(width: 150, height: 150)
+                                    .rotationEffect(.degrees(isScanning ? 360 : 0))
+                                    .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: isScanning)
                             }
-                            Image(systemName: isScanning ? "wave.3.right.circle.fill" : "creditcard.fill").font(.system(size: 60)).foregroundStyle(isScanning ? .blue : .secondary)
+                            Image(systemName: isScanning ? "wave.3.right.circle.fill" : "creditcard.fill")
+                                .font(.system(size: 60))
+                                .foregroundStyle(isScanning ? .blue : .secondary)
                         }.frame(maxWidth: .infinity)
                         Text(scanStatus).font(.headline).multilineTextAlignment(.center)
-                        if isScanning { Text(String(format: "%.0f / 300 seconds", elapsedTime)).font(.subheadline).foregroundStyle(.secondary); Text(L("wallet_scan_instruction")).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }
+                        if isScanning {
+                            Text(String(format: "%.0f / 300 seconds", elapsedTime)).font(.subheadline).foregroundStyle(.secondary)
+                            Text(L("wallet_scan_instruction")).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        }
                     }.padding(.vertical, 20)
                 }
                 Section(header: Text(L("section_actions"))) {
-                    if isScanning { Button(L("wallet_scan_cancel")) { stopScanning(); dismiss() } }
-                    else { Button(L("wallet_scan_start")) { startScanning() } }
+                    if isScanning {
+                        Button(L("wallet_scan_cancel")) { cancelScanAndDismiss() }
+                    } else {
+                        Button(L("wallet_scan_start")) { startScanning() }
+                    }
                 }
             }
             .navigationTitle(L("wallet_scan_card"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(L("alert_close")) { stopScanning(); dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L("alert_close")) { cancelScanAndDismiss() }
+                }
+            }
+            .onDisappear { cancelScan() }
         }
     }
 
     private func startScanning() {
-        isScanning = true; elapsedTime = 0; scanStatus = "Scanning... Open Apple Wallet now"
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in elapsedTime += 1 }
-        
-        Task {
+        guard !isScanning else { return }
+        isScanning = true
+        elapsedTime = 0
+        scanStatus = "Scanning... Open Apple Wallet now"
+
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            DispatchQueue.main.async {
+                if isScanning { elapsedTime += 1 }
+            }
+        }
+
+        scanTask?.cancel()
+        scanTask = Task { [weak walletStore] in
             do {
                 let cardID = try await scanOneWalletCardIDSafe(timeout: 300)
                 await MainActor.run {
-                    stopScanning()
+                    guard isScanning else { return }
+                    stopScanningTimerOnly()
                     let newCard = AppleWalletCard(id: cardID, name: "Card \(cardID.prefix(8))")
-                    walletStore.addCard(newCard); scanStatus = "✓ Successfully scanned card ID!"
+                    walletStore?.addCard(newCard)
+                    scanStatus = "✓ Successfully scanned card ID!"
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dismiss() }
                 }
+            } catch is CancellationError {
+                await MainActor.run {
+                    stopScanningTimerOnly()
+                }
             } catch {
-                await MainActor.run { stopScanning(); scanStatus = "✗ Error: \(error.localizedDescription)" }
+                await MainActor.run {
+                    guard isScanning else { return }
+                    stopScanningTimerOnly()
+                    scanStatus = "✗ Error: \(error.localizedDescription)"
+                }
             }
         }
     }
-    
-    private func stopScanning() { isScanning = false; timer?.invalidate(); timer = nil; JITEnableContext.shared.stopSyslogRelay() }
+
+    private func cancelScanAndDismiss() {
+        cancelScan()
+        dismiss()
+    }
+
+    private func stopScanningTimerOnly() {
+        isScanning = false
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func cancelScan() {
+        stopScanningTimerOnly()
+        scanTask?.cancel()
+        scanTask = nil
+        DispatchQueue.main.async {
+            stopWalletSyslogIfActive()
+        }
+    }
 }
 
 func scanOneWalletCardIDSafe(timeout: TimeInterval = 300) async throws -> String {
-    return try await withCheckedThrowingContinuation { continuation in
-        var finished = false
-        let lock = NSLock()
-        
-        func finish(res: Result<String, Error>) {
-            lock.lock()
-            defer { lock.unlock() }
-            guard !finished else { return }
-            finished = true
-            JITEnableContext.shared.stopSyslogRelay()
-            continuation.resume(with: res)
-        }
-        
-        do {
-            JITEnableContext.shared.startSyslogRelay { line in
-                guard let line = line else { return }
-                guard line.localizedCaseInsensitiveContains("passd") else { return }
-                if let cardID = extractWalletCardID(from: line) {
-                    finish(res: .success(cardID))
+    let box = WalletScanContinuationBox()
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            box.continuation = continuation
+
+            let lock = NSLock()
+            var finished = false
+
+            func finish(_ result: Result<String, Error>) {
+                lock.lock()
+                let should = !finished
+                finished = true
+                lock.unlock()
+                guard should else { return }
+                DispatchQueue.main.async {
+                    stopWalletSyslogIfActive()
+                    box.resume(result)
                 }
-            } onError: { error in
-                finish(res: .failure(error ?? NSError(domain: "Scan", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"])))
             }
-        } catch {
-            finish(res: .failure(error))
-            return
+
+            DispatchQueue.main.async {
+                do {
+                    let didStart = try startWalletSyslogOnce(handler: { line in
+                        guard let line = line else { return }
+                        guard line.localizedCaseInsensitiveContains("passd") else { return }
+                        if let cardID = extractWalletCardID(from: line) {
+                            finish(.success(cardID))
+                        }
+                    }, onError: { error in
+                        finish(.failure(error ?? NSError(domain: "Scan", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"])))
+                    })
+                    if !didStart {
+                        finish(.failure(NSError(domain: "Scan", code: -4, userInfo: [NSLocalizedDescriptionKey: "Syslog already running"])))
+                    }
+                } catch {
+                    finish(.failure(error))
+                }
+            }
+
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                finish(.failure(NSError(domain: "Scan", code: -2, userInfo: [NSLocalizedDescriptionKey: "Timeout"])))
+            }
         }
-        
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-            finish(res: .failure(NSError(domain: "Scan", code: -2, userInfo: [NSLocalizedDescriptionKey: "Timeout"])))
+    } onCancel: {
+        DispatchQueue.main.async {
+            stopWalletSyslogIfActive()
+            box.resume(.failure(CancellationError()))
         }
     }
 }
