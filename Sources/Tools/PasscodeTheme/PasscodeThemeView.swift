@@ -58,7 +58,7 @@ struct PasscodeThemeView: View {
                     showResetAlert = true
                 } label: {
                     if isResetting {
-                        HStack { ProgressView(); Text("Đang khởi tạo lại...").font(.headline) }
+                        HStack { ProgressView(); Text("Đang khởi động lại máy...").font(.headline) }
                             .frame(maxWidth: .infinity).padding(.vertical, 4)
                     } else {
                         HStack { Image(systemName: "trash"); Text("Reset Theme").font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
@@ -121,8 +121,38 @@ struct PasscodeThemeView: View {
             }
         }
 
-        // 3. Đợi xíu rồi respring để iOS load lại theme default
-        try? await Task.sleep(nanoseconds: 800_000_000)
+        // 3. Đợi xíu rồi reboot
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        rebootDevice()
+    }
+
+    // MARK: - Reboot (thử nhiều method)
+    private func rebootDevice() {
+        // Method 1: JITEnableContext.rebootDevice()
+        let ctx = JITEnableContext.shared as AnyObject
+        let sel1 = NSSelectorFromString("rebootDevice")
+        let sel2 = NSSelectorFromString("reboot")
+        if ctx.responds(to: sel1) {
+            _ = ctx.perform(sel1)
+            return
+        }
+        if ctx.responds(to: sel2) {
+            _ = ctx.perform(sel2)
+            return
+        }
+
+        // Method 2: Airlift qua pairing file
+        let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
+        if FileManager.default.fileExists(atPath: pairingURL.path) {
+            var errPtr: UnsafeMutablePointer<CChar>? = nil
+            // Một số bản AirliftFFI có al_reboot(pairing, &err)
+            // Nếu bản của m không có function này thì phải comment lại
+            // let res = al_reboot(pairingURL.path, &errPtr)
+            // if res == 0 { return }
+            _ = errPtr
+        }
+
+        // Method 3: fallback — respring (không đủ nhưng đỡ hơn không)
         try? RespringHelper.respring()
     }
 }
