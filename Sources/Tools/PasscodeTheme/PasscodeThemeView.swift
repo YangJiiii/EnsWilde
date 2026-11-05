@@ -100,7 +100,6 @@ struct PasscodeThemeView: View {
         isResetting = true
         defer { isResetting = false }
 
-        // 1. Xoá theme local + state
         themeStore.themes.removeAll()
         themeStore.passcodeThemeEnabled = false
         themeStore.saveThemes()
@@ -108,7 +107,6 @@ struct PasscodeThemeView: View {
         let themesURL = URL.documentsDirectory.appendingPathComponent("PasscodeThemes")
         try? FileManager.default.removeItem(at: themesURL)
 
-        // 2. Xoá cache TelephonyUI trên device (grant qua BadQuery)
         let bq = BadQuery()
         let cachePaths = [
             "/var/mobile/Library/Caches/TelephonyUI-8",
@@ -121,17 +119,14 @@ struct PasscodeThemeView: View {
             }
         }
 
-        // 3. Cần VPN để reboot qua device
         guard NetworkStatus.isVPNTunnelPresent() else {
             errorMessage = "VPN chưa bật. Bật VPN (SideStore/StikDebug) để khởi động lại máy."
             showErrorAlert = true
             return
         }
 
-        // 4. Đợi xíu để UI kịp update
         try? await Task.sleep(nanoseconds: 500_000_000)
 
-        // 5. Reboot thật
         let ok = rebootDevice()
         if !ok {
             errorMessage = "Không thể khởi động lại máy. Kiểm tra VPN và pairing file."
@@ -139,11 +134,9 @@ struct PasscodeThemeView: View {
         }
     }
 
-    // MARK: - Real Reboot (không phải respring)
-
+    // MARK: - Real Reboot
     @discardableResult
     private func rebootDevice() -> Bool {
-        // Method 1: Kill launchd (PID 1) bằng SIGKILL
         do {
             try JITEnableContext.shared.killProcess(withPID: 1, signal: 9)
             return true
@@ -151,7 +144,6 @@ struct PasscodeThemeView: View {
             NSLog("[Reboot] killProcess(withPID: 1, SIGKILL) failed: \(error.localizedDescription)")
         }
 
-        // Method 2: Diagnostics Relay "Restart" qua Airlift
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         if FileManager.default.fileExists(atPath: pairingURL.path) {
             var errPtr: UnsafeMutablePointer<CChar>? = nil
@@ -160,7 +152,6 @@ struct PasscodeThemeView: View {
             if res == 0 { return true }
         }
 
-        // Method 3: NeoSpring (respring thôi, không xoá được TelephonyUI cache triệt để)
         try? RespringHelper.respring()
         return false
     }
