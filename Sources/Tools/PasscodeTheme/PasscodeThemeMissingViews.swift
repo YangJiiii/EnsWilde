@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import ZIPFoundation
+import ZIPFoundation // Cần thiết để đọc file ZIP
+
 // MARK: - Theme Row View
 struct ThemeRowView: View {
     let theme: PasscodeTheme
@@ -214,7 +215,7 @@ struct ImportThemeSheet: View {
             }
             .fileImporter(
                 isPresented: $showFilePicker,
-                allowedContentTypes: [.item, .zip],
+                allowedContentTypes: [.item, .data, .zip], // SỬA LỖI: Cho phép chọn mọi file
                 allowsMultipleSelection: false
             ) { result in
                 switch result {
@@ -311,7 +312,7 @@ struct ImportDefaultPasscodeSheet: View {
             }
             .fileImporter(
                 isPresented: $showFilePicker,
-                allowedContentTypes: [.zip, .data],
+                allowedContentTypes: [.item, .data, .zip], // SỬA LỖI: Cho phép chọn mọi file
                 allowsMultipleSelection: false
             ) { result in
                 switch result {
