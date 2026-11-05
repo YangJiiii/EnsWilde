@@ -36,13 +36,13 @@ struct ThemeRepo: Identifiable {
     let name: String
     let iconURL: URL?
     var themes: [RemoteTheme]
+    var errorMessage: String?  // Nếu có lỗi, chứa message lỗi
 }
 
 @MainActor
 class ThemeStoreManager: ObservableObject {
     @Published var repos: [ThemeRepo] = []
     @Published var isLoading = false
-    @Published var errorMessage: String?
     
     var savedRepos: String {
         get { UserDefaults.standard.string(forKey: "SavedThemeRepos") ?? "https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/refs/heads/main/wallpapers-passthemes.json" }
@@ -51,30 +51,27 @@ class ThemeStoreManager: ObservableObject {
 
     func fetchThemes() async {
         isLoading = true
-        errorMessage = nil
         repos = []
         
         let repoURLs = savedRepos.components(separatedBy: ",").compactMap { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         
         guard !repoURLs.isEmpty else {
-            errorMessage = "Chưa có Repository nào được thêm."
             isLoading = false
             return
         }
 
         var fetchedRepos: [ThemeRepo] = []
-        var errorLogs: [String] = []
         
         for repoURLString in repoURLs {
             guard let repoURL = URL(string: repoURLString) else { continue }
+            let repoName = getRepoNameFromURL(repoURL)
+            let baseURL = repoURL.deletingLastPathComponent().absoluteString
+            
             do {
                 let (data, _) = try await URLSession.shared.data(from: repoURL)
-                let baseURL = repoURL.deletingLastPathComponent().absoluteString
-                let repoName = getRepoNameFromURL(repoURL)
                 
-                // Thử decode dạng mới (Object bọc)
-                do {
-                    let repoJSON = try JSONDecoder().decode(RepoJSON.self, from: data)
+                // Thử dạng Object { name, icon, themes }
+                if let repoJSON = try? JSONDecoder().decode(RepoJSON.self, from: data) {
                     var themes = repoJSON.themes
                     for i in 0..<themes.count { themes[i].baseURL = baseURL }
                     
@@ -84,32 +81,35 @@ class ThemeStoreManager: ObservableObject {
                     }
                     
                     let finalName = repoJSON.name ?? repoName
-                    fetchedRepos.append(ThemeRepo(url: repoURLString, name: finalName, iconURL: iconURL, themes: themes))
-                } 
-                // Thử decode dạng cũ (Array thuần túy)
-                catch {
-                    do {
-                        var themes = try JSONDecoder().decode([RemoteTheme].self, from: data)
-                        for i in 0..<themes.count { themes[i].baseURL = baseURL }
-                        fetchedRepos.append(ThemeRepo(url: repoURLString, name: repoName, iconURL: nil, themes: themes))
-                    } catch {
-                        // Nếu cả 2 dạng đều lỗi -> JSON sai cú pháp
-                        errorLogs.append("Lỗi JSON ở \(repoName):\n\(error.localizedDescription)")
-                    }
+                    fetchedRepos.append(ThemeRepo(url: repoURLString, name: finalName, iconURL: iconURL, themes: themes, errorMessage: nil))
+                }
+                // Thử dạng Array [ RemoteTheme ]
+                else if var themes = try? JSONDecoder().decode([RemoteTheme].self, from: data) {
+                    for i in 0..<themes.count { themes[i].baseURL = baseURL }
+                    fetchedRepos.append(ThemeRepo(url: repoURLString, name: repoName, iconURL: nil, themes: themes, errorMessage: nil))
+                }
+                // JSON sai cú pháp
+                else {
+                    fetchedRepos.append(ThemeRepo(
+                        url: repoURLString,
+                        name: repoName,
+                        iconURL: nil,
+                        themes: [],
+                        errorMessage: "File JSON sai cú pháp hoặc sai cấu trúc.\nKiểm tra lại dấu phẩy, ngoặc, hoặc các trường bắt buộc (name, url, preview, authors)."
+                    ))
                 }
             } catch {
-                errorLogs.append("Lỗi kết nối \(repoURLString):\n\(error.localizedDescription)")
+                fetchedRepos.append(ThemeRepo(
+                    url: repoURLString,
+                    name: repoName,
+                    iconURL: nil,
+                    themes: [],
+                    errorMessage: "Không thể kết nối tới Repo.\n\(error.localizedDescription)"
+                ))
             }
         }
         
-        if fetchedRepos.isEmpty && !errorLogs.isEmpty {
-            self.errorMessage = errorLogs.joined(separator: "\n\n")
-        } else {
-            self.repos = fetchedRepos
-            if !errorLogs.isEmpty {
-                self.errorMessage = errorLogs.joined(separator: "\n\n")
-            }
-        }
+        self.repos = fetchedRepos
         isLoading = false
     }
     
@@ -135,9 +135,5 @@ class ThemeStoreManager: ObservableObject {
         var reposList = savedRepos.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         reposList.removeAll { $0 == url }
         savedRepos = reposList.joined(separator: ",")
-    }
-    
-    func clearError() {
-        self.errorMessage = nil
     }
 }
