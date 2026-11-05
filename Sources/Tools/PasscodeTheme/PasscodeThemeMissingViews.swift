@@ -141,29 +141,30 @@ struct ImportThemeSheet: View {
             .navigationTitle("Import Theme")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
-            .fileImporter(
-                isPresented: $showPicker,
-                allowedContentTypes: [UTType.passthm, UTType(filenameExtension: "zip") ?? .data, .data]
-            ) { result in
-                switch result {
-                case .success(let url):
-                    // FIX: Copy file sang thư mục an toàn NGAY LẬP TỨC để không bị iOS thu hồi quyền
-                    let accessing = url.startAccessingSecurityScopedResource()
-                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                    do {
-                        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-                        try? FileManager.default.removeItem(at: localURL)
-                        try FileManager.default.copyItem(at: url, to: localURL)
-                        selectedFile = localURL
-                        if themeName.isEmpty {
-                            themeName = url.deletingPathExtension().lastPathComponent
-                        }
-                    } catch {
-                        errorMessage = "Không thể đọc file: \(error.localizedDescription)"
+        }
+        .fileImporter(
+            isPresented: $showPicker,
+            allowedContentTypes: [.item], // FIX: Dùng .item để chọn được mọi file, tránh treo do iOS không nhận diện đuôi lạ
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+                    try? FileManager.default.removeItem(at: localURL)
+                    try FileManager.default.copyItem(at: url, to: localURL)
+                    selectedFile = localURL
+                    if themeName.isEmpty {
+                        themeName = url.deletingPathExtension().lastPathComponent
                     }
-                case .failure(let err):
-                    errorMessage = err.localizedDescription
+                } catch {
+                    errorMessage = "Không thể đọc file: \(error.localizedDescription)"
                 }
+            case .failure(let err):
+                errorMessage = err.localizedDescription
             }
         }
     }
@@ -207,16 +208,18 @@ struct ImportDefaultPasscodeSheet: View {
             .navigationTitle("Import Default")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-            .fileImporter(
-                isPresented: $showPicker,
-                allowedContentTypes: [UTType.passthm, UTType(filenameExtension: "zip") ?? .data, .data]
-            ) { result in
-                switch result {
-                case .success(let url):
-                    Task { await doImport(url) }
-                case .failure(let err):
-                    errorMessage = err.localizedDescription
-                }
+        }
+        .fileImporter(
+            isPresented: $showPicker,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                Task { await doImport(url) }
+            case .failure(let err):
+                errorMessage = err.localizedDescription
             }
         }
     }
