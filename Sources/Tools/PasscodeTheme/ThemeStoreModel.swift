@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: - Remote Theme Model (Fix Decode)
 struct RemoteTheme: Identifiable, Codable {
     var id: String { url }
     let name: String
@@ -27,42 +26,82 @@ struct RemoteTheme: Identifiable, Codable {
     var fullPreviewURL: URL? { URL(string: baseURL + preview) }
 }
 
-// MARK: - Theme Store Manager
+// Model đại diện cho 1 Repo
+struct ThemeRepo: Identifiable {
+    var id: String { url }
+    let url: String
+    var themes: [RemoteTheme]
+    
+    var name: String {
+        // Tự động lấy tên tác giả/repo từ URL cho đẹp
+        let components = url.components(separatedBy: "/")
+        if let index = components.firstIndex(of: "main"), index > 0 {
+            return components[index - 1]
+        }
+        return URL(string: url)?.lastPathComponent ?? "Repository"
+    }
+}
+
 @MainActor
 class ThemeStoreManager: ObservableObject {
-    @Published var themes: [RemoteTheme] = []
+    @Published var repos: [ThemeRepo] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    private let indexURL = URL(string: "https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/refs/heads/main/wallpapers-passthemes.json")!
-    private let baseRepoURL = "https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/refs/heads/main/"
+    // Mặc định có sẵn 1 link của SerStars
+    @AppStorage("SavedThemeRepos") var savedRepos: String = "https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/refs/heads/main/wallpapers-passthemes.json"
 
     func fetchThemes() async {
         isLoading = true
         errorMessage = nil
-        themes = []
+        repos = []
 
-        do {
-            let (data, _) = try await URLSession.shared.data(from: indexURL)
-            var fetchedThemes = try JSONDecoder().decode([RemoteTheme].self, from: data)
-            
-            for i in 0..<fetchedThemes.count {
-                fetchedThemes[i].baseURL = baseRepoURL
+        let repoURLs = savedRepos.components(separatedBy: ",").compactMap { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        
+        guard !repoURLs.isEmpty else {
+            errorMessage = "Chưa có Repository nào được thêm."
+            isLoading = false
+            return
+        }
+
+        var fetchedRepos: [ThemeRepo] = []
+        
+        for repoURLString in repoURLs {
+            guard let repoURL = URL(string: repoURLString) else { continue }
+            do {
+                let (data, _) = try await URLSession.shared.data(from: repoURL)
+                var fetchedThemes = try JSONDecoder().decode([RemoteTheme].self, from: data)
+                
+                // Lấy base URL bằng cách bỏ phần đuôi file json
+                let baseURL = repoURL.deletingLastPathComponent().absoluteString
+                
+                for i in 0..<fetchedThemes.count {
+                    fetchedThemes[i].baseURL = baseURL
+                }
+                
+                let repo = ThemeRepo(url: repoURLString, themes: fetchedThemes)
+                fetchedRepos.append(repo)
+            } catch {
+                print("Failed to load repo \(repoURLString): \(error)")
             }
-            
-            fetchedThemes.sort { a, b in
-                let aIsWallet = a.name.localizedCaseInsensitiveContains("wallet") || (a.description?.localizedCaseInsensitiveContains("wallet") ?? false)
-                let bIsWallet = b.name.localizedCaseInsensitiveContains("wallet") || (b.description?.localizedCaseInsensitiveContains("wallet") ?? false)
-                if aIsWallet && !bIsWallet { return true }
-                if !aIsWallet && bIsWallet { return false }
-                return false
-            }
-            
-            self.themes = fetchedThemes
-            self.isLoading = false
-        } catch {
-            self.errorMessage = "Failed to load themes: \(error.localizedDescription)"
-            self.isLoading = false
+        }
+        
+        if fetchedRepos.isEmpty {
+            errorMessage = "Không thể tải theme từ bất kỳ Repository nào."
+        } else {
+            self.repos = fetchedRepos
+        }
+        
+        self.isLoading = false
+    }
+    
+    func addRepo(url: String) {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var reposList = savedRepos.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if !reposList.contains(trimmed) {
+            reposList.append(trimmed)
+            savedRepos = reposList.joined(separator: ",")
         }
     }
 }
