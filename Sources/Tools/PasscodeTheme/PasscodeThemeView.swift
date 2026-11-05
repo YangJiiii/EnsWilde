@@ -3,7 +3,6 @@ import UniformTypeIdentifiers
 import ZIPFoundation
 import AirliftFFI
 
-// MARK: - Passcode Theme View
 struct PasscodeThemeView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
     @ObservedObject var themeStore: PasscodeThemeStore
@@ -16,7 +15,6 @@ struct PasscodeThemeView: View {
     @State private var errorMessage = ""
     @State private var showSavedAlert = false
     
-    // Trạng thái cho Reboot
     @State private var showResetAlert = false
     @State private var isResetting = false
     
@@ -31,16 +29,13 @@ struct PasscodeThemeView: View {
                 Toggle(L("passcode_enable_theme"), isOn: $themeStore.passcodeThemeEnabled)
             }
             
-            // Global Settings — applies to all passcode themes
             Section(header: Text(L("global_settings"))) {
-                // Language / Method
                 Picker(L("passcode_language_method"), selection: $themeStore.globalCustomPrefixRaw) {
                     ForEach(PasscodeTheme.PrefixLanguage.allCases, id: \.self) { prefix in
                         Text(prefix.displayName).tag(prefix.rawValue)
                     }
                 }
                 
-                // Telephony Version
                 Picker(L("passcode_telephony_version"), selection: $themeStore.globalTelephonyVersionRaw) {
                     ForEach(PasscodeTheme.TelephonyVersion.allCases, id: \.self) { version in
                         Text(version.displayName).tag(version.rawValue)
@@ -79,7 +74,6 @@ struct PasscodeThemeView: View {
                 }
             }
             
-            // Thêm phần Save và Reset (Reboot)
             Section {
                 Button { showApplyTab = true; showSavedAlert = true } label: {
                     HStack { Image(systemName: "square.and.arrow.down"); Text("Save Changes").font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
@@ -164,16 +158,17 @@ struct PasscodeThemeView: View {
         }
     }
 
-    // MARK: - Real Reboot
     @discardableResult
     private func rebootDevice() -> Bool {
         do {
+            // Cố gắng kill launchd (PID 1) để reboot máy
             try JITEnableContext.shared.killProcess(withPID: 1, signal: 9)
             return true
         } catch {
             NSLog("[Reboot] killProcess(withPID: 1, SIGKILL) failed: \(error.localizedDescription)")
         }
 
+        // Fallback sang Airlift nếu không kill được PID 1
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         if FileManager.default.fileExists(atPath: pairingURL.path) {
             var errPtr: UnsafeMutablePointer<CChar>? = nil
