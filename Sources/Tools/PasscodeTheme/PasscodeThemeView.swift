@@ -161,14 +161,13 @@ struct PasscodeThemeView: View {
     @discardableResult
     private func rebootDevice() -> Bool {
         do {
-            // Cố gắng kill launchd (PID 1) để reboot máy
+            // Kill PID 1 để reboot máy (TUYỆT ĐỐI KHÔNG DÙNG exit(0) Ở ĐÂY)
             try JITEnableContext.shared.killProcess(withPID: 1, signal: 9)
             return true
         } catch {
             NSLog("[Reboot] killProcess(withPID: 1, SIGKILL) failed: \(error.localizedDescription)")
         }
 
-        // Fallback sang Airlift nếu không kill được PID 1
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         if FileManager.default.fileExists(atPath: pairingURL.path) {
             var errPtr: UnsafeMutablePointer<CChar>? = nil
