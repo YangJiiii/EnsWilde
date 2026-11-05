@@ -33,7 +33,6 @@ struct ThemeRepo: Identifiable {
     var name: String {
         if let urlObj = URL(string: url) {
             let pathComponents = urlObj.pathComponents.filter { $0 != "/" }
-            // VD: https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/refs/heads/main/...
             if pathComponents.count >= 2 {
                 return "\(pathComponents[0])/\(pathComponents[1])"
             }
@@ -59,7 +58,7 @@ class ThemeStoreManager: ObservableObject {
         let repoURLs = savedRepos.components(separatedBy: ",").compactMap { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         
         guard !repoURLs.isEmpty else {
-            errorMessage = "Chưa có Repository nào được thêm."
+            errorMessage = "Chưa có Repository nào được thêm. Hãy ấn nút + để thêm."
             isLoading = false
             return
         }
@@ -79,7 +78,7 @@ class ThemeStoreManager: ObservableObject {
         }
         
         if fetchedRepos.isEmpty {
-            self.errorMessage = "Không thể tải theme từ bất kỳ Repo nào. Vui lòng kiểm tra lại URL hoặc mạng."
+            self.errorMessage = "Không thể tải theme. Vui lòng kiểm tra lại URL hoặc kết nối mạng."
         } else {
             self.repos = fetchedRepos
         }
@@ -94,5 +93,11 @@ class ThemeStoreManager: ObservableObject {
             reposList.append(trimmed)
             savedRepos = reposList.joined(separator: ",")
         }
+    }
+    
+    func removeRepo(url: String) {
+        var reposList = savedRepos.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        reposList.removeAll { $0 == url }
+        savedRepos = reposList.joined(separator: ",")
     }
 }
