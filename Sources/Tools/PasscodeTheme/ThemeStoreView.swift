@@ -68,6 +68,8 @@ struct RepoDetailView: View {
     let repo: ThemeRepo
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var viewModel: PasscodeThemeViewModel
+    @Environment(\.dismiss) var dismiss
+    @StateObject private var storeManager = ThemeStoreManager()
 
     var body: some View {
         List {
@@ -84,6 +86,12 @@ struct RepoDetailView: View {
                             Text(theme.authors).font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                }
+            }
+            Section {
+                Button("Xóa Repo này", role: .destructive) {
+                    storeManager.removeRepo(url: repo.url)
+                    dismiss()
                 }
             }
         }.navigationTitle(repo.name)
