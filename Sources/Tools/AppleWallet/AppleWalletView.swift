@@ -153,7 +153,7 @@ struct ScanCardIDSheet: View {
         scanTask?.cancel()
         scanTask = Task { [weak walletStore] in
             do {
-                let cardID = try await scanOneWalletCardIDSafe(timeout: 60) // Giảm timeout xuống 60s để an toàn
+                let cardID = try await scanOneWalletCardIDSafe(timeout: 60)
                 await MainActor.run {
                     guard isScanning else { return }
                     stopScanningTimerOnly()
@@ -203,7 +203,8 @@ private final class ScanContinuationBox: @unchecked Sendable {
         lock.lock(); continuation = c; lock.unlock()
     }
 
-    func resume(with result: Result<String, Error>) {
+    // SỬA LỖI TẠI ĐÂY: Đổi tên tham số thành '_ result' thay vì 'with result'
+    func resume(_ result: Result<String, Error>) {
         lock.lock()
         guard !isResumed, let c = continuation else { lock.unlock(); return }
         isResumed = true
