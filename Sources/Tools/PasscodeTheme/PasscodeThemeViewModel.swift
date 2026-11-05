@@ -19,29 +19,44 @@ class PasscodeThemeViewModel: ObservableObject {
     func importTheme(from sourceURL: URL, name: String) async throws {
         isProcessing = true
         defer { isProcessing = false }
-        let accessing = sourceURL.startAccessingSecurityScopedResource()
-        defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
         
-        let tempDir = FileManager.default.temporaryDirectory
-        let tempFileURL = tempDir.appendingPathComponent(sourceURL.lastPathComponent)
-        try? FileManager.default.removeItem(at: tempFileURL)
-        do { try FileManager.default.copyItem(at: sourceURL, to: tempFileURL) } catch { throw PasscodeThemeError.accessDenied }
+        // FIX: Đưa toàn bộ tác vụ đọc/ghi/giải nén file nặng sang Background để không treo UI
+        let result = try await Task.detached(priority: .userInitiated) { () -> (PasscodeTheme, PasscodeTheme.DetectedSize) in
+            let accessing = sourceURL.startAccessingSecurityScopedResource()
+            defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
+            
+            let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).zip")
+            defer { try? FileManager.default.removeItem(at: tempFileURL) }
+            
+            do {
+                let data = try Data(contentsOf: sourceURL)
+                try data.write(to: tempFileURL)
+            } catch {
+                throw PasscodeThemeError.accessDenied
+            }
+            
+            let newTheme = PasscodeTheme(name: name)
+            let themeFolder = newTheme.themeFolderURL
+            if !FileManager.default.fileExists(atPath: themeFolder.path) {
+                try FileManager.default.createDirectory(at: themeFolder, withIntermediateDirectories: true)
+            }
+            
+            let detectedSize = PasscodeThemeViewModel.detectSizeFromZIP(at: tempFileURL)
+            do {
+                try FileManager.default.unzipItem(at: tempFileURL, to: themeFolder)
+            } catch {
+                try? FileManager.default.removeItem(at: themeFolder)
+                throw PasscodeThemeError.invalidFormat
+            }
+            
+            try PasscodeThemeViewModel.extractImagesFromTelephonySubfolder(themeFolder: themeFolder)
+            
+            return (newTheme, detectedSize)
+        }.value
         
-        let newTheme = PasscodeTheme(name: name)
-        let themeFolder = newTheme.themeFolderURL
-        if !FileManager.default.fileExists(atPath: themeFolder.path) {
-            try FileManager.default.createDirectory(at: themeFolder, withIntermediateDirectories: true)
-        }
-        let detectedSize = detectSizeFromZIP(at: tempFileURL)
-        do { try FileManager.default.unzipItem(at: tempFileURL, to: themeFolder) } catch {
-            try? FileManager.default.removeItem(at: themeFolder)
-            throw PasscodeThemeError.invalidFormat
-        }
-        try extractImagesFromTelephonySubfolder(themeFolder: themeFolder)
-        try? FileManager.default.removeItem(at: tempFileURL)
-        var themeWithSize = newTheme
-        themeWithSize.detectedSize = detectedSize
-        store.addTheme(themeWithSize)
+        var themeWithSize = result.0
+        themeWithSize.detectedSize = result.1
+        self.store.addTheme(themeWithSize)
     }
     
     nonisolated func processThemeFiles(theme: PasscodeTheme, globalPrefix: PasscodeTheme.PrefixLanguage) throws -> [(sourceURL: URL, processedData: Data, targetFilename: String)] {
@@ -77,7 +92,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetPixelSize)) }
     }
     
-    nonisolated private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
+    nonisolated static private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
             for entry in archive { if entry.path.hasSuffix("_small") { return .small } }
@@ -86,7 +101,7 @@ class PasscodeThemeViewModel: ObservableObject {
         } catch { return .unknown }
     }
     
-    nonisolated private func extractImagesFromTelephonySubfolder(themeFolder: URL) throws {
+    nonisolated static private func extractImagesFromTelephonySubfolder(themeFolder: URL) throws {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(atPath: themeFolder.path) else { return }
         guard let telephonyFolder = contents.first(where: { $0.hasPrefix("Telephony") || $0.hasPrefix("TelephonyUI") }) else { return }
@@ -141,7 +156,6 @@ class PasscodeThemeViewModel: ObservableObject {
         var targetPath = globalTelephony.cachePath
         if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
         
-        // FIX CACHE CỨNG: Xoá sạch thư mục cũ trước khi ghi
         onLogUpdate("Clearing old cache at \(targetPath)...")
         let bq = BadQuery()
         if bq.grantAccess(atPath: targetPath).0 {
