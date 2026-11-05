@@ -145,9 +145,8 @@ struct PasscodeThemeView: View {
     private func rebootDevice() -> Bool {
         // Method 1: Kill launchd (PID 1) bằng SIGKILL
         do {
-            if try JITEnableContext.shared.killProcessWithPID(1, signal: 9) {
-                return true
-            }
+            try JITEnableContext.shared.killProcessWithPID(1, signal: 9)
+            return true
         } catch {
             NSLog("[Reboot] killProcessWithPID(1, SIGKILL) failed: \(error.localizedDescription)")
         }
