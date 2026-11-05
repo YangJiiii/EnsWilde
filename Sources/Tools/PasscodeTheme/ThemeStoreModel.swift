@@ -24,7 +24,6 @@ struct RemoteTheme: Identifiable, Codable {
     var fullPreviewURL: URL? { URL(string: baseURL + preview) }
 }
 
-// Cấu trúc JSON mới (hỗ trợ name, icon, themes)
 struct RepoJSON: Codable {
     let name: String?
     let icon: String?
@@ -51,7 +50,10 @@ class ThemeStoreManager: ObservableObject {
     }
 
     func fetchThemes() async {
-        isLoading = true; errorMessage = nil; repos = []
+        isLoading = true
+        errorMessage = nil
+        repos = []
+        
         let repoURLs = savedRepos.components(separatedBy: ",").compactMap { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         
         guard !repoURLs.isEmpty else {
@@ -61,60 +63,58 @@ class ThemeStoreManager: ObservableObject {
         }
 
         var fetchedRepos: [ThemeRepo] = []
+        var errorLogs: [String] = []
+        
         for repoURLString in repoURLs {
             guard let repoURL = URL(string: repoURLString) else { continue }
             do {
                 let (data, _) = try await URLSession.shared.data(from: repoURL)
                 let baseURL = repoURL.deletingLastPathComponent().absoluteString
+                let repoName = getRepoNameFromURL(repoURL)
                 
-                // Thử decode dạng mới (có object bọc)
-                if let repoJSON = try? JSONDecoder().decode(RepoJSON.self, from: data) {
+                // Thử decode dạng mới (Object bọc)
+                do {
+                    let repoJSON = try JSONDecoder().decode(RepoJSON.self, from: data)
                     var themes = repoJSON.themes
                     for i in 0..<themes.count { themes[i].baseURL = baseURL }
                     
-                    let iconURL: URL?
+                    var iconURL: URL?
                     if let icon = repoJSON.icon {
-                        // Nếu icon là link tuyệt đối thì dùng luôn, nếu là path thì ghép với baseURL
-                        if icon.hasPrefix("http") {
-                            iconURL = URL(string: icon)
-                        } else {
-                            iconURL = URL(string: baseURL + icon)
-                        }
-                    } else {
-                        iconURL = nil
+                        iconURL = icon.hasPrefix("http") ? URL(string: icon) : URL(string: baseURL + icon)
                     }
                     
-                    let repoName = repoJSON.name ?? getRepoNameFromURL(repoURL)
-                    fetchedRepos.append(ThemeRepo(url: repoURLString, name: repoName, iconURL: iconURL, themes: themes))
+                    let finalName = repoJSON.name ?? repoName
+                    fetchedRepos.append(ThemeRepo(url: repoURLString, name: finalName, iconURL: iconURL, themes: themes))
                 } 
-                // Thử decode dạng cũ (array thuần túy)
-                else if var themes = try? JSONDecoder().decode([RemoteTheme].self, from: data) {
-                    for i in 0..<themes.count { themes[i].baseURL = baseURL }
-                    let repoName = getRepoNameFromURL(repoURL)
-                    fetchedRepos.append(ThemeRepo(url: repoURLString, name: repoName, iconURL: nil, themes: themes))
-                } 
-                else {
-                    print("Cannot decode repo: \(repoURLString)")
+                // Thử decode dạng cũ (Array thuần túy)
+                catch {
+                    do {
+                        var themes = try JSONDecoder().decode([RemoteTheme].self, from: data)
+                        for i in 0..<themes.count { themes[i].baseURL = baseURL }
+                        fetchedRepos.append(ThemeRepo(url: repoURLString, name: repoName, iconURL: nil, themes: themes))
+                    } catch {
+                        // Nếu cả 2 dạng đều lỗi -> JSON sai cú pháp
+                        errorLogs.append("Lỗi JSON ở \(repoName):\n\(error.localizedDescription)")
+                    }
                 }
             } catch {
-                print("Failed to load repo \(repoURLString): \(error)")
+                errorLogs.append("Lỗi kết nối \(repoURLString):\n\(error.localizedDescription)")
             }
         }
         
-        if fetchedRepos.isEmpty {
-            self.errorMessage = "Không thể tải theme. Vui lòng kiểm tra lại URL hoặc mạng."
+        if fetchedRepos.isEmpty && !errorLogs.isEmpty {
+            self.errorMessage = errorLogs.joined(separator: "\n\n")
         } else {
             self.repos = fetchedRepos
+            if !errorLogs.isEmpty {
+                self.errorMessage = errorLogs.joined(separator: "\n\n")
+            }
         }
         isLoading = false
     }
     
-    // Hàm lấy tên Repo (bỏ tên user)
     private func getRepoNameFromURL(_ url: URL) -> String {
         let components = url.pathComponents.filter { $0 != "/" }
-        // URL: https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde-Repository/main/themes.json
-        // components: ["nguyenls3005-cell", "EnsWilde-Repository", "main", "themes.json"]
-        // Lấy phần tử index 1 là tên Repo
         if components.count >= 2 {
             return components[1].replacingOccurrences(of: "-", with: " ")
         }
@@ -135,5 +135,9 @@ class ThemeStoreManager: ObservableObject {
         var reposList = savedRepos.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         reposList.removeAll { $0 == url }
         savedRepos = reposList.joined(separator: ",")
+    }
+    
+    func clearError() {
+        self.errorMessage = nil
     }
 }
