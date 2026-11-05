@@ -1,6 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
-
+import ZIPFoundation
 // MARK: - Theme Row View
 struct ThemeRowView: View {
     let theme: PasscodeTheme
@@ -214,13 +214,12 @@ struct ImportThemeSheet: View {
             }
             .fileImporter(
                 isPresented: $showFilePicker,
-                allowedContentTypes: [.item, .zip], // SỬA LỖI: Dùng .item để không bị treo trên iOS
+                allowedContentTypes: [.item, .zip],
                 allowsMultipleSelection: false
             ) { result in
                 switch result {
                 case .success(let urls):
                     if let url = urls.first {
-                        // Copy file sang thư mục tạm để giữ quyền truy cập
                         let accessing = url.startAccessingSecurityScopedResource()
                         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
                         
