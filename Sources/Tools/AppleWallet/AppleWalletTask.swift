@@ -2,7 +2,6 @@ import Foundation
 import AirliftFFI
 import Network
 
-// Class dùng để gửi context qua C function pointer
 class LogCallbackContext {
     let onLogUpdate: (String) -> Void
     init(onLogUpdate: @escaping (String) -> Void) {
@@ -22,16 +21,13 @@ enum AppleWalletTask {
         }
         
         onLogUpdate("Đang dò tunnel IP...")
-        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else {
-            throw ToolTaskError.generic("Không tìm thấy RSD tunnel.")
-        }
+        _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate)
         
         let tempFolderName = "AirLiftWallet_\(UUID().uuidString)"
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(tempFolderName)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         
-        // Tạo cấu trúc thư mục cho Wallet
         for card in enabledCards {
             let cardBasePath = tempDir.appendingPathComponent("Passes/Cards").appendingPathComponent(card.id)
             try FileManager.default.createDirectory(at: cardBasePath.appendingPathExtension("pkpass"), withIntermediateDirectories: true)
@@ -48,7 +44,6 @@ enum AppleWalletTask {
         let srcDir = tempDir.appendingPathComponent("Passes/Cards").path
         let targetParentDir = "/var/mobile/Library/Passes"
         
-        // Chuẩn bị context cho C function pointer
         let logCtx = LogCallbackContext { line in
             onLogUpdate("[Airlift] \(line)")
         }
@@ -58,7 +53,6 @@ enum AppleWalletTask {
             DispatchQueue.global(qos: .userInitiated).async {
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
                 
-                // Callback không capture context, chỉ dùng ctxPtr
                 let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { ctx, msgPtr in
                     guard let ctx = ctx, let msgPtr = msgPtr else { return }
                     let line = String(cString: msgPtr)
