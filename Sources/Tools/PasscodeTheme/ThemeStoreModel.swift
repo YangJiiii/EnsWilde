@@ -1,7 +1,7 @@
 import Foundation
 
 // MARK: - Định dạng Theme chung (Map từ cả JSON cũ và mới)
-struct RemoteTheme: Identifiable, Codable {
+struct RemoteTheme: Identifiable, Decodable {
     var id: String { url }
     let name: String
     let description: String?
@@ -44,7 +44,7 @@ struct RemoteTheme: Identifiable, Codable {
 }
 
 // MARK: - Định dạng Repo chung
-struct RepoJSON: Codable {
+struct RepoJSON: Decodable {
     let name: String?
     let description: String?
     let icon: String?
