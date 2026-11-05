@@ -3,7 +3,6 @@ import PhotosUI
 import UniformTypeIdentifiers
 import ZIPFoundation
 
-// MARK: - Safe Syslog State
 private let _walletSyslogLock = NSLock()
 private var _walletSyslogActive = false
 
@@ -85,7 +84,6 @@ struct AppleWalletView: View {
     }
 }
 
-// MARK: - ScanCardIDSheet
 struct ScanCardIDSheet: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var walletStore: AppleWalletStore
@@ -140,9 +138,9 @@ struct ScanCardIDSheet: View {
     private func startScanning() {
         guard !isScanning else { return }
         
-        // FIX CRASH: Bắt buộc phải có VPN thì hàm startSyslogRelay mới không bị crash app
+        // FIX CRASH: Bắt buộc phải có VPN
         guard NetworkStatus.isVPNTunnelPresent() else {
-            scanStatus = "VPN chưa bật. Vui lòng bật VPN (SideStore/StikDebug) để quét."
+            scanStatus = "VPN chưa bật. Vui lòng bật VPN để quét."
             return
         }
         
@@ -200,7 +198,6 @@ struct ScanCardIDSheet: View {
     }
 }
 
-// MARK: - Safe Scan Logic
 private final class ScanContinuationBox: @unchecked Sendable {
     private var continuation: CheckedContinuation<String, Error>?
     private let lock = NSLock()
