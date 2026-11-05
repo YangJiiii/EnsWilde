@@ -3,9 +3,11 @@ import SwiftUI
 struct ThemeStoreView: View {
     @ObservedObject var themeStore: PasscodeThemeStore
     @StateObject private var storeManager = ThemeStoreManager()
-    @State private var selectedRemoteTheme: RemoteTheme?
     
     @StateObject private var viewModel: PasscodeThemeViewModel
+    
+    @State private var showAddRepo = false
+    @State private var newRepoURL = ""
     
     init(themeStore: PasscodeThemeStore) {
         self.themeStore = themeStore
@@ -15,7 +17,7 @@ struct ThemeStoreView: View {
     var body: some View {
         Group {
             if storeManager.isLoading {
-                ProgressView("Loading themes...")
+                ProgressView("Loading Repos...")
             } else if let error = storeManager.errorMessage {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -29,25 +31,30 @@ struct ThemeStoreView: View {
                     }
                 }
                 .padding()
-            } else if storeManager.themes.isEmpty {
-                ContentUnavailableView("No Themes", systemImage: "paintpalette", description: Text("No themes found in the store."))
+            } else if storeManager.repos.isEmpty {
+                ContentUnavailableView("No Repositories", systemImage: "folder.badge.plus", description: Text("Add a repository by clicking the + button."))
             } else {
-                List(storeManager.themes) { theme in
-                    Button {
-                        selectedRemoteTheme = theme
-                    } label: {
-                        HStack(spacing: 12) {
-                            AsyncImage(url: theme.fullPreviewURL) { image in
-                                image.resizable().aspectRatio(contentMode: .fill)
-                            } placeholder: {
-                                Color.gray.opacity(0.3)
-                            }
-                            .frame(width: 60, height: 60)
-                            .cornerRadius(8)
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(theme.name).font(.headline)
-                                Text(theme.authors).font(.caption).foregroundStyle(.secondary)
+                List {
+                    // Hiển thị từng Repo thành 1 Section
+                    ForEach(storeManager.repos) { repo in
+                        Section(header: Text(repo.name).font(.headline)) {
+                            ForEach(repo.themes) { theme in
+                                NavigationLink(destination: RemoteThemeDownloadView(remoteTheme: theme, themeStore: themeStore, viewModel: viewModel)) {
+                                    HStack(spacing: 12) {
+                                        AsyncImage(url: theme.fullPreviewURL) { image in
+                                            image.resizable().aspectRatio(contentMode: .fill)
+                                        } placeholder: {
+                                            Color.gray.opacity(0.3)
+                                        }
+                                        .frame(width: 60, height: 60)
+                                        .cornerRadius(8)
+                                        
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(theme.name).font(.headline)
+                                            Text(theme.authors).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -55,13 +62,33 @@ struct ThemeStoreView: View {
             }
         }
         .navigationTitle("Theme Store")
-        .task {
-            if storeManager.themes.isEmpty {
-                await storeManager.fetchThemes()
+        .toolbar {
+            // Nút + góc trên bên phải
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showAddRepo = true
+                } label: {
+                    Image(systemName: "plus")
+                }
             }
         }
-        .sheet(item: $selectedRemoteTheme) { remoteTheme in
-            RemoteThemeDownloadView(remoteTheme: remoteTheme, themeStore: themeStore, viewModel: viewModel)
+        .alert("Add Repository", isPresented: $showAddRepo) {
+            TextField("https://.../themes.json", text: $newRepoURL)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+            Button("Cancel", role: .cancel) { newRepoURL = "" }
+            Button("Add") {
+                storeManager.addRepo(url: newRepoURL)
+                newRepoURL = ""
+                Task { await storeManager.fetchThemes() }
+            }
+        } message: {
+            Text("Nhập URL trực tiếp đến file JSON chứa danh sách theme.")
+        }
+        .task {
+            if storeManager.repos.isEmpty {
+                await storeManager.fetchThemes()
+            }
         }
     }
 }
@@ -76,43 +103,36 @@ struct RemoteThemeDownloadView: View {
     @State private var errorMessage: String?
     
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                AsyncImage(url: remoteTheme.fullPreviewURL) { image in
-                    image.resizable().aspectRatio(contentMode: .fit)
-                } placeholder: {
-                    ProgressView()
-                }
-                .frame(height: 200)
-                .cornerRadius(12)
-                
-                Text(remoteTheme.name).font(.title2.bold())
-                Text(remoteTheme.description ?? "").foregroundStyle(.secondary)
-                
-                if let errorMessage = errorMessage {
-                    Text(errorMessage).foregroundStyle(.red)
-                }
-                
-                if isDownloading {
-                    ProgressView("Downloading and Importing...")
-                } else {
-                    Button("Download & Import Theme") {
-                        Task {
-                            await downloadAndImport()
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
+        VStack(spacing: 20) {
+            AsyncImage(url: remoteTheme.fullPreviewURL) { image in
+                image.resizable().aspectRatio(contentMode: .fit)
+            } placeholder: {
+                ProgressView()
             }
-            .padding()
-            .navigationTitle("Theme Details")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+            .frame(height: 200)
+            .cornerRadius(12)
+            
+            Text(remoteTheme.name).font(.title2.bold())
+            Text(remoteTheme.description ?? "").foregroundStyle(.secondary)
+            
+            if let errorMessage = errorMessage {
+                Text(errorMessage).foregroundStyle(.red)
+            }
+            
+            if isDownloading {
+                ProgressView("Downloading and Importing...")
+            } else {
+                Button("Download & Import Theme") {
+                    Task {
+                        await downloadAndImport()
+                    }
                 }
+                .buttonStyle(.borderedProminent)
             }
         }
+        .padding()
+        .navigationTitle("Theme Details")
+        .navigationBarTitleDisplayMode(.inline)
     }
     
     private func downloadAndImport() async {
