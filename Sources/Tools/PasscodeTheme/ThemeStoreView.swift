@@ -17,12 +17,6 @@ struct ThemeStoreView: View {
         Group {
             if storeManager.isLoading {
                 ProgressView("Loading...")
-            } else if let error = storeManager.errorMessage {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.largeTitle).foregroundStyle(.red)
-                    Text(error).multilineTextAlignment(.center).foregroundStyle(.secondary)
-                    Button("Thử lại") { Task { await storeManager.fetchThemes() } }
-                }.padding()
             } else if storeManager.repos.isEmpty {
                 ContentUnavailableView("Trống", systemImage: "tray", description: Text("Ấn nút + để thêm Repo."))
             } else {
@@ -30,7 +24,6 @@ struct ThemeStoreView: View {
                     ForEach(storeManager.repos) { repo in
                         NavigationLink(destination: RepoDetailView(repo: repo, themeStore: themeStore, viewModel: viewModel)) {
                             HStack(spacing: 12) {
-                                // Hiển thị Icon nếu có
                                 if let iconURL = repo.iconURL {
                                     AsyncImage(url: iconURL) { image in
                                         image.resizable().aspectRatio(contentMode: .fill)
@@ -52,7 +45,6 @@ struct ThemeStoreView: View {
                             }
                             .padding(.vertical, 4)
                         }
-                        // THÊM CONTEXT MENU NHẤN GIỮ
                         .contextMenu {
                             Button {
                                 UIPasteboard.general.string = repo.url
@@ -83,6 +75,7 @@ struct ThemeStoreView: View {
                 Button { showAddRepo = true } label: { Image(systemName: "plus") }
             }
         }
+        // ALERT THÊM REPO
         .alert("Thêm Repo", isPresented: $showAddRepo) {
             TextField("https://.../themes.json", text: $newRepoURL).textInputAutocapitalization(.never).keyboardType(.URL)
             Button("Huỷ", role: .cancel) { newRepoURL = "" }
@@ -92,12 +85,32 @@ struct ThemeStoreView: View {
                 Task { await storeManager.fetchThemes() }
             }
         }
+        // ALERT BÁO LỖI JSON (Nếu có)
+        .alert("Lỗi", isPresented: Binding(
+            get: { storeManager.errorMessage != nil && !storeManager.repos.isEmpty },
+            set: { if !$0 { storeManager.clearError() } }
+        )) {
+            Button("Đã hiểu", role: .cancel) { storeManager.clearError() }
+        } message: {
+            Text(storeManager.errorMessage ?? "")
+        }
+        // NẾU TẤT CẢ REPO ĐỀU LỖI THÌ HIỆN MÀN HÌNH LỖI
+        .overlay {
+            if let error = storeManager.errorMessage, storeManager.repos.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.largeTitle).foregroundStyle(.red)
+                    Text(error).multilineTextAlignment(.center).foregroundStyle(.secondary).padding()
+                    Button("Thử lại") { Task { await storeManager.fetchThemes() } }
+                }
+            }
+        }
         .task {
             if storeManager.repos.isEmpty { await storeManager.fetchThemes() }
         }
     }
 }
 
+// (RepoDetailView và RemoteThemeDownloadView giữ nguyên như cũ)
 struct RepoDetailView: View {
     let repo: ThemeRepo
     @ObservedObject var themeStore: PasscodeThemeStore
