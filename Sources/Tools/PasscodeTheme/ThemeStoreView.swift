@@ -30,14 +30,48 @@ struct ThemeStoreView: View {
                     ForEach(storeManager.repos) { repo in
                         NavigationLink(destination: RepoDetailView(repo: repo, themeStore: themeStore, viewModel: viewModel)) {
                             HStack(spacing: 12) {
-                                Text(String(repo.name.prefix(1)).uppercased())
-                                    .font(.title3.bold())
-                                    .foregroundColor(.orange)
+                                // Hiển thị Icon nếu có
+                                if let iconURL = repo.iconURL {
+                                    AsyncImage(url: iconURL) { image in
+                                        image.resizable().aspectRatio(contentMode: .fill)
+                                    } placeholder: {
+                                        ProgressView()
+                                    }
                                     .frame(width: 40, height: 40)
-                                    .background(Color.orange.opacity(0.15))
                                     .cornerRadius(8)
+                                } else {
+                                    Text(String(repo.name.prefix(1)).uppercased())
+                                        .font(.title3.bold())
+                                        .foregroundColor(.orange)
+                                        .frame(width: 40, height: 40)
+                                        .background(Color.orange.opacity(0.15))
+                                        .cornerRadius(8)
+                                }
+                                
                                 Text(repo.name).font(.headline)
-                            }.padding(.vertical, 4)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        // THÊM CONTEXT MENU NHẤN GIỮ
+                        .contextMenu {
+                            Button {
+                                UIPasteboard.general.string = repo.url
+                            } label: {
+                                Label("Copy Link Raw", systemImage: "doc.on.doc")
+                            }
+                            
+                            Button {
+                                Task { await storeManager.fetchThemes() }
+                            } label: {
+                                Label("Làm mới nguồn", systemImage: "arrow.clockwise")
+                            }
+                            
+                            Button(role: .destructive) {
+                                storeManager.removeRepo(url: repo.url)
+                                Task { await storeManager.fetchThemes() }
+                            } label: {
+                                Label("Xoá nguồn", systemImage: "trash")
+                            }
                         }
                     }
                 }
@@ -68,8 +102,6 @@ struct RepoDetailView: View {
     let repo: ThemeRepo
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var viewModel: PasscodeThemeViewModel
-    @Environment(\.dismiss) var dismiss
-    @StateObject private var storeManager = ThemeStoreManager()
 
     var body: some View {
         List {
@@ -88,13 +120,8 @@ struct RepoDetailView: View {
                     }
                 }
             }
-            Section {
-                Button("Xóa Repo này", role: .destructive) {
-                    storeManager.removeRepo(url: repo.url)
-                    dismiss()
-                }
-            }
-        }.navigationTitle(repo.name)
+        }
+        .navigationTitle(repo.name)
     }
 }
 
