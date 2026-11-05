@@ -16,7 +16,7 @@ private func startWalletSyslogOnce(
     if !already { _walletSyslogActive = true }
     _walletSyslogLock.unlock()
     if already { return false }
-    try JITEnableContext.shared.startSyslogRelay(handler, onError: onError)
+    try JITEnableContext.shared.startSyslogRelay(handler: handler, onError: onError)
     return true
 }
 
