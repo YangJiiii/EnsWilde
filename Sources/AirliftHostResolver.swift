@@ -1,130 +1,64 @@
 import Foundation
-import Network
-import AirliftFFI
-
-private var airliftLogSink: ((String) -> Void)?
-
-private let airliftLogCallback: ALLogCallback = { (ctx, msg) in
-    guard let msg = msg else { return }
-    let line = String(cString: msg)
-    airliftLogSink?(line)
-}
 
 enum AirliftHostResolver {
-    
-    static func candidates() -> [String] {
-        var out: [String] = []
+    static func bestAvailable(log: (String) -> Void) async -> String? {
+        log("Đang quét interface mạng để tìm RSD Tunnel...")
         
-        if let override = UserDefaults.standard.string(forKey: "TunnelDeviceIP"),
-           !override.isEmpty,
-           override != "127.0.0.1",
-           !out.contains(override) {
-            out.append(override)
-        }
+        var ipv4Candidate: String?
+        var ipv6Candidate: String?
         
-        if let detected = detectFromInterfaces(), !out.contains(detected) {
-            out.append(detected)
-        }
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0 else { return nil }
+        defer { freeifaddrs(ifaddr) }
         
-        for ip in ["10.7.0.1", "10.7.0.2", "10.7.0.3", "198.18.0.1"] where !out.contains(ip) {
-            out.append(ip)
-        }
-        
-        return out
-    }
-    
-    static func detectFromInterfaces() -> String? {
-        var addrs: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&addrs) == 0, let first = addrs else { return nil }
-        defer { freeifaddrs(addrs) }
-        
-        var ptr: UnsafeMutablePointer<ifaddrs>? = first
-        while let cur = ptr {
-            defer { ptr = cur.pointee.ifa_next }
-            guard let addr = cur.pointee.ifa_addr,
-                  addr.pointee.sa_family == UInt8(AF_INET) else { continue }
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            getnameinfo(addr, socklen_t(addr.pointee.sa_len),
-                        &host, socklen_t(host.count),
-                        nil, 0, NI_NUMERICHOST)
-            let ip = String(cString: host)
-            if ip.hasPrefix("10.7.0.") || ip.hasPrefix("198.18.0.") {
-                return ip
-            }
-        }
-        return nil
-    }
-    
-    static func bestAvailable(log: @escaping (String) -> Void) async -> String? {
-        airliftLogSink = log
-        al_log_init(airliftLogCallback, nil)
-        
-        let hosts = candidates()
-        log("[Airlift] Probing hosts: \(hosts.joined(separator: ", "))")
-        
-        for host in hosts where host != "127.0.0.1" {
-            let ok = await canConnect(host: host, port: 49152, timeout: 1.2)
-            if ok {
-                _ = al_set_target_host(host)
-                log("[Airlift] Selected: \(host)")
-                return host
-            }
-            log("[Airlift] \(host) unreachable")
-        }
-        return nil
-    }
-    
-    private static func canConnect(host: String, port: UInt16, timeout: TimeInterval) async -> Bool {
-        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var addr = sockaddr_in()
-                addr.sin_family = sa_family_t(AF_INET)
-                addr.sin_port = port.bigEndian
-                guard inet_pton(AF_INET, host, &addr.sin_addr) == 1 else {
-                    cont.resume(returning: false)
-                    return
-                }
+        var ptr = ifaddr
+        while ptr != nil {
+            defer { ptr = ptr?.pointee.ifa_next }
+            guard let interface = ptr?.pointee else { continue }
+            
+            let family = interface.ifa_addr.pointee.sa_family
+            let name = String(cString: interface.ifa_name)
+            
+            // Tìm interface VPN (utun)
+            if name.hasPrefix("utun") {
+                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                 
-                let fd = socket(AF_INET, SOCK_STREAM, 0)
-                guard fd >= 0 else {
-                    cont.resume(returning: false)
-                    return
-                }
-                defer { close(fd) }
-                
-                let flags = fcntl(fd, F_GETFL, 0)
-                _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
-                
-                let rc = withUnsafePointer(to: &addr) {
-                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                        Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                // Check IPv4
+                if family == UInt8(AF_INET) {
+                    getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
+                                &hostname, socklen_t(hostname.count),
+                                nil, socklen_t(0), NI_NUMERICHOST)
+                    let ip = String(cString: hostname)
+                    if ip.hasPrefix("10.") || ip.hasPrefix("192.168.") || ip.hasPrefix("172.") {
+                        ipv4Candidate = ip
                     }
                 }
-                
-                if rc == 0 {
-                    cont.resume(returning: true)
-                    return
+                // Check IPv6
+                else if family == UInt8(AF_INET6) {
+                    getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
+                                &hostname, socklen_t(hostname.count),
+                                nil, socklen_t(0), NI_NUMERICHOST)
+                    let ip = String(cString: hostname)
+                    // Địa chỉ IPv6 nội bộ của tunnel thường có dạng fd00:: hoặc fe80::
+                    if ip.hasPrefix("fd") || ip.hasPrefix("fe80") {
+                        ipv6Candidate = ip
+                    }
                 }
-                
-                if errno != EINPROGRESS {
-                    cont.resume(returning: false)
-                    return
-                }
-                
-                var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                let timeoutMs = Int32(timeout * 1000)
-                let pollResult = poll(&pfd, 1, timeoutMs)
-                
-                if pollResult <= 0 {
-                    cont.resume(returning: false)
-                    return
-                }
-                
-                var soError: Int32 = 0
-                var len = socklen_t(MemoryLayout<Int32>.size)
-                getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &len)
-                cont.resume(returning: soError == 0)
             }
         }
+        
+        // Ưu tiên IPv6 (iOS 17+ thường dùng cái này cho RSD)
+        if let v6 = ipv6Candidate {
+            log("✅ Tìm thấy Tunnel (IPv6): \(v6)")
+            return v6
+        }
+        if let v4 = ipv4Candidate {
+            log("✅ Tìm thấy Tunnel (IPv4): \(v4)")
+            return v4
+        }
+        
+        // Nếu không tìm thấy, fallback về IP mặc định của StikDebug/SideStore
+        log("⚠️ Không tìm thấy interface utun. Thử dùng IP mặc định 10.7.0.1...")
+        return "10.7.0.1"
     }
 }
