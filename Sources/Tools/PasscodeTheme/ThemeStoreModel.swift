@@ -1,5 +1,6 @@
 import Foundation
 
+// MARK: - Remote Theme Model (Fix Decode)
 struct RemoteTheme: Identifiable, Codable {
     var id: String { url }
     let name: String
@@ -48,8 +49,15 @@ class ThemeStoreManager: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    // Mặc định có sẵn 1 link của SerStars
-    @AppStorage("SavedThemeRepos") var savedRepos: String = "https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/refs/heads/main/wallpapers-passthemes.json"
+    // SỬA LỖI: Thay @AppStorage bằng UserDefaults
+    var savedRepos: String {
+        get {
+            UserDefaults.standard.string(forKey: "SavedThemeRepos") ?? "https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/refs/heads/main/wallpapers-passthemes.json"
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "SavedThemeRepos")
+        }
+    }
 
     func fetchThemes() async {
         isLoading = true
