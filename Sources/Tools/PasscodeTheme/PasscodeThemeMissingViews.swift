@@ -143,11 +143,26 @@ struct ImportThemeSheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .fileImporter(
                 isPresented: $showPicker,
-                allowedContentTypes: [UTType(filenameExtension: "zip") ?? .data, .data]
+                allowedContentTypes: [UTType.passthm, UTType(filenameExtension: "zip") ?? .data, .data]
             ) { result in
                 switch result {
-                case .success(let url): selectedFile = url
-                case .failure(let err): errorMessage = err.localizedDescription
+                case .success(let url):
+                    // FIX: Copy file sang thư mục an toàn NGAY LẬP TỨC để không bị iOS thu hồi quyền
+                    let accessing = url.startAccessingSecurityScopedResource()
+                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                    do {
+                        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+                        try? FileManager.default.removeItem(at: localURL)
+                        try FileManager.default.copyItem(at: url, to: localURL)
+                        selectedFile = localURL
+                        if themeName.isEmpty {
+                            themeName = url.deletingPathExtension().lastPathComponent
+                        }
+                    } catch {
+                        errorMessage = "Không thể đọc file: \(error.localizedDescription)"
+                    }
+                case .failure(let err):
+                    errorMessage = err.localizedDescription
                 }
             }
         }
@@ -194,11 +209,13 @@ struct ImportDefaultPasscodeSheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .fileImporter(
                 isPresented: $showPicker,
-                allowedContentTypes: [UTType(filenameExtension: "zip") ?? .data, .data]
+                allowedContentTypes: [UTType.passthm, UTType(filenameExtension: "zip") ?? .data, .data]
             ) { result in
                 switch result {
-                case .success(let url): Task { await doImport(url) }
-                case .failure(let err): errorMessage = err.localizedDescription
+                case .success(let url):
+                    Task { await doImport(url) }
+                case .failure(let err):
+                    errorMessage = err.localizedDescription
                 }
             }
         }
@@ -207,8 +224,16 @@ struct ImportDefaultPasscodeSheet: View {
     private func doImport(_ url: URL) async {
         isImporting = true; errorMessage = nil
         defer { isImporting = false }
+        
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        
         do {
-            try await viewModel.importTheme(from: url, name: "Default \(Int(Date().timeIntervalSince1970))")
+            let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+            try? FileManager.default.removeItem(at: localURL)
+            try FileManager.default.copyItem(at: url, to: localURL)
+            
+            try await viewModel.importTheme(from: localURL, name: "Default \(Int(Date().timeIntervalSince1970))")
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
