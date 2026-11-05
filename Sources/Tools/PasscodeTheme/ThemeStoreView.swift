@@ -124,8 +124,13 @@ struct RemoteThemeDownloadView: View {
                 throw PasscodeThemeError.invalidFormat
             }
             
-            let (tempURL, _) = try await URLSession.shared.download(from: url)
-            try await viewModel.importTheme(from: tempURL, name: remoteTheme.name)
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).zip")
+            try data.write(to: tempFileURL)
+            
+            try await viewModel.importTheme(from: tempFileURL, name: remoteTheme.name)
+            
+            try? FileManager.default.removeItem(at: tempFileURL)
             dismiss()
             
         } catch {
