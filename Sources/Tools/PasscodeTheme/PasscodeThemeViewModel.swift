@@ -20,7 +20,6 @@ class PasscodeThemeViewModel: ObservableObject {
         isProcessing = true
         defer { isProcessing = false }
         
-        // FIX: Đưa toàn bộ tác vụ đọc/ghi/giải nén file nặng sang Background để không treo UI
         let result = try await Task.detached(priority: .userInitiated) { () -> (PasscodeTheme, PasscodeTheme.DetectedSize) in
             let accessing = sourceURL.startAccessingSecurityScopedResource()
             defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
@@ -128,13 +127,6 @@ class PasscodeThemeViewModel: ObservableObject {
         let processedFiles = try processThemeFiles(theme: theme, globalPrefix: globalPrefix)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
         
-        onLogUpdate("--- Danh sách file chuẩn bị ghi ---")
-        for file in processedFiles {
-            let size = UIImage(data: file.processedData)?.size ?? .zero
-            onLogUpdate("Target: \(file.targetFilename) - Size: \(Int(size.width))x\(Int(size.height))")
-        }
-        onLogUpdate("-----------------------------------")
-        
         guard NetworkStatus.isVPNTunnelPresent() else {
             throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
         }
@@ -168,14 +160,11 @@ class PasscodeThemeViewModel: ObservableObject {
             } catch {
                 onLogUpdate("⚠️ Warning: Could not clear cache completely. \(error.localizedDescription)")
             }
-        } else {
-            onLogUpdate("⚠️ Warning: Could not grant BadQuery access to clear cache.")
         }
         
         onLogUpdate("Đang dò tunnel IP...")
-        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else {
-            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."])
-        }
+        // Sử dụng hàm dò IP mới, không bao giờ trả về nil
+        _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate)
         
         onLogUpdate("Đang ghi qua AirTraffic...")
         let pairingPath = pairingURL.path
