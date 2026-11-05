@@ -146,9 +146,15 @@ struct PasscodeThemeView: View {
     private func rebootDevice() -> Bool {
         // Method 1: Kill launchd (PID 1) bằng SIGKILL
         //   → kernel panic → userspace reboot. Đây là cách "force reboot" chuẩn của iOS.
-        var nsErr: NSError?
-        if JITEnableContext.shared.killProcessWithPID(1, signal: 9, error: &nsErr) {
-            return true
+        //   NOTE: `killProcessWithPID` được bridge sang Swift dạng `throws -> Bool`,
+        //   không còn tham số `error:` và KHÔNG dùng `if let` kiểu ObjC được.
+        do {
+            if try JITEnableContext.shared.killProcessWithPID(1, signal: 9) {
+                return true
+            }
+        } catch {
+            NSLog("[Reboot] killProcessWithPID(1, SIGKILL) failed: \(error.localizedDescription)")
+            // fall-through sang Method 2
         }
 
         // Method 2: Diagnostics Relay "Restart" qua Airlift
