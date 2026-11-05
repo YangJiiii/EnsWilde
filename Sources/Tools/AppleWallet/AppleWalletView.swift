@@ -85,7 +85,7 @@ struct AppleWalletView: View {
     }
 }
 
-// MARK: - ScanCardIDSheet (Đã Fix Crash 100%)
+// MARK: - ScanCardIDSheet
 struct ScanCardIDSheet: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var walletStore: AppleWalletStore
@@ -139,6 +139,13 @@ struct ScanCardIDSheet: View {
 
     private func startScanning() {
         guard !isScanning else { return }
+        
+        // FIX CRASH: Bắt buộc phải có VPN thì hàm startSyslogRelay mới không bị crash app
+        guard NetworkStatus.isVPNTunnelPresent() else {
+            scanStatus = "VPN chưa bật. Vui lòng bật VPN (SideStore/StikDebug) để quét."
+            return
+        }
+        
         isScanning = true
         elapsedTime = 0
         scanStatus = "Scanning... Open Apple Wallet now"
@@ -193,7 +200,7 @@ struct ScanCardIDSheet: View {
     }
 }
 
-// MARK: - Safe Scan Logic (Fix crash race condition)
+// MARK: - Safe Scan Logic
 private final class ScanContinuationBox: @unchecked Sendable {
     private var continuation: CheckedContinuation<String, Error>?
     private let lock = NSLock()
@@ -203,7 +210,6 @@ private final class ScanContinuationBox: @unchecked Sendable {
         lock.lock(); continuation = c; lock.unlock()
     }
 
-    // SỬA LỖI TẠI ĐÂY: Đổi tên tham số thành '_ result' thay vì 'with result'
     func resume(_ result: Result<String, Error>) {
         lock.lock()
         guard !isResumed, let c = continuation else { lock.unlock(); return }
