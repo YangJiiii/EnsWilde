@@ -1,6 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import ZIPFoundation // Cần thiết để đọc file ZIP
+import ZIPFoundation
 
 // MARK: - Theme Row View
 struct ThemeRowView: View {
@@ -213,28 +213,19 @@ struct ImportThemeSheet: View {
                     .disabled(themeName.isEmpty || selectedFileURL == nil || isImporting)
                 }
             }
-            .fileImporter(
-                isPresented: $showFilePicker,
-                allowedContentTypes: [.item, .data, .zip], // SỬA LỖI: Cho phép chọn mọi file
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    if let url = urls.first {
-                        let accessing = url.startAccessingSecurityScopedResource()
-                        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                        
-                        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-                        try? FileManager.default.removeItem(at: tempURL)
-                        try? FileManager.default.copyItem(at: url, to: tempURL)
-                        
-                        selectedFileURL = tempURL
-                        if themeName.isEmpty {
-                            themeName = url.deletingPathExtension().lastPathComponent
-                        }
+            .sheet(isPresented: $showFilePicker) {
+                FileImporterView(isPresented: $showFilePicker, allowedTypes: [.item, .data, .zip]) { url in
+                    let accessing = url.startAccessingSecurityScopedResource()
+                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                    
+                    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+                    try? FileManager.default.removeItem(at: tempURL)
+                    try? FileManager.default.copyItem(at: url, to: tempURL)
+                    
+                    selectedFileURL = tempURL
+                    if themeName.isEmpty {
+                        themeName = url.deletingPathExtension().lastPathComponent
                     }
-                case .failure(let error):
-                    errorMessage = error.localizedDescription
                 }
             }
             .alert(L("alert_error"), isPresented: .constant(errorMessage != nil)) {
@@ -310,29 +301,20 @@ struct ImportDefaultPasscodeSheet: View {
                     .disabled(themeName.isEmpty || selectedFileURL == nil || isImporting)
                 }
             }
-            .fileImporter(
-                isPresented: $showFilePicker,
-                allowedContentTypes: [.item, .data, .zip], // SỬA LỖI: Cho phép chọn mọi file
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    if let url = urls.first {
-                        let accessing = url.startAccessingSecurityScopedResource()
-                        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                        
-                        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-                        try? FileManager.default.removeItem(at: tempURL)
-                        try? FileManager.default.copyItem(at: url, to: tempURL)
-                        
-                        selectedFileURL = tempURL
-                        if themeName.isEmpty {
-                            themeName = url.deletingPathExtension().lastPathComponent
-                        }
-                        previewZIPContents(url: tempURL)
+            .sheet(isPresented: $showFilePicker) {
+                FileImporterView(isPresented: $showFilePicker, allowedTypes: [.item, .data, .zip]) { url in
+                    let accessing = url.startAccessingSecurityScopedResource()
+                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                    
+                    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+                    try? FileManager.default.removeItem(at: tempURL)
+                    try? FileManager.default.copyItem(at: url, to: tempURL)
+                    
+                    selectedFileURL = tempURL
+                    if themeName.isEmpty {
+                        themeName = url.deletingPathExtension().lastPathComponent
                     }
-                case .failure(let error):
-                    errorMessage = error.localizedDescription
+                    previewZIPContents(url: tempURL)
                 }
             }
             .alert(L("alert_error"), isPresented: .constant(errorMessage != nil)) {
