@@ -24,6 +24,7 @@ struct ThemeStoreView: View {
                     ForEach(storeManager.repos) { repo in
                         NavigationLink(destination: RepoDetailView(repo: repo, themeStore: themeStore, viewModel: viewModel)) {
                             HStack(spacing: 12) {
+                                // Icon hoặc chữ cái đầu (đỏ nếu lỗi)
                                 if let iconURL = repo.iconURL {
                                     AsyncImage(url: iconURL) { image in
                                         image.resizable().aspectRatio(contentMode: .fill)
@@ -35,13 +36,20 @@ struct ThemeStoreView: View {
                                 } else {
                                     Text(String(repo.name.prefix(1)).uppercased())
                                         .font(.title3.bold())
-                                        .foregroundColor(.orange)
+                                        .foregroundColor(repo.errorMessage != nil ? .red : .orange)
                                         .frame(width: 40, height: 40)
-                                        .background(Color.orange.opacity(0.15))
+                                        .background((repo.errorMessage != nil ? Color.red : Color.orange).opacity(0.15))
                                         .cornerRadius(8)
                                 }
                                 
-                                Text(repo.name).font(.headline)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(repo.name).font(.headline)
+                                    if repo.errorMessage != nil {
+                                        Text("Repo lỗi")
+                                            .font(.caption)
+                                            .foregroundStyle(.red)
+                                    }
+                                }
                             }
                             .padding(.vertical, 4)
                         }
@@ -75,7 +83,6 @@ struct ThemeStoreView: View {
                 Button { showAddRepo = true } label: { Image(systemName: "plus") }
             }
         }
-        // ALERT THÊM REPO
         .alert("Thêm Repo", isPresented: $showAddRepo) {
             TextField("https://.../themes.json", text: $newRepoURL).textInputAutocapitalization(.never).keyboardType(.URL)
             Button("Huỷ", role: .cancel) { newRepoURL = "" }
@@ -85,59 +92,73 @@ struct ThemeStoreView: View {
                 Task { await storeManager.fetchThemes() }
             }
         }
-        // ALERT BÁO LỖI JSON (Nếu có)
-        .alert("Lỗi", isPresented: Binding(
-            get: { storeManager.errorMessage != nil && !storeManager.repos.isEmpty },
-            set: { if !$0 { storeManager.clearError() } }
-        )) {
-            Button("Đã hiểu", role: .cancel) { storeManager.clearError() }
-        } message: {
-            Text(storeManager.errorMessage ?? "")
-        }
-        // NẾU TẤT CẢ REPO ĐỀU LỖI THÌ HIỆN MÀN HÌNH LỖI
-        .overlay {
-            if let error = storeManager.errorMessage, storeManager.repos.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.largeTitle).foregroundStyle(.red)
-                    Text(error).multilineTextAlignment(.center).foregroundStyle(.secondary).padding()
-                    Button("Thử lại") { Task { await storeManager.fetchThemes() } }
-                }
-            }
-        }
         .task {
             if storeManager.repos.isEmpty { await storeManager.fetchThemes() }
         }
     }
 }
 
-// (RepoDetailView và RemoteThemeDownloadView giữ nguyên như cũ)
+// MARK: - RepoDetailView (Xử lý hiển thị lỗi khi ấn vào)
 struct RepoDetailView: View {
     let repo: ThemeRepo
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var viewModel: PasscodeThemeViewModel
 
     var body: some View {
-        List {
-            ForEach(repo.themes) { theme in
-                NavigationLink(destination: RemoteThemeDownloadView(remoteTheme: theme, themeStore: themeStore, viewModel: viewModel)) {
-                    HStack(spacing: 12) {
-                        AsyncImage(url: theme.fullPreviewURL) { image in
-                            image.resizable().aspectRatio(contentMode: .fill)
-                        } placeholder: { Color.gray.opacity(0.3) }
-                        .frame(width: 60, height: 60).cornerRadius(8)
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(theme.name).font(.headline)
-                            Text(theme.authors).font(.caption).foregroundStyle(.secondary)
+        Group {
+            // Nếu repo lỗi -> hiện màn hình báo lỗi
+            if let error = repo.errorMessage {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 60))
+                        .foregroundStyle(.red)
+                    
+                    Text("Repo lỗi")
+                        .font(.title2.bold())
+                    
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                    
+                    Text(repo.url)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if repo.themes.isEmpty {
+                ContentUnavailableView("Không có theme", systemImage: "tray", description: Text("Repo này chưa có theme nào."))
+            } else {
+                List {
+                    ForEach(repo.themes) { theme in
+                        NavigationLink(destination: RemoteThemeDownloadView(remoteTheme: theme, themeStore: themeStore, viewModel: viewModel)) {
+                            HStack(spacing: 12) {
+                                AsyncImage(url: theme.fullPreviewURL) { image in
+                                    image.resizable().aspectRatio(contentMode: .fill)
+                                } placeholder: {
+                                    Color.gray.opacity(0.3)
+                                }
+                                .frame(width: 60, height: 60).cornerRadius(8)
+                                
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(theme.name).font(.headline)
+                                    Text(theme.authors).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         }
                     }
                 }
             }
         }
         .navigationTitle(repo.name)
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
+// MARK: - RemoteThemeDownloadView
 struct RemoteThemeDownloadView: View {
     let remoteTheme: RemoteTheme
     @ObservedObject var themeStore: PasscodeThemeStore
