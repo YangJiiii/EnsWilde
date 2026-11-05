@@ -29,10 +29,17 @@ struct ThemeRepo: Identifiable {
     let url: String
     var themes: [RemoteTheme]
     
+    // SỬA LỖI: Tự động nhận diện tên tác giả/repo từ URL GitHub
     var name: String {
-        let components = url.components(separatedBy: "/")
-        if let index = components.firstIndex(of: "main"), index > 0 { return components[index - 1] }
-        return URL(string: url)?.lastPathComponent ?? "Repository"
+        if let urlObj = URL(string: url) {
+            let pathComponents = urlObj.pathComponents.filter { $0 != "/" }
+            // VD: https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/refs/heads/main/...
+            if pathComponents.count >= 2 {
+                return "\(pathComponents[0])/\(pathComponents[1])"
+            }
+            return urlObj.lastPathComponent
+        }
+        return "Repository"
     }
 }
 
@@ -50,7 +57,12 @@ class ThemeStoreManager: ObservableObject {
     func fetchThemes() async {
         isLoading = true; errorMessage = nil; repos = []
         let repoURLs = savedRepos.components(separatedBy: ",").compactMap { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        guard !repoURLs.isEmpty else { errorMessage = "Chưa có Repository nào được thêm."; isLoading = false; return }
+        
+        guard !repoURLs.isEmpty else {
+            errorMessage = "Chưa có Repository nào được thêm."
+            isLoading = false
+            return
+        }
 
         var fetchedRepos: [ThemeRepo] = []
         for repoURLString in repoURLs {
@@ -61,9 +73,16 @@ class ThemeStoreManager: ObservableObject {
                 let baseURL = repoURL.deletingLastPathComponent().absoluteString
                 for i in 0..<fetchedThemes.count { fetchedThemes[i].baseURL = baseURL }
                 fetchedRepos.append(ThemeRepo(url: repoURLString, themes: fetchedThemes))
-            } catch { print("Failed to load repo \(repoURLString): \(error)") }
+            } catch {
+                print("Failed to load repo \(repoURLString): \(error)")
+            }
         }
-        self.repos = fetchedRepos
+        
+        if fetchedRepos.isEmpty {
+            self.errorMessage = "Không thể tải theme từ bất kỳ Repo nào. Vui lòng kiểm tra lại URL hoặc mạng."
+        } else {
+            self.repos = fetchedRepos
+        }
         isLoading = false
     }
     
