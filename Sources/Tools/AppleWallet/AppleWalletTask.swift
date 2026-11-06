@@ -21,7 +21,9 @@ enum AppleWalletTask {
         }
         
         onLogUpdate("Đang dò tunnel IP...")
-        _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate)
+        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else {
+            throw ToolTaskError.generic("Không tìm thấy RSD tunnel.")
+        }
         
         let tempFolderName = "AirLiftWallet_\(UUID().uuidString)"
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(tempFolderName)
