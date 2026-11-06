@@ -1,6 +1,5 @@
 import SwiftUI
 
-// MARK: - Giao diện Danh sách Nguồn
 struct ThemeStoreView: View {
     @ObservedObject var themeStore: PasscodeThemeStore
     @StateObject private var storeManager = ThemeStoreManager()
@@ -25,7 +24,6 @@ struct ThemeStoreView: View {
                     ForEach(storeManager.repos) { repo in
                         NavigationLink(destination: RepoDetailView(repo: repo, themeStore: themeStore, viewModel: viewModel)) {
                             HStack(spacing: 10) {
-                                // Icon nhỏ 32x32
                                 if let iconURL = repo.iconURL {
                                     AsyncImage(url: iconURL) { image in
                                         image.resizable().aspectRatio(contentMode: .fill)
@@ -42,10 +40,7 @@ struct ThemeStoreView: View {
                                         .background((repo.errorMessage != nil ? Color.red : Color.orange).opacity(0.15))
                                         .cornerRadius(8)
                                 }
-                                
-                                // Font Đậm
-                                Text(repo.name)
-                                    .font(.headline.bold())
+                                Text(repo.name).font(.headline.bold())
                             }
                             .padding(.vertical, 4)
                         }
@@ -109,7 +104,6 @@ struct RepoDetailView: View {
                         
                         VStack(alignment: .leading, spacing: 4) {
                             Text(repo.name).font(.headline.bold())
-                            
                             if let error = repo.errorMessage {
                                 HStack(alignment: .top, spacing: 4) {
                                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
@@ -145,7 +139,6 @@ struct RepoDetailView: View {
                                         .frame(width: 32, height: 32)
                                         .background(Color.orange.opacity(0.15))
                                         .cornerRadius(8)
-                                    
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(tag.name).font(.body).bold()
                                         Text("\(tag.count) gói").font(.caption).foregroundStyle(.secondary)
@@ -188,7 +181,6 @@ struct PackageListView: View {
                         image.resizable().aspectRatio(contentMode: .fill)
                     } placeholder: { Color.gray.opacity(0.3) }
                     .frame(width: 60, height: 60).cornerRadius(8)
-                    
                     VStack(alignment: .leading, spacing: 4) {
                         Text(theme.name).font(.headline.bold())
                         Text(theme.authors).font(.caption).foregroundStyle(.secondary)
