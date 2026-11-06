@@ -1,5 +1,6 @@
 import SwiftUI
 
+// MARK: - Giao diện Danh sách Nguồn (Ảnh 1)
 struct ThemeStoreView: View {
     @ObservedObject var themeStore: PasscodeThemeStore
     @StateObject private var storeManager = ThemeStoreManager()
@@ -16,42 +17,25 @@ struct ThemeStoreView: View {
     var body: some View {
         Group {
             if storeManager.isLoading {
-                ProgressView("Loading...")
+                ProgressView("Đang tải...")
             } else if storeManager.repos.isEmpty {
-                ContentUnavailableView("Trống", systemImage: "tray", description: Text("Ấn nút + để thêm Repo."))
+                ContentUnavailableView("Trống", systemImage: "tray", description: Text("Ấn nút + để thêm Nguồn."))
             } else {
                 List {
                     ForEach(storeManager.repos) { repo in
                         NavigationLink(destination: RepoDetailView(repo: repo, themeStore: themeStore, viewModel: viewModel)) {
-                            HStack(spacing: 12) {
-                                if let iconURL = repo.iconURL {
-                                    AsyncImage(url: iconURL) { image in
-                                        image.resizable().aspectRatio(contentMode: .fill)
-                                    } placeholder: {
-                                        ProgressView()
-                                    }
-                                    .frame(width: 40, height: 40)
-                                    .cornerRadius(8)
-                                } else {
-                                    // Icon chữ cái
-                                    Text(String(repo.name.prefix(1)).uppercased())
-                                        .font(.title3.bold())
-                                        .foregroundColor(repo.errorMessage != nil ? .red : .orange)
-                                        .frame(width: 40, height: 40)
-                                        .background((repo.errorMessage != nil ? Color.red : Color.orange).opacity(0.15))
-                                        .cornerRadius(8)
-                                }
-                                
-                                Text(repo.name).font(.headline)
-                            }
-                            .padding(.vertical, 4)
+                            RepoRowView(repo: repo)
+                        }
+                        .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
+                        .contextMenu {
+                            Button { UIPasteboard.general.string = repo.url } label: { Label("Copy Link Raw", systemImage: "doc.on.doc") }
+                            Button { Task { await storeManager.fetchThemes() } } label: { Label("Làm mới nguồn", systemImage: "arrow.clockwise") }
+                            Button(role: .destructive) { storeManager.removeRepo(url: repo.url) } label: { Label("Xoá nguồn", systemImage: "trash") }
                         }
                     }
-                    // VUỐT ĐỂ XOÁ
-                    .onDelete { offsets in
-                        storeManager.removeRepo(at: offsets)
-                    }
+                    .onDelete { storeManager.removeRepo(at: $0) }
                 }
+                .listStyle(.insetGrouped)
             }
         }
         .navigationTitle("Nguồn")
@@ -75,112 +59,183 @@ struct ThemeStoreView: View {
     }
 }
 
-// MARK: - RepoDetailView (Giao diện chuẩn ảnh 3 & 4)
+// MARK: - Repo Row (Hiển thị trong danh sách)
+struct RepoRowView: View {
+    let repo: ThemeRepo
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            if let iconURL = repo.iconURL {
+                AsyncImage(url: iconURL) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    ProgressView()
+                }
+                .frame(width: 44, height: 44)
+                .cornerRadius(8)
+            } else {
+                Text(String(repo.name.prefix(1)).uppercased())
+                    .font(.title3.bold())
+                    .foregroundColor(repo.errorMessage != nil ? .red : .orange)
+                    .frame(width: 44, height: 44)
+                    .background((repo.errorMessage != nil ? Color.red : Color.orange).opacity(0.15))
+                    .cornerRadius(8)
+            }
+            
+            Text(repo.name).font(.headline)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Giao diện Chi tiết Nguồn (Ảnh 2 & 4)
 struct RepoDetailView: View {
     let repo: ThemeRepo
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var viewModel: PasscodeThemeViewModel
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // Phần Header (Icon, Tên, Mô tả lỗi)
-                if let error = repo.errorMessage {
-                    VStack(spacing: 12) {
-                        // Box hiển thị tên Repo và Lỗi (Giống ảnh 3 & 4)
-                        HStack(alignment: .top, spacing: 12) {
-                            if let iconURL = repo.iconURL {
-                                AsyncImage(url: iconURL) { image in
-                                    image.resizable().aspectRatio(contentMode: .fill)
-                                } placeholder: {
-                                    ProgressView()
-                                }
-                                .frame(width: 50, height: 50)
-                                .cornerRadius(8)
-                            } else {
-                                Text(String(repo.name.prefix(1)).uppercased())
-                                    .font(.title3.bold())
-                                    .foregroundColor(.red)
-                                    .frame(width: 50, height: 50)
-                                    .background(Color.red.opacity(0.15))
-                                    .cornerRadius(8)
+        List {
+            // Header: Icon, Tên, Mô tả hoặc Lỗi
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 12) {
+                        if let iconURL = repo.iconURL {
+                            AsyncImage(url: iconURL) { image in
+                                image.resizable().aspectRatio(contentMode: .fill)
+                            } placeholder: {
+                                ProgressView()
                             }
+                            .frame(width: 60, height: 60)
+                            .cornerRadius(12)
+                        } else {
+                            Text(String(repo.name.prefix(1)).uppercased())
+                                .font(.title.bold())
+                                .foregroundColor(repo.errorMessage != nil ? .red : .orange)
+                                .frame(width: 60, height: 60)
+                                .background((repo.errorMessage != nil ? Color.red : Color.orange).opacity(0.15))
+                                .cornerRadius(12)
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(repo.name)
+                                .font(.title3.bold())
                             
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(repo.name).font(.headline)
-                                HStack(spacing: 4) {
+                            if let error = repo.errorMessage {
+                                HStack(alignment: .top, spacing: 4) {
                                     Image(systemName: "exclamationmark.triangle.fill")
                                         .foregroundStyle(.red)
                                     Text(error)
                                         .font(.subheadline)
                                         .foregroundStyle(.red)
                                 }
+                            } else {
+                                if let desc = repo.description, !desc.isEmpty {
+                                    Text(desc)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text("\(repo.themes.count) gói")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                            Spacer()
                         }
-                        .padding()
-                        .background(Color(uiColor: .secondarySystemGroupedBackground))
-                        .cornerRadius(12)
-                        
-                        // Box thông báo trống (Giống ảnh 4)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+            .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
+            
+            // Phần Tag (Nếu không lỗi)
+            if repo.errorMessage == nil {
+                if repo.themes.isEmpty {
+                    Section {
                         Text("Nguồn này chưa có gói khả dụng. Hãy bật hoặc làm mới nguồn rồi thử lại.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                            .padding()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(uiColor: .secondarySystemGroupedBackground))
-                            .cornerRadius(12)
                     }
-                    .padding(.horizontal)
-                    .padding(.top, 16)
-                    
-                } else if repo.themes.isEmpty {
-                    ContentUnavailableView("Không có gói nào", systemImage: "tray", description: Text("Nguồn này chưa có gói khả dụng. Hãy bật hoặc làm mới nguồn rồi thử lại."))
-                        .padding(.top, 40)
+                    .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
                 } else {
-                    // Hiển thị danh sách theme nếu thành công
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(repo.themes.enumerated()), id: \.element.id) { index, theme in
-                            NavigationLink(destination: RemoteThemeDownloadView(remoteTheme: theme, themeStore: themeStore, viewModel: viewModel)) {
+                    Section(header: Text("Tag").font(.headline).foregroundStyle(.white).textCase(nil)) {
+                        ForEach(repo.groupedTags, id: \.name) { tag in
+                            NavigationLink(destination: PackageListView(repo: repo, tagName: tag.name, themeStore: themeStore, viewModel: viewModel)) {
                                 HStack(spacing: 12) {
-                                    AsyncImage(url: theme.fullPreviewURL) { image in
-                                        image.resizable().aspectRatio(contentMode: .fill)
-                                    } placeholder: {
-                                        Color.gray.opacity(0.3)
-                                    }
-                                    .frame(width: 60, height: 60).cornerRadius(8)
+                                    Image(systemName: "shippingbox.fill")
+                                        .foregroundStyle(.orange)
+                                        .font(.title3)
+                                        .frame(width: 32, height: 32)
+                                        .background(Color.orange.opacity(0.15))
+                                        .cornerRadius(8)
                                     
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(theme.name).font(.headline)
-                                        Text(theme.authors).font(.caption).foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(tag.name).font(.body)
+                                        Text("\(tag.count) gói").font(.caption).foregroundStyle(.secondary)
                                     }
-                                    Spacer()
-                                    Image(systemName: "chevron.right").foregroundStyle(.tertiary)
                                 }
-                                .padding()
-                                .background(Color(uiColor: .secondarySystemGroupedBackground))
-                            }
-                            .buttonStyle(.plain)
-                            
-                            if index < repo.themes.count - 1 {
-                                Divider().padding(.leading, 80)
+                                .padding(.vertical, 4)
                             }
                         }
                     }
-                    .cornerRadius(12)
-                    .padding(.horizontal)
-                    .padding(.top, 16)
+                    .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
                 }
+            } else {
+                // Box cảnh báo nếu có lỗi
+                Section {
+                    Text("Nguồn này chưa có gói khả dụng. Hãy bật hoặc làm mới nguồn rồi thử lại.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
             }
-            .padding(.bottom, 40)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .listStyle(.insetGrouped)
         .navigationTitle(repo.name)
         .navigationBarTitleDisplayMode(.inline)
     }
 }
 
-// MARK: - RemoteThemeDownloadView (Giữ nguyên)
+// MARK: - Danh sách Package theo Tag
+struct PackageListView: View {
+    let repo: ThemeRepo
+    let tagName: String
+    @ObservedObject var themeStore: PasscodeThemeStore
+    @ObservedObject var viewModel: PasscodeThemeViewModel
+
+    var filteredThemes: [RemoteTheme] {
+        if tagName == "Tất cả gói" { return repo.themes }
+        return repo.themes.filter { theme in
+            theme.category == tagName || (theme.tags?.contains(tagName) ?? false)
+        }
+    }
+
+    var body: some View {
+        List(filteredThemes) { theme in
+            NavigationLink(destination: RemoteThemeDownloadView(remoteTheme: theme, themeStore: themeStore, viewModel: viewModel)) {
+                HStack(spacing: 12) {
+                    AsyncImage(url: theme.fullPreviewURL) { image in
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Color.gray.opacity(0.3)
+                    }
+                    .frame(width: 60, height: 60)
+                    .cornerRadius(8)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(theme.name).font(.headline)
+                        Text(theme.authors).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(tagName)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - RemoteThemeDownloadView
 struct RemoteThemeDownloadView: View {
     let remoteTheme: RemoteTheme
     @ObservedObject var themeStore: PasscodeThemeStore
@@ -194,7 +249,9 @@ struct RemoteThemeDownloadView: View {
         VStack(spacing: 20) {
             AsyncImage(url: remoteTheme.fullPreviewURL) { image in
                 image.resizable().aspectRatio(contentMode: .fit)
-            } placeholder: { ProgressView() }.frame(height: 200).cornerRadius(12)
+            } placeholder: { ProgressView() }
+            .frame(height: 200)
+            .cornerRadius(12)
             
             Text(remoteTheme.name).font(.title2.bold())
             Text(remoteTheme.description ?? "").foregroundStyle(.secondary)
@@ -202,11 +259,14 @@ struct RemoteThemeDownloadView: View {
             if let errorMessage = errorMessage { Text(errorMessage).foregroundStyle(.red) }
             
             if isDownloading {
-                ProgressView("Downloading & Importing...")
+                ProgressView("Đang tải & Import...")
             } else {
-                Button("Tải & Import Theme") { Task { await downloadAndImport() } }.buttonStyle(.borderedProminent)
+                Button("Tải & Import") { Task { await downloadAndImport() } }.buttonStyle(.borderedProminent)
             }
-        }.padding().navigationTitle("Chi tiết").navigationBarTitleDisplayMode(.inline)
+        }
+        .padding()
+        .navigationTitle("Chi tiết")
+        .navigationBarTitleDisplayMode(.inline)
     }
     
     private func downloadAndImport() async {
