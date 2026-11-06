@@ -162,10 +162,9 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
         
-        onLogUpdate("Đang dò tunnel IP...")
-        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else {
-            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."])
-        }
+        // BỎ QUA AIRLIFTHOSTRESOLVER - Ép cứng IP và để thư viện C tự xử lý
+        onLogUpdate("Sử dụng RSD Tunnel IP: 10.7.0.1")
+        _ = al_set_target_host("10.7.0.1")
         
         onLogUpdate("Đang ghi qua AirTraffic...")
         let pairingPath = pairingURL.path
