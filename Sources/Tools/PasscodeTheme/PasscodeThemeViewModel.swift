@@ -185,6 +185,7 @@ class PasscodeThemeViewModel: ObservableObject {
                         airliftLogSink?(String(cString: msgPtr))
                     }
                     
+                    // Sử dụng hàm write_dir (chuẩn cho Passcode) với biến môi trường đã được set
                     let res = al_exploit_write_dir(
                         pairingPath,
                         srcDir,
@@ -203,7 +204,6 @@ class PasscodeThemeViewModel: ObservableObject {
                     }
                 }
             }
-            
             airliftLogSink = nil
         }.value
         
