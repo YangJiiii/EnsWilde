@@ -148,10 +148,17 @@ struct PasscodeThemeView: View {
             showErrorAlert = true
             return
         }
+        
+        let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
+        guard FileManager.default.fileExists(atPath: pairingURL.path) else {
+            errorMessage = "Không tìm thấy Pairing File. Vui lòng import lại Pairing File."
+            showErrorAlert = true
+            return
+        }
 
         try? await Task.sleep(nanoseconds: 500_000_000)
 
-        let ok = rebootDevice()
+        let ok = rebootDevice(pairingURL: pairingURL)
         if !ok {
             errorMessage = "Không thể khởi động lại máy. Kiểm tra VPN và pairing file."
             showErrorAlert = true
@@ -159,16 +166,14 @@ struct PasscodeThemeView: View {
     }
 
     @discardableResult
-    private func rebootDevice() -> Bool {
+    private func rebootDevice(pairingURL: URL) -> Bool {
         do {
-            // Kill PID 1 để reboot máy (TUYỆT ĐỐI KHÔNG DÙNG exit(0) Ở ĐÂY)
             try JITEnableContext.shared.killProcess(withPID: 1, signal: 9)
             return true
         } catch {
             NSLog("[Reboot] killProcess(withPID: 1, SIGKILL) failed: \(error.localizedDescription)")
         }
 
-        let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         if FileManager.default.fileExists(atPath: pairingURL.path) {
             var errPtr: UnsafeMutablePointer<CChar>? = nil
             let res = al_device_respring(pairingURL.path, nil, nil, &errPtr)
