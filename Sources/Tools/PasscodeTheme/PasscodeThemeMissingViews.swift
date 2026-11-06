@@ -2,8 +2,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ZIPFoundation
 
-// MARK: - FileImporterView (Dùng UIKit Picker để không bị treo)
-struct FileImporterView: UIViewControllerRepresentable {
+// MARK: - PasscodeFileImporterView (Đã đổi tên để không bị trùng với Wallet)
+struct PasscodeFileImporterView: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
     let allowedTypes: [UTType]
     let onPick: (URL) -> Void
@@ -22,8 +22,8 @@ struct FileImporterView: UIViewControllerRepresentable {
     }
 
     class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let parent: FileImporterView
-        init(_ parent: FileImporterView) { self.parent = parent }
+        let parent: PasscodeFileImporterView
+        init(_ parent: PasscodeFileImporterView) { self.parent = parent }
 
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
             if let url = urls.first {
@@ -111,7 +111,7 @@ struct ThemeDetailView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L("passcode_theme_name")).font(.caption).foregroundStyle(.secondary)
                     TextField(L("passcode_theme_name"), text: $theme.name)
-                        .onChange(of: theme.name) { _ in themeStore.updateTheme(theme) }
+                        .onChange(of: theme.name) { _, _ in themeStore.updateTheme(theme) }
                 }
                 
                 HStack {
@@ -131,7 +131,7 @@ struct ThemeDetailView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .onChange(of: theme.keySize) { _ in themeStore.updateTheme(theme) }
+                    .onChange(of: theme.keySize) { _, _ in themeStore.updateTheme(theme) }
                     
                     Text(scalingDescription(from: theme.detectedSize, to: theme.keySize)).font(.caption).foregroundStyle(.secondary)
                 }
@@ -250,7 +250,8 @@ struct ImportThemeSheet: View {
                 }
             }
             .sheet(isPresented: $showFilePicker) {
-                FileImporterView(isPresented: $showFilePicker, allowedTypes: [.item, .data, .zip]) { url in
+                // Dùng PasscodeFileImporterView đã đổi tên
+                PasscodeFileImporterView(isPresented: $showFilePicker, allowedTypes: [.item, .data, .zip]) { url in
                     let accessing = url.startAccessingSecurityScopedResource()
                     defer { if accessing { url.stopAccessingSecurityScopedResource() } }
                     
@@ -338,7 +339,8 @@ struct ImportDefaultPasscodeSheet: View {
                 }
             }
             .sheet(isPresented: $showFilePicker) {
-                FileImporterView(isPresented: $showFilePicker, allowedTypes: [.item, .data, .zip]) { url in
+                // Dùng PasscodeFileImporterView đã đổi tên
+                PasscodeFileImporterView(isPresented: $showFilePicker, allowedTypes: [.item, .data, .zip]) { url in
                     let accessing = url.startAccessingSecurityScopedResource()
                     defer { if accessing { url.stopAccessingSecurityScopedResource() } }
                     
