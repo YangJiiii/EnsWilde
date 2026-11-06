@@ -1,53 +1,111 @@
 //  AirliftHostResolver.swift
 //  EnsWilde
 //
-//  Cấu hình target host cho Airlift FFI.
-//  Airlift sẽ tự dial RSD 49152 trước, fallback Lockdown 62078 khi cần.
-//  Cả hai cổng đều đi qua interface utun của VPN → không cần setenv USBMUXD.
+//  Chọn target host cho Airlift một cách chắc chắn:
+//   1. Kiểm tra tunnel VPN thực sự có IP loopback (không chỉ utun bất kỳ)
+//   2. TCP-probe cổng RSD 49152 và Lockdown 62078
+//   3. Chỉ set target host nếu ít nhất một trong hai cổng reachable
+//   4. Airlift tự dial RSD 49152 trước, fallback Lockdown 62078
 
 import Foundation
 import AirliftFFI
 
 enum AirliftHostResolver {
 
-    static let defaultTargetIP = "10.7.0.1"
+    struct ResolutionResult {
+        let host: String
+        let rsdReachable: Bool
+        let lockdownReachable: Bool
+    }
 
-    static let fallbackHosts: [String] = [
-        "10.7.0.1",   // LocalDevVPN / SideStore
-        "172.16.0.1", // Một số VPN loopback khác
+    /// Danh sách host sẽ thử, theo thứ tự ưu tiên.
+    static let candidates: [String] = [
+        "10.7.0.1",   // LocalDevVPN / StikDebug / SideStore
+        "172.16.0.1", // VPN loopback khác
         "10.0.0.1"
     ]
 
-    /// Set target host cho Airlift. Trả về IP đã chọn, hoặc nil nếu VPN chưa bật.
+    /// Probe và set target host. Trả về `nil` nếu không có host nào reachable.
     @discardableResult
     static func bestAvailable(log: @escaping (String) -> Void) async -> String? {
-        // SỬA: dùng NetworkStatus thay vì AirliftNetworkStatus không tồn tại
-        guard NetworkStatus.isVPNTunnelPresent() else {
-            log("[Airlift] ⚠️ VPN chưa bật — tunnel RSD 49152 sẽ không hoạt động.")
+        // 1. Bước 1 — VPN tunnel phải có IP loopback
+        guard let tunnelIP = NetworkStatus.detectActiveTunnelIP() else {
+            log("[Airlift] ❌ Không có tunnel VPN nào có IP 10.7.0.x / 172.16.0.x.")
+            log("[Airlift]    → Mở LocalDevVPN hoặc StikDebug và bật tunnel trước.")
+            return nil
+        }
+        log("[Airlift] Tunnel IP hiện tại: \(tunnelIP)")
+
+        // 2. Bước 2 — TCP-probe từng candidate (RSD 49152 + Lockdown 62078)
+        var resolved: ResolutionResult? = nil
+        for host in candidates {
+            let (rsd, lock) = NetworkStatus.probeDevicePorts(host: host, timeoutMs: 800)
+            let rsdStr  = rsd  ? "✅" : "❌"
+            let lockStr = lock ? "✅" : "❌"
+            log("[Airlift] Probe \(host) → RSD 49152 \(rsdStr) | Lockdown 62078 \(lockStr)")
+
+            if rsd || lock {
+                resolved = ResolutionResult(host: host, rsdReachable: rsd, lockdownReachable: lock)
+                break
+            }
+        }
+
+        guard let result = resolved else {
+            log("[Airlift] ❌ Không reach được RSD 49152 hoặc Lockdown 62078 trên bất kỳ candidate nào.")
+            log("[Airlift]    → VPN có thể đang bật nhưng chưa route. Thử:")
+            log("[Airlift]      1. Tắt/bật lại LocalDevVPN")
+            log("[Airlift]      2. Mở một app khác (vd. SideStore) để kích hoạt tunnel")
+            log("[Airlift]      3. Kiểm tra pairing file còn hợp lệ")
             return nil
         }
 
-        // 1. Set IP chính cho lõi C
-        let primary = defaultTargetIP
-        _ = al_set_target_host(primary)
-
-        // 2. Đăng ký thêm fallback hosts (Airlift tự thử theo thứ tự khi connect)
-        let cHosts: [UnsafePointer<CChar>?] = fallbackHosts.map { strdup($0) }
-        defer { cHosts.forEach { if let p = $0 { free(p) } } }
-        _ = cHosts.withUnsafeBufferPointer { buf in
-            al_set_target_hosts(buf.baseAddress, fallbackHosts.count)
+        // 3. Bước 3 — Set target host cho Airlift
+        let setRC = al_set_target_host(result.host)
+        if setRC != 0 {
+            log("[Airlift] ⚠️ al_set_target_host(\(result.host)) trả mã \(setRC).")
+        } else {
+            log("[Airlift] ✅ Target host = \(result.host)")
         }
 
-        // 3. Đặt biến môi trường phụ trợ cho Rust core
-        setenv("AIRLIFT_HOST", primary, 1)
+        if result.rsdReachable {
+            log("[Airlift] → Airlift sẽ dial RSD 49152 trước.")
+        } else if result.lockdownReachable {
+            log("[Airlift] ⚠️ RSD 49152 đóng, Airlift sẽ dùng Lockdown 62078 (fallback).")
+            log("[Airlift]    iOS 17+ có thể fail — kiểm tra VPN route tới 10.7.0.1:49152.")
+        }
 
-        log("[Airlift] Target host = \(primary) — RSD 49152 + Lockdown 62078 (via VPN utun)")
-        return primary
+        return result.host
     }
 
-    /// Xoá cấu hình khi thoát app hoặc đổi mạng.
+    /// Reset khi thoát app hoặc đổi mạng.
     static func reset() {
         al_clear_target_hosts()
-        unsetenv("AIRLIFT_HOST")
+    }
+
+    /// Chẩn đoán toàn diện — gọi từ Settings để xem app đang thấy gì.
+    static func diagnose(log: @escaping (String) -> Void) {
+        log("=== Airlift / Network Diagnostics ===")
+        NetworkStatus.dumpInterfaces(log: log)
+
+        log("--- Tunnel IP ---")
+        if let ip = NetworkStatus.detectActiveTunnelIP() {
+            log("Active tunnel IP: \(ip)")
+        } else {
+            log("Active tunnel IP: ❌ không có")
+        }
+
+        log("--- Port probe ---")
+        for host in candidates {
+            let (rsd, lock) = NetworkStatus.probeDevicePorts(host: host, timeoutMs: 800)
+            log("\(host): RSD 49152=\(rsd ? "✅" : "❌") | Lockdown 62078=\(lock ? "✅" : "❌")")
+        }
+
+        log("--- Env ---")
+        if let env = ProcessInfo.processInfo.environment["AIRLIFT_HOST"] {
+            log("AIRLIFT_HOST=\(env)")
+        } else {
+            log("AIRLIFT_HOST=<không set>")
+        }
+        log("=== End ===")
     }
 }
