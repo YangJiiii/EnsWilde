@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: - Định dạng Theme chung (Map từ cả JSON cũ và mới)
 struct RemoteTheme: Identifiable, Decodable {
     var id: String { url }
     let name: String
@@ -8,10 +7,12 @@ struct RemoteTheme: Identifiable, Decodable {
     let url: String
     let preview: String
     let authors: String
+    let category: String?
+    let tags: [String]?
     var baseURL: String = ""
     
     enum CodingKeys: String, CodingKey {
-        case name, description, url, preview, authors
+        case name, description, url, preview, authors, category, tags
         // Keys cho JSON mới (3105 style)
         case summary, author, download, icon
     }
@@ -19,31 +20,25 @@ struct RemoteTheme: Identifiable, Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
-        // Hỗ trợ cả tên cũ và tên mới
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Unknown Theme"
-        
-        // JSON cũ dùng description, JSON mới dùng summary
         description = try container.decodeIfPresent(String.self, forKey: .description) 
                    ?? container.decodeIfPresent(String.self, forKey: .summary)
-        
-        // JSON cũ dùng url, JSON mới dùng download
         url = try container.decodeIfPresent(String.self, forKey: .url) 
            ?? container.decodeIfPresent(String.self, forKey: .download) ?? ""
-        
-        // JSON cũ dùng preview, JSON mới dùng icon
         preview = try container.decodeIfPresent(String.self, forKey: .preview) 
                ?? container.decodeIfPresent(String.self, forKey: .icon) ?? ""
-        
-        // JSON cũ dùng authors, JSON mới dùng author
         authors = try container.decodeIfPresent(String.self, forKey: .authors) 
                ?? container.decodeIfPresent(String.self, forKey: .author) ?? "Unknown Author"
+        
+        // Các trường mới của 3105
+        category = try container.decodeIfPresent(String.self, forKey: .category)
+        tags = try container.decodeIfPresent([String].self, forKey: .tags)
     }
     
     var fullDownloadURL: URL? { URL(string: baseURL + url) }
     var fullPreviewURL: URL? { URL(string: baseURL + preview) }
 }
 
-// MARK: - Định dạng Repo chung
 struct RepoJSON: Decodable {
     let name: String?
     let description: String?
@@ -56,9 +51,39 @@ struct ThemeRepo: Identifiable {
     var id: String { url }
     let url: String
     let name: String
+    let description: String?
     let iconURL: URL?
     var themes: [RemoteTheme]
     var errorMessage: String?
+    
+    // Gom nhóm các gói theo Tag để hiển thị
+    var groupedTags: [(name: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        
+        // Luôn có mục "Tất cả gói"
+        counts["Tất cả gói"] = themes.count
+        
+        for theme in themes {
+            // Lấy category
+            if let cat = theme.category, !cat.isEmpty {
+                counts[cat, default: 0] += 1
+            }
+            // Lấy tags
+            if let tags = theme.tags {
+                for tag in tags where !tag.isEmpty {
+                    counts[tag, default: 0] += 1
+                }
+            }
+        }
+        
+        // Sắp xếp: Tất cả gói lên đầu, sau đó giảm dần theo số lượng
+        return counts.map { (name: $0.key, count: $0.value) }
+            .sorted {
+                if $0.name == "Tất cả gói" { return true }
+                if $1.name == "Tất cả gói" { return false }
+                return $0.count > $1.count
+            }
+    }
 }
 
 @MainActor
@@ -88,7 +113,6 @@ class ThemeStoreManager: ObservableObject {
             do {
                 let (data, _) = try await URLSession.shared.data(from: repoURL)
                 
-                // 1. Thử decode dạng Object bọc (Chứa themes hoặc packages)
                 if let repoJSON = try? JSONDecoder().decode(RepoJSON.self, from: data) {
                     let rawThemes = repoJSON.themes ?? repoJSON.packages ?? []
                     var themes = rawThemes
@@ -100,18 +124,24 @@ class ThemeStoreManager: ObservableObject {
                     }
                     
                     let finalName = repoJSON.name ?? repoName
-                    fetchedRepos.append(ThemeRepo(url: repoURLString, name: finalName, iconURL: iconURL, themes: themes, errorMessage: nil))
+                    fetchedRepos.append(ThemeRepo(
+                        url: repoURLString,
+                        name: finalName,
+                        description: repoJSON.description,
+                        iconURL: iconURL,
+                        themes: themes,
+                        errorMessage: nil
+                    ))
                 }
-                // 2. Thử decode dạng Array thuần túy
                 else if var themes = try? JSONDecoder().decode([RemoteTheme].self, from: data) {
                     for i in 0..<themes.count { themes[i].baseURL = baseURL }
-                    fetchedRepos.append(ThemeRepo(url: repoURLString, name: repoName, iconURL: nil, themes: themes, errorMessage: nil))
+                    fetchedRepos.append(ThemeRepo(url: repoURLString, name: repoName, description: nil, iconURL: nil, themes: themes, errorMessage: nil))
                 }
-                // 3. Lỗi JSON
                 else {
                     fetchedRepos.append(ThemeRepo(
                         url: repoURLString,
                         name: repoName,
+                        description: nil,
                         iconURL: nil,
                         themes: [],
                         errorMessage: "Tệp mô tả kho không hợp lệ hoặc quá lớn."
@@ -121,6 +151,7 @@ class ThemeStoreManager: ObservableObject {
                 fetchedRepos.append(ThemeRepo(
                     url: repoURLString,
                     name: repoName,
+                    description: nil,
                     iconURL: nil,
                     themes: [],
                     errorMessage: "Không thể kết nối tới máy chủ."
@@ -157,6 +188,13 @@ class ThemeStoreManager: ObservableObject {
             reposList.removeAll { $0 == repoUrl }
             savedRepos = reposList.joined(separator: ",")
         }
+        Task { await fetchThemes() }
+    }
+    
+    func removeRepo(url: String) {
+        var reposList = savedRepos.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        reposList.removeAll { $0 == url }
+        savedRepos = reposList.joined(separator: ",")
         Task { await fetchThemes() }
     }
 }
