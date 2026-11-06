@@ -17,8 +17,7 @@ enum AirliftHostResolver {
         
         if let override = UserDefaults.standard.string(forKey: "TunnelDeviceIP"),
            !override.isEmpty,
-           override != "127.0.0.1",
-           !out.contains(override) {
+           override != "127.0.0.1" {
             out.append(override)
         }
         
@@ -26,7 +25,8 @@ enum AirliftHostResolver {
             out.append(detected)
         }
         
-        for ip in ["10.7.0.1", "10.7.0.2", "10.7.0.3", "198.18.0.1"] where !out.contains(ip) {
+        // Thêm các IP dự phòng phổ biến của LocalDevVPN
+        for ip in ["10.7.0.1", "10.7.1.1", "10.7.0.3", "198.18.0.1"] where !out.contains(ip) {
             out.append(ip)
         }
         
@@ -43,13 +43,18 @@ enum AirliftHostResolver {
             defer { ptr = cur.pointee.ifa_next }
             guard let addr = cur.pointee.ifa_addr,
                   addr.pointee.sa_family == UInt8(AF_INET) else { continue }
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            getnameinfo(addr, socklen_t(addr.pointee.sa_len),
-                        &host, socklen_t(host.count),
-                        nil, 0, NI_NUMERICHOST)
-            let ip = String(cString: host)
-            if ip.hasPrefix("10.7.0.") || ip.hasPrefix("198.18.0.") {
-                return ip
+            
+            let name = String(cString: cur.pointee.ifa_name)
+            // Chỉ lấy IP của interface utun (VPN)
+            if name.hasPrefix("utun") {
+                var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                getnameinfo(addr, socklen_t(addr.pointee.sa_len),
+                            &host, socklen_t(host.count),
+                            nil, 0, NI_NUMERICHOST)
+                let ip = String(cString: host)
+                if !ip.isEmpty && ip != "127.0.0.1" {
+                    return ip
+                }
             }
         }
         return nil
@@ -60,71 +65,15 @@ enum AirliftHostResolver {
         al_log_init(airliftLogCallback, nil)
         
         let hosts = candidates()
-        log("[Airlift] Probing hosts: \(hosts.joined(separator: ", "))")
+        log("[Airlift] Available hosts: \(hosts.joined(separator: ", "))")
         
-        for host in hosts where host != "127.0.0.1" {
-            let ok = await canConnect(host: host, port: 49152, timeout: 1.2)
-            if ok {
-                _ = al_set_target_host(host)
-                log("[Airlift] Selected: \(host)")
-                return host
-            }
-            log("[Airlift] \(host) unreachable")
+        // Lấy IP đầu tiên (ưu tiên IP từ interface utun hoặc UserDefaults)
+        if let bestHost = hosts.first {
+            _ = al_set_target_host(bestHost)
+            log("[Airlift] Selected: \(bestHost)")
+            return bestHost
         }
+        
         return nil
-    }
-    
-    private static func canConnect(host: String, port: UInt16, timeout: TimeInterval) async -> Bool {
-        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var addr = sockaddr_in()
-                addr.sin_family = sa_family_t(AF_INET)
-                addr.sin_port = port.bigEndian
-                guard inet_pton(AF_INET, host, &addr.sin_addr) == 1 else {
-                    cont.resume(returning: false)
-                    return
-                }
-                
-                let fd = socket(AF_INET, SOCK_STREAM, 0)
-                guard fd >= 0 else {
-                    cont.resume(returning: false)
-                    return
-                }
-                defer { close(fd) }
-                
-                let flags = fcntl(fd, F_GETFL, 0)
-                _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
-                
-                let rc = withUnsafePointer(to: &addr) {
-                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                        Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                    }
-                }
-                
-                if rc == 0 {
-                    cont.resume(returning: true)
-                    return
-                }
-                
-                if errno != EINPROGRESS {
-                    cont.resume(returning: false)
-                    return
-                }
-                
-                var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                let timeoutMs = Int32(timeout * 1000)
-                let pollResult = poll(&pfd, 1, timeoutMs)
-                
-                if pollResult <= 0 {
-                    cont.resume(returning: false)
-                    return
-                }
-                
-                var soError: Int32 = 0
-                var len = socklen_t(MemoryLayout<Int32>.size)
-                getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &len)
-                cont.resume(returning: soError == 0)
-            }
-        }
     }
 }
