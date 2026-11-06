@@ -30,8 +30,12 @@ enum AppleWalletTask {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         
+        // Tạo cấu trúc thư mục Cards chuẩn
+        let cardsDir = tempDir.appendingPathComponent("Cards")
+        try FileManager.default.createDirectory(at: cardsDir, withIntermediateDirectories: true)
+        
         for card in enabledCards {
-            let cardBasePath = tempDir.appendingPathComponent("Passes/Cards").appendingPathComponent(card.id)
+            let cardBasePath = cardsDir.appendingPathComponent(card.id)
             try FileManager.default.createDirectory(at: cardBasePath.appendingPathExtension("pkpass"), withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: cardBasePath.appendingPathExtension("cache"), withIntermediateDirectories: true)
             
@@ -42,9 +46,10 @@ enum AppleWalletTask {
             if let passJSON = card.loadPassJSON() { try passJSON.write(to: cardBasePath.appendingPathExtension("pkpass").appendingPathComponent("pass.json")) }
         }
         
-        onLogUpdate("Pushing files via AirTraffic...")
-        let srcDir = tempDir.appendingPathComponent("Passes/Cards").path
+        onLogUpdate("Pushing files via AirTraffic (Inject Folder)...")
+        let srcDir = cardsDir.path
         let targetParentDir = "/var/mobile/Library/Passes"
+        let destName = "Cards"
         
         let logCtx = LogCallbackContext { line in
             onLogUpdate("[Airlift] \(line)")
@@ -62,10 +67,12 @@ enum AppleWalletTask {
                     logCtx.onLogUpdate(line)
                 }
                 
-                let res = al_exploit_write_dir(
+                // SỬ DỤNG HÀM MỚI: al_exploit_inject_folder
+                let res = al_exploit_inject_folder(
                     pairingURL.path,
                     srcDir,
-                    targetParentDir + "/Cards",
+                    targetParentDir,
+                    destName,
                     logCallback,
                     ctxPtr,
                     &errPtr
