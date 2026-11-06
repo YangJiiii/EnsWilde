@@ -10,20 +10,19 @@ import AirliftFFI
 
 enum AirliftHostResolver {
 
-    /// IP loopback mặc định của LocalDevVPN / SideStore.
     static let defaultTargetIP = "10.7.0.1"
 
-    /// Các IP fallback nếu người dùng dùng VPN khác.
     static let fallbackHosts: [String] = [
         "10.7.0.1",   // LocalDevVPN / SideStore
         "172.16.0.1", // Một số VPN loopback khác
         "10.0.0.1"
     ]
 
-    /// Set target host cho Airlift. Trả về IP đã chọn.
+    /// Set target host cho Airlift. Trả về IP đã chọn, hoặc nil nếu VPN chưa bật.
     @discardableResult
     static func bestAvailable(log: @escaping (String) -> Void) async -> String? {
-        guard AirliftNetworkStatus.isVPNTunnelPresent() else {
+        // SỬA: dùng NetworkStatus thay vì AirliftNetworkStatus không tồn tại
+        guard NetworkStatus.isVPNTunnelPresent() else {
             log("[Airlift] ⚠️ VPN chưa bật — tunnel RSD 49152 sẽ không hoạt động.")
             return nil
         }
@@ -39,7 +38,7 @@ enum AirliftHostResolver {
             al_set_target_hosts(buf.baseAddress, fallbackHosts.count)
         }
 
-        // 3. (Optional) đặt biến môi trường cho các lib phụ trợ khác trong Rust core.
+        // 3. Đặt biến môi trường phụ trợ cho Rust core
         setenv("AIRLIFT_HOST", primary, 1)
 
         log("[Airlift] Target host = \(primary) — RSD 49152 + Lockdown 62078 (via VPN utun)")
