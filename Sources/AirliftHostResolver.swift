@@ -12,34 +12,31 @@ private let airliftLogCallback: ALLogCallback = { (ctx, msg) in
 
 enum AirliftHostResolver {
     
-    // Tập hợp tất cả các IP có thể có của Tunnel trên mọi nền tảng
+    // Tập hợp tất cả các IP khả thi cho LocalDevVPN 1.3.0
     static func candidates() -> [String] {
         var out: [String] = []
         
-        // 1. Lấy từ cài đặt thủ công (nếu có)
+        // 1. Lấy từ cài đặt thủ công (nếu người dùng đã override)
         if let override = UserDefaults.standard.string(forKey: "TunnelDeviceIP"), !override.isEmpty {
             out.append(override)
         }
         
-        // 2. Tự động quét tất cả interface mạng (utun)
+        // 2. Tự động quét tất cả interface mạng (utun) để lấy IP thực tế đang được cấp
         if let detected = detectFromInterfaces() {
             for ip in detected where !out.contains(ip) {
                 out.append(ip)
             }
         }
         
-        // 3. Danh sách IP phổ biến của các tool (StikDebug, LocalDevVPN, SideStore)
+        // 3. Bổ sung danh sách IP mặc định của LocalDevVPN 1.3.0 và các tool khác
         let commonIPs = [
-            "127.0.0.1",      // Loopback
-            "10.7.0.1",       // LocalDevVPN / StikDebug mặc định
-            "10.7.0.2",
-            "10.7.0.3",
-            "10.7.1.1",       // LocalDevVPN biến thể
+            "10.7.0.1",       // Peer IP mặc định (đích kết nối cũ)
+            "10.7.1.1",       // Interface IP mới (LocalDevVPN 1.3.0)
+            "10.7.0.2",       // Dải dự phòng
             "10.7.1.2",
+            "127.0.0.1",      // Loopback
             "172.16.0.1",     // StikDebug / WireGuard
-            "198.18.0.1",     // SideStore mặc định
-            "::1",            // IPv6 Loopback
-            "fd00::1"         // IPv6 Tunnel
+            "198.18.0.1"      // SideStore
         ]
         
         for ip in commonIPs where !out.contains(ip) {
@@ -66,16 +63,15 @@ enum AirliftHostResolver {
             guard family == UInt8(AF_INET) || family == UInt8(AF_INET6) else { continue }
             
             let name = String(cString: cur.pointee.ifa_name)
-            if name.hasPrefix("utun") || name.hasPrefix("en") || name.hasPrefix("pdp_ip") {
+            // Chỉ lấy IP từ các interface VPN thực sự
+            if name.hasPrefix("utun") {
                 var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                 getnameinfo(addr, socklen_t(addr.pointee.sa_len),
                             &host, socklen_t(host.count),
                             nil, 0, NI_NUMERICHOST)
                 let ip = String(cString: host)
                 
-                // Bỏ qua các IP rác
                 if !ip.isEmpty && ip != "0.0.0.0" && ip != "127.0.0.1" && !ip.hasPrefix("fe80") {
-                    // Xoá đuôi %en0 của IPv6
                     let cleanIP = ip.components(separatedBy: "%").first ?? ip
                     if !foundIPs.contains(cleanIP) {
                         foundIPs.append(cleanIP)
@@ -86,41 +82,42 @@ enum AirliftHostResolver {
         return foundIPs.isEmpty ? nil : foundIPs
     }
     
-    // Tìm IP tốt nhất (Ping thử cổng RSD 49152, nếu không được thì thử cổng Lockdown 62078)
+    // Tìm IP tốt nhất: thử cả cổng RSD (49152) và Lockdown (62078)
     static func bestAvailable(log: @escaping (String) -> Void) async -> String? {
         airliftLogSink = log
         al_log_init(airliftLogCallback, nil)
         
         let hosts = candidates()
-        log("[Airlift] Đang quét các IP khả thi: \(hosts.joined(separator: ", "))")
+        log("[Airlift] Đang quét các IP khả thi cho LocalDevVPN 1.3.0: \(hosts.joined(separator: ", "))")
         
-        var fallbackHost: String = "127.0.0.1"
+        var fallbackHost: String = "10.7.0.1" // Fallback an toàn nhất
         
         for host in hosts {
-            // Ưu tiên thử cổng RSD (49152)
+            // Ưu tiên thử cổng RSD (49152) - cổng chính của Airlift
             let isRSD = await canConnect(host: host, port: 49152, timeout: 0.8)
             if isRSD {
                 _ = al_set_target_host(host)
-                log("[Airlift] ✅ Đã kết nối RSD (49152) thành công tại: \(host)")
+                log("[Airlift] ✅ Kết nối RSD (49152) thành công tại: \(host)")
                 return host
             }
             
-            // Nếu không có RSD, thử cổng Lockdown (62078)
+            // Nếu không có RSD, thử cổng Lockdown (62078) - dự phòng
             let isLockdown = await canConnect(host: host, port: 62078, timeout: 0.8)
             if isLockdown {
                 _ = al_set_target_host(host)
-                log("[Airlift] ✅ Đã kết nối Lockdown (62078) thành công tại: \(host)")
+                log("[Airlift] ✅ Kết nối Lockdown (62078) thành công tại: \(host)")
                 return host
             }
             
-            // Lưu lại làm fallback nếu tất cả đều tịt
-            if host != "127.0.0.1" && fallbackHost == "127.0.0.1" {
+            log("[Airlift] ❌ \(host) không phản hồi cổng 49152 hoặc 62078.")
+            
+            // Cập nhật fallback nếu tìm thấy IP khác "127.0.0.1"
+            if host != "127.0.0.1" && fallbackHost == "10.7.0.1" {
                 fallbackHost = host
             }
-            log("[Airlift] ❌ \(host) không phản hồi cổng RSD/Lockdown.")
         }
         
-        // Nếu tất cả đều tịt (do iOS chặn ping), tự động ép IP tốt nhất cho thư viện C thử
+        // Nếu tất cả đều tịt (iOS chặn ping), vẫn ép IP fallback để thư viện C thử
         log("[Airlift] ⚠️ Không ping được IP nào. Thử ép IP fallback: \(fallbackHost)")
         _ = al_set_target_host(fallbackHost)
         return fallbackHost
