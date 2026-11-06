@@ -163,8 +163,9 @@ class PasscodeThemeViewModel: ObservableObject {
         }
         
         onLogUpdate("Đang dò tunnel IP...")
-        // Sử dụng hàm dò IP mới, không bao giờ trả về nil
-        _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate)
+        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else {
+            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."])
+        }
         
         onLogUpdate("Đang ghi qua AirTraffic...")
         let pairingPath = pairingURL.path
