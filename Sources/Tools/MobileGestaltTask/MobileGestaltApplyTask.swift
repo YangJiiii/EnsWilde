@@ -9,16 +9,13 @@ enum MobileGestaltApplyTask {
         let mgURL = URL(fileURLWithPath: onDeviceMGPath)
         let mgDir = mgURL.deletingLastPathComponent().path
 
-        // ── 1. Sanity check ───────────────────────────────────────
-        // ✅ FIX: NSMutableDictionary không có .isEmpty → dùng .count
-        guard store.mgCurrentDict.count > 0 else {
+        guard !store.mgCurrentDict.isEmpty else {
             throw mgError(-1, "Store rỗng. Chỉnh gì đó rồi Save Settings trước khi Apply.")
         }
         guard FileManager.default.fileExists(atPath: onDeviceMGPath) else {
             throw mgError(-2, "Không tìm thấy MobileGestalt.plist.")
         }
 
-        // ── 2. Backup pristine (bắt buộc) ─────────────────────────
         if !MobileGestaltBackupManager.shared.hasBackup {
             onLogUpdate("[MG] Đang backup pristine...")
             let originalData = try Data(contentsOf: mgURL)
@@ -29,7 +26,6 @@ enum MobileGestaltApplyTask {
             onLogUpdate("[MG] ✅ Đã backup pristine.")
         }
 
-        // ── 3. Serialize + verify in-memory ──────────────────────
         onLogUpdate("[MG] Đang serialize plist...")
         let plistData = try PropertyListSerialization.data(
             fromPropertyList: store.mgCurrentDict, format: .binary, options: 0
@@ -39,7 +35,6 @@ enum MobileGestaltApplyTask {
             throw mgError(-4, "Plist thiếu key bắt buộc — KHÔNG ghi.")
         }
 
-        // ── 4. Xin quyền cho THƯ MỤC CHA (giống Erosion) ──────────
         let fm = FileManager.default
         if !fm.isWritableFile(atPath: onDeviceMGPath) {
             onLogUpdate("[MG] Đang xin quyền ghi vào thư mục Caches...")
@@ -51,7 +46,6 @@ enum MobileGestaltApplyTask {
             onLogUpdate("[MG] ✅ Đã được cấp quyền ghi.")
         }
 
-        // ── 5. Ghi file trực tiếp ─────────────────────────────────
         onLogUpdate("[MG] Đang ghi MobileGestalt.plist...")
         do {
             try plistData.write(to: mgURL)
@@ -59,7 +53,6 @@ enum MobileGestaltApplyTask {
             throw mgError(-6, "Ghi plist thất bại: \(error.localizedDescription)")
         }
 
-        // ── 6. Verify từ đĩa ─────────────────────────────────────
         onLogUpdate("[MG] Verify file sau khi ghi...")
         do {
             let writtenData = try Data(contentsOf: mgURL)
