@@ -54,7 +54,7 @@ struct OnDevicePairingView: View {
             } header: {
                 Text("Pair On Device (iOS 27+)")
             } footer: {
-                Text("Lưu ý: Bạn chỉ có 30 giây để chuyển sang Settings và nhập PIN. Nếu quá thời gian, app sẽ bị iOS tắt ngầm.")
+                Text("App đã được bật chế độ chạy ngầm vô hạn. Bạn có thể yên tâm chuyển sang Settings để nhập PIN mà không lo bị iOS tắt.")
             }
             
             if !manager.statusLog.isEmpty {
