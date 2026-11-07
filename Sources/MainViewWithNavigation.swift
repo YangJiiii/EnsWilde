@@ -71,13 +71,10 @@ struct ApplyTabView: View {
         return false
     }
 
-    // DANH SÁCH CÁC TWEAK ĐANG BẬT
     private var enabledTweaks: [(String, String)] {
         var list: [(String, String)] = []
         
-        // ĐÃ SỬA ICON THÀNH speaker.slash CHO KHỚP VỚI TRANG CHỦ
         if toolStore.disableCallRecordingSoundEnabled { list.append(("Disable Call Recording Sound", "speaker.slash")) }
-        
         if themeStore.passcodeThemeEnabled { list.append((L("tool_passcode_theme"), "lock.rectangle")) }
         if walletStore.appleWalletEnabled { list.append((L("tool_apple_wallet"), "wallet.pass")) }
         if toolStore.replaceMobileGestaltEnabled { list.append((L("tool_mobile_gestalt"), "cpu")) }
@@ -129,6 +126,7 @@ struct ApplyTabView: View {
                 .listRowBackground(Color(.secondarySystemGroupedBackground))
 
                 Section {
+                    // Nếu bạn chưa có WalletStyleButton, tôi đã include nó ở dưới
                     WalletStyleButton(
                         title: isApplying ? "Applying..." : L("apply_enabled_tweaks"),
                         isLoading: isApplying,
@@ -178,5 +176,35 @@ struct ApplyTabView: View {
                 try? RespringHelper.respring()
             }
         }
+    }
+}
+
+// MARK: - NÚT BẤM APPLY (Giao diện)
+struct WalletStyleButton: View {
+    let title: String
+    let isLoading: Bool
+    let disabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Spacer()
+                if isLoading {
+                    ProgressView()
+                        .tint(.white)
+                } else {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 12)
+            .background(disabled ? Color.gray : Color(hex: "#ef9f76"))
+            .cornerRadius(10)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
     }
 }
