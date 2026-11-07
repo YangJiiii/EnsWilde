@@ -1,6 +1,3 @@
-//  PasscodeThemeViewModel.swift
-//  EnsWilde
-
 import Foundation
 import SwiftUI
 import UIKit
@@ -128,7 +125,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try? fm.removeItem(at: telephonyFolderURL)
     }
 
-    // MARK: - Apply Theme (ĐÃ SỬA: xoá cache cũ + respring)
+    // MARK: - Apply Theme (Xoá sạch file cũ, không tự động respring)
     func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
         defer { isProcessing = false }
@@ -152,20 +149,21 @@ class PasscodeThemeViewModel: ObservableObject {
         var targetPath = globalTelephony.cachePath
         if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
 
-        // ── 1. XOÁ CACHE CŨ (quan trọng) ───────────────────────────
-        onLogUpdate("[Theme] Đang xoá cache cũ tại \(targetPath)...")
+        // 1. XOÁ SẠCH FILE CŨ
+        onLogUpdate("[Theme] Đang xoá toàn bộ file cũ tại \(targetPath)...")
         let bq = BadQuery()
         if bq.grantAccess(atPath: targetPath).0 {
-            if FileManager.default.fileExists(atPath: targetPath) {
-                try? FileManager.default.removeItem(atPath: targetPath)
+            if let files = try? FileManager.default.contentsOfDirectory(atPath: targetPath) {
+                for file in files {
+                    try? FileManager.default.removeItem(atPath: (targetPath as NSString).appendingPathComponent(file))
+                }
             }
-            try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
-            onLogUpdate("[Theme] ✅ Đã xoá cache cũ.")
+            onLogUpdate("[Theme] ✅ Đã xoá sạch file cũ.")
         } else {
-            onLogUpdate("[Theme] ⚠️ Không thể xoá cache cũ (BadQuery fail). Tiếp tục ghi đè...")
+            onLogUpdate("[Theme] ⚠️ Không thể xoá file cũ (BadQuery fail).")
         }
 
-        // ── 2. GHI FILE MỚI QUA AIRLIFT ───────────────────────────
+        // 2. GHI FILE MỚI QUA AIRLIFT
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("AirLiftPayload_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -198,23 +196,10 @@ class PasscodeThemeViewModel: ObservableObject {
                 }
             }
         }
-        onLogUpdate("✅ Đã ghi file.")
-
-        // ── 3. RESPring ĐỂ NẠP CACHE MỚI ──────────────────────────
-        onLogUpdate("Đang respring để áp dụng theme...")
-        var respringErrPtr: UnsafeMutablePointer<CChar>? = nil
-        let respringRes = al_device_respring(pairingURL.path, nil, nil, &respringErrPtr)
-        if let e = respringErrPtr { al_string_free(e) }
-        if respringRes == 0 {
-            onLogUpdate("✅ Đã gửi lệnh respring.")
-        } else {
-            onLogUpdate("⚠️ Respring qua Airlift thất bại. Hãy respring thủ công (hoặc reboot) để thấy theme.")
-        }
-
-        onLogUpdate("✅ Passcode applied successfully. Nếu chưa thấy đổi, hãy reboot thiết bị.")
+        onLogUpdate("✅ Đã ghi file. Hãy bấm 'Reset Theme & Reboot' để khởi động lại máy.")
     }
 
-    // MARK: - Reset (giữ nguyên)
+    // MARK: - Reset (Xoá & Reboot)
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
         defer { isProcessing = false }
@@ -227,16 +212,12 @@ class PasscodeThemeViewModel: ObservableObject {
         
         let bq = BadQuery()
         if bq.grantAccess(atPath: targetPath).0 {
-            do {
-                if FileManager.default.fileExists(atPath: targetPath) {
-                    try FileManager.default.removeItem(atPath: targetPath)
+            if let files = try? FileManager.default.contentsOfDirectory(atPath: targetPath) {
+                for file in files {
+                    try? FileManager.default.removeItem(atPath: (targetPath as NSString).appendingPathComponent(file))
                 }
-                try FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true, attributes: nil)
-                onLogUpdate("✅ Đã xoá Passcode Theme thành công.")
-            } catch {
-                onLogUpdate("⚠️ Lỗi khi xoá cache: \(error.localizedDescription)")
-                throw error
             }
+            onLogUpdate("✅ Đã xoá Passcode Theme thành công.")
         } else {
             throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không thể xin quyền xoá file (BadQuery failed)."])
         }
