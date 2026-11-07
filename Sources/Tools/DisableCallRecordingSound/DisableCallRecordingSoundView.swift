@@ -16,6 +16,22 @@ struct DisableCallRecordingSoundView: View {
 
     var body: some View {
         Form {
+            // PHẦN CHECK STATUS
+            Section {
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    Text(vm.currentStatus)
+                        .foregroundStyle(vm.isTweakActive ? .green : .secondary)
+                        .fontWeight(.semibold)
+                }
+                Button("Refresh Status") {
+                    vm.checkStatus()
+                }
+            } header: {
+                Text("Current Device Status")
+            }
+
             Section {
                 Toggle("Enable Tweak", isOn: $toolStore.disableCallRecordingSoundEnabled)
             }
@@ -53,6 +69,9 @@ struct DisableCallRecordingSoundView: View {
         }
         .navigationTitle("Disable Call Recording Sound")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            vm.checkStatus()
+        }
         .alert("Saved", isPresented: $showSavedAlert) {
             Button("OK") {
                 showApplyTab = true
