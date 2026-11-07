@@ -11,6 +11,13 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
     @Published var currentStatus: String = "Checking..."
     @Published var isTweakActive: Bool = false
 
+    // MARK: - Published dùng bởi View
+    @Published var isChecking: Bool = false
+    @Published var toneStatus: String = "Unknown"
+    @Published var isToneSilenced: Bool = false
+    @Published var backupStatus: String = "Checking..."
+    @Published var isBackupReady: Bool = false
+
     private let targetDirectory = "/var/mobile/Library/CallServices/Greetings/default"
     
     // Thư mục lưu file gốc trong App
@@ -46,6 +53,43 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
             currentStatus = "No Backup Found"
         }
         isTweakActive = backupCount >= 3
+
+        // Đồng bộ cho View
+        backupStatus = currentStatus
+        isBackupReady = isTweakActive
+    }
+
+    // MARK: - Wrapper cho View
+    func checkBackupStatus() {
+        checkStatus()
+    }
+
+    // MARK: - Check Tone Status
+    func checkToneStatus() async {
+        isChecking = true
+        defer { isChecking = false }
+
+        let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
+        guard FileManager.default.fileExists(atPath: pairingURL.path) else {
+            toneStatus = "Pairing file not found"
+            isToneSilenced = false
+            return
+        }
+        guard NetworkStatus.isVPNTunnelPresent() else {
+            toneStatus = "VPN required"
+            isToneSilenced = false
+            return
+        }
+
+        // Best-effort: dựa vào sự tồn tại của backup để suy ra trạng thái
+        // (Muốn chính xác 100% cần đọc file thật từ device qua Airlift)
+        if isTweakActive {
+            toneStatus = "Silenced (tweak active)"
+            isToneSilenced = true
+        } else {
+            toneStatus = "Original"
+            isToneSilenced = false
+        }
     }
     
     // MARK: - Import Backup
@@ -134,7 +178,7 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
             
             let remotePath = "\(targetDirectory)/\(tone.originalName)"
             var outData: UnsafeMutablePointer<UInt8>? = nil
-            var outLen: Int = 0 // FIX: Đã đổi thành Int
+            var outLen: Int = 0
             var outErr: UnsafeMutablePointer<CChar>? = nil
 
             onLogUpdate("[Backup] Đang trích xuất \(tone.originalName)...")
@@ -149,9 +193,9 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
             }
 
             if res == 0, let dataPtr = outData, outLen > 0 {
-                let data = Data(bytes: dataPtr, count: outLen) // FIX: outLen đã là Int
+                let data = Data(bytes: dataPtr, count: outLen)
                 try data.write(to: URL(fileURLWithPath: backupPath))
-                al_bytes_free(dataPtr, outLen) // FIX: outLen đã là Int
+                al_bytes_free(dataPtr, outLen)
                 onLogUpdate("[Backup] ✅ Đã sao lưu \(tone.originalName) (\(outLen) bytes)")
             } else {
                 if let errPtr = outErr {
