@@ -41,6 +41,13 @@ struct PasscodeThemeView: View {
                         Text(version.displayName).tag(version.rawValue)
                     }
                 }
+                
+                // Picker chọn Bold Mode
+                Picker("Bold Text Mode", selection: $themeStore.globalBoldModeRaw) {
+                    ForEach(PasscodeTheme.BoldMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
             }
             
             Section(header: Text(L("section_theme_library"))) {
