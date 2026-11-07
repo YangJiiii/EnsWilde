@@ -35,15 +35,29 @@ enum AppleWalletTask {
         try FileManager.default.createDirectory(at: cardsDir, withIntermediateDirectories: true)
         
         for card in enabledCards {
-            let cardBasePath = cardsDir.appendingPathComponent(card.id)
-            try FileManager.default.createDirectory(at: cardBasePath.appendingPathExtension("pkpass"), withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: cardBasePath.appendingPathExtension("cache"), withIntermediateDirectories: true)
+            let pkpassDir = cardsDir.appendingPathComponent(card.id).appendingPathExtension("pkpass")
+            let cacheDir = cardsDir.appendingPathComponent(card.id).appendingPathExtension("cache")
             
-            if let bgData = card.backgroundImageData { try bgData.write(to: cardBasePath.appendingPathExtension("pkpass").appendingPathComponent(card.cardBackgroundFileName)) }
-            if let fData = card.frontFaceImageData { try fData.write(to: cardBasePath.appendingPathExtension("cache").appendingPathComponent("FrontFace")) }
-            if let pData = card.placeHolderImageData { try pData.write(to: cardBasePath.appendingPathExtension("cache").appendingPathComponent("PlaceHolder")) }
-            if let prData = card.previewImageData { try prData.write(to: cardBasePath.appendingPathExtension("cache").appendingPathComponent("Preview")) }
-            if let passJSON = card.loadPassJSON() { try passJSON.write(to: cardBasePath.appendingPathExtension("pkpass").appendingPathComponent("pass.json")) }
+            try FileManager.default.createDirectory(at: pkpassDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            
+            // Ghi ảnh nền (nếu có)
+            if let bgData = card.backgroundImageData { 
+                try bgData.write(to: pkpassDir.appendingPathComponent(card.cardBackgroundFileName)) 
+            }
+            
+            // Do UI mới chỉ chọn 1 ảnh, ta map nó cho cả 3
+            let unifiedImage = card.frontFaceImageData ?? card.previewImageData ?? card.backgroundImageData
+            if let imgData = unifiedImage {
+                try imgData.write(to: cacheDir.appendingPathComponent("FrontFace"))
+                try imgData.write(to: cacheDir.appendingPathComponent("PlaceHolder"))
+                try imgData.write(to: cacheDir.appendingPathComponent("Preview"))
+            }
+            
+            // Ghi pass.json
+            if let passJSON = card.loadPassJSON() { 
+                try passJSON.write(to: pkpassDir.appendingPathComponent("pass.json")) 
+            }
         }
         
         onLogUpdate("Pushing files via AirTraffic (Inject Folder)...")
@@ -67,7 +81,6 @@ enum AppleWalletTask {
                     logCtx.onLogUpdate(line)
                 }
                 
-                // SỬ DỤNG HÀM MỚI: al_exploit_inject_folder
                 let res = al_exploit_inject_folder(
                     pairingURL.path,
                     srcDir,
