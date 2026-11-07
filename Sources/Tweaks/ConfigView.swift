@@ -10,30 +10,57 @@ struct ConfigView: View {
     var body: some View {
         Form {
             Section(header: Text("Config Tweaks")) {
-                Toggle("Enable Tweak", isOn: $toolStore.configTweaksEnabled)
+                IconToggle(
+                    title: "Enable Tweak",
+                    systemImage: "slider.horizontal.3",
+                    color: .gray,
+                    isOn: $toolStore.configTweaksEnabled
+                )
             }
             Section(header: Text("Lock Screen Footnote")) {
-                TextField("Footnote text", text: $footnoteText).autocorrectionDisabled()
+                HStack(spacing: 12) {
+                    TweakRowIcon("text.bubble.fill", color: .blue)
+                    TextField("Footnote text", text: $footnoteText)
+                        .autocorrectionDisabled()
+                }
             }
             Section(header: Text("Supervision")) {
-                Toggle("Enable Supervision", isOn: $supervised)
+                Toggle(isOn: $supervised) {
+                    HStack(spacing: 12) {
+                        TweakRowIcon("checkmark.shield.fill", color: .green)
+                        Text("Enable Supervision")
+                    }
+                }
             }
             Section {
                 Button {
                     showApplyTab = true
                     showSavedAlert = true
                 } label: {
-                    HStack { Image(systemName: "square.and.arrow.down"); Text("Apply Save Changes").font(.headline) }.frame(maxWidth: .infinity)
+                    HStack {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Apply Save Changes").font(.headline)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
                 Button(role: .destructive) {
                     toolStore.configTweaksEnabled = false
                     footnoteText = ""
                     supervised = false
                 } label: {
-                    HStack { Image(systemName: "arrow.counterclockwise"); Text("Restore Save Changes").font(.headline) }.frame(maxWidth: .infinity)
+                    HStack {
+                        Image(systemName: "arrow.counterclockwise")
+                        Text("Restore Save Changes").font(.headline)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
         .navigationTitle("Config Tweaks")
+        .alert("Saved", isPresented: $showSavedAlert) {
+            Button("OK") {}
+        } message: {
+            Text("Tab Apply đã được mở. Chuyển sang tab Apply và bấm Apply.")
+        }
     }
 }
