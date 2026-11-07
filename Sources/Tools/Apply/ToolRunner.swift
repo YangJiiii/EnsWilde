@@ -17,16 +17,22 @@ class ToolRunner: ObservableObject {
             state = .failed("System not ready. Check Pairing & VPN.")
             return
         }
-        
+
         state = .running
         onLogUpdate("Starting tweaks...")
-        
+
         do {
+            // ── MobileGestalt ──────────────────────────────────────
             if store.replaceMobileGestaltEnabled {
                 onLogUpdate(">> Applying MobileGestalt...")
+                try await MobileGestaltApplyTask.applyGestalt(
+                    store: GestaltStore.shared,
+                    onLogUpdate: onLogUpdate
+                )
                 onLogUpdate(">> MobileGestalt Done.")
             }
-            
+
+            // ── Passcode Theme ─────────────────────────────────────
             if themeStore.passcodeThemeEnabled {
                 onLogUpdate(">> Applying Passcode Theme...")
                 let selectedTheme = themeStore.getSelectedTheme() ?? PasscodeTheme(name: "Default")
@@ -34,28 +40,32 @@ class ToolRunner: ObservableObject {
                 try await vm.applyTheme(selectedTheme, store: store, onLogUpdate: onLogUpdate)
                 onLogUpdate(">> Passcode Theme Done.")
             }
-            
+
+            // ── Apple Wallet ───────────────────────────────────────
             if walletStore.appleWalletEnabled {
                 onLogUpdate(">> Applying Apple Wallet...")
                 try await AppleWalletTask.run(store: store, walletStore: walletStore, onLogUpdate: onLogUpdate)
                 onLogUpdate(">> Wallet Done.")
             }
-            
+
+            // ── Config Tweaks ──────────────────────────────────────
             if store.configTweaksEnabled {
                 onLogUpdate(">> Applying Config Tweaks...")
+                try await ConfigTweaksApplyTask.apply(store: store, onLogUpdate: onLogUpdate)
                 onLogUpdate(">> Config Tweaks Done.")
             }
-            
+
+            // ── Disable Call Recording ─────────────────────────────
             if store.disableCallRecordingSoundEnabled {
                 onLogUpdate(">> Applying Disable Call Recording Sound...")
                 let vm = DisableCallRecordingSoundViewModel()
                 try await vm.apply(store: store, onLogUpdate: onLogUpdate)
                 onLogUpdate(">> Disable Call Recording Sound Done.")
             }
-            
+
             state = .success
             onLogUpdate("All tweaks applied successfully.")
-            
+
         } catch {
             state = .failed(error.localizedDescription)
             onLogUpdate("Failed: \(error.localizedDescription)")
