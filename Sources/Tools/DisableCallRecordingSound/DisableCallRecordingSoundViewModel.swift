@@ -1,6 +1,3 @@
-//  DisableCallRecordingSoundViewModel.swift
-//  EnsWilde
-
 import Foundation
 import AirliftFFI
 import Network
@@ -13,7 +10,6 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
 
     private let targetDirectory = "/var/mobile/Library/CallServices/Greetings/default"
     
-    // Thư mục lưu backup trong app
     private var backupDirectory: URL {
         URL.documentsDirectory.appendingPathComponent("CallSoundBackups", isDirectory: true)
     }
@@ -47,7 +43,6 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
             let fileURL = URL(fileURLWithPath: targetDirectory).appendingPathComponent(tone.originalName)
             if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
                let size = attrs[.size] as? UInt64 {
-                // File im lặng thường rất nhỏ (< 10KB), file gốc thường > 50KB
                 if size < 15000 {
                     isSilenced += 1
                 } else {
@@ -108,11 +103,8 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
         let actionName = isRestore ? "khôi phục" : "tắt tiếng"
         onLogUpdate("✅ Đã \(actionName) âm thanh ghi âm cuộc gọi thành công.")
         
-        // Cập nhật lại status sau khi xong
         checkStatus()
     }
-
-    // MARK: - Backup & Restore Logic
 
     private func backupOriginalFiles() throws {
         let bq = BadQuery()
@@ -128,10 +120,8 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
             let remoteURL = URL(fileURLWithPath: targetDirectory).appendingPathComponent(tone.originalName)
             let backupURL = backupDirectory.appendingPathComponent(tone.originalName)
             
-            // Chỉ backup nếu file backup CHƯA TỒN TẠI.
             if !FileManager.default.fileExists(atPath: backupURL.path) {
                 if FileManager.default.fileExists(atPath: remoteURL.path) {
-                    // SỬA LỖI TẠI ĐÂY: Dùng at: và to: với URL
                     try FileManager.default.copyItem(at: remoteURL, to: backupURL)
                 }
             }
@@ -148,7 +138,6 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
             let destURL = stagingDir.appendingPathComponent(tone.originalName)
             
             if FileManager.default.fileExists(atPath: backupURL.path) {
-                // SỬA LỖI TẠI ĐÂY: Dùng at: và to: với URL
                 try FileManager.default.copyItem(at: backupURL, to: destURL)
                 foundAny = true
             }
@@ -160,8 +149,6 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
         
         return stagingDir
     }
-
-    // MARK: - Github Download
     
     private func downloadSilentFiles() async throws -> URL {
         let stagingDir = FileManager.default.temporaryDirectory.appendingPathComponent("AirliftTones_\(UUID().uuidString)")
@@ -184,8 +171,6 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
         return stagingDir
     }
 
-    // MARK: - Airlift Write
-    
     private func writeDirectory(pairingPath: String, sourceDir: String, onLogUpdate: @escaping (String) -> Void) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
