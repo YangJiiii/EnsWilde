@@ -7,7 +7,7 @@ import Network
 import UIKit
 
 @MainActor
-class OnDevicePairingManager: ObservableObject {
+class OnDevicePairingManager: NSObject, ObservableObject {
     @Published var isPairing = false
     @Published var pin: String = ""
     @Published var statusLog: [String] = []
@@ -16,6 +16,11 @@ class OnDevicePairingManager: ObservableObject {
     private var netService: NetService?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var pairingTask: Task<Void, Never>?
+    
+    // Khởi tạo NSObject
+    override init() {
+        super.init()
+    }
     
     func startPairing() {
         guard #available(iOS 27.0, *) else {
@@ -41,22 +46,25 @@ class OnDevicePairingManager: ObservableObject {
     
     private func runAirliftPairing() async {
         let outPath = URL.documentsDirectory.appendingPathComponent("pairingFile.plist").path
+        
+        // Giữ class trên heap trong suốt quá trình C chạy
         let context = Unmanaged.passRetained(self).toOpaque()
-        defer { Unmanaged<OnDevicePairingManager>.fromOpaque(context).release() }
         
-        var result = ALPairResult()
-        
+        // Callback khi Host sẵn sàng
         let readyCb: ALPairReadyCb = { ctx, serviceIdPtr, port, txtKeysPtr, txtValsPtr, txtCount in
             guard let ctx = ctx, let serviceIdPtr = serviceIdPtr else { return }
+            
             let manager = Unmanaged<OnDevicePairingManager>.fromOpaque(ctx).takeUnretainedValue()
             let serviceId = String(cString: serviceIdPtr)
             
             var txtDict: [String: Data] = [:]
             if let txtKeysPtr = txtKeysPtr, let txtValsPtr = txtValsPtr {
-                for i in 0..<txtCount {
-                    let key = String(cString: txtKeysPtr[i])
-                    let val = String(cString: txtValsPtr[i])
-                    txtDict[key] = val.data(using: .utf8)
+                for i in 0..<Int(txtCount) {
+                    if let keyPtr = txtKeysPtr[i], let valPtr = txtValsPtr[i] {
+                        let key = String(cString: keyPtr)
+                        let val = String(cString: valPtr)
+                        txtDict[key] = val.data(using: .utf8)
+                    }
                 }
             }
             let txtData = NetService.data(fromTXTRecord: txtDict)
@@ -66,8 +74,10 @@ class OnDevicePairingManager: ObservableObject {
             }
         }
         
+        // Callback khi có PIN
         let pinCb: ALPairPinCb = { pinPtr, ctx in
             guard let ctx = ctx, let pinPtr = pinPtr else { return }
+            
             let manager = Unmanaged<OnDevicePairingManager>.fromOpaque(ctx).takeUnretainedValue()
             let pin = String(cString: pinPtr)
             
@@ -77,13 +87,35 @@ class OnDevicePairingManager: ObservableObject {
             }
         }
         
-        let rc = al_pairing_run_host(
-            "10.7.0.1", 0, "EnsWilde", "iPhone", outPath, nil,
-            readyCb, pinCb, context, &result
-        )
+        // Sử dụng withCString để bridge String an toàn sang C
+        var result = ALPairResult()
+        let rc = "10.7.0.1".withCString { bindAddr in
+            "EnsWilde".withCString { name in
+                "iPhone".withCString { model in
+                    outPath.withCString { outPathPtr in
+                        al_pairing_run_host(
+                            bindAddr,
+                            0,
+                            name,
+                            model,
+                            outPathPtr,
+                            nil,
+                            readyCb,
+                            pinCb,
+                            context,
+                            &result
+                        )
+                    }
+                }
+            }
+        }
         
-        if let error = result.error {
-            let msg = String(cString: error)
+        // Giải phóng context
+        Unmanaged<OnDevicePairingManager>.fromOpaque(context).release()
+        
+        // Xử lý kết quả trả về
+        if rc != 0 || result.error != nil {
+            let msg = result.error != nil ? String(cString: result.error!) : "Mã lỗi C: \(rc)"
             DispatchQueue.main.async {
                 self.statusLog.append("❌ Pairing thất bại: \(msg)")
             }
@@ -92,7 +124,6 @@ class OnDevicePairingManager: ObservableObject {
             DispatchQueue.main.async {
                 self.statusLog.append("✅ Pairing thành công! Đã lưu pairingFile.plist.")
                 self.isSuccess = true
-                // Lưu key để SettingsView nhận diện
                 UserDefaults.standard.set("pairingFile.plist", forKey: "PairingFile")
             }
             al_pairing_result_free(&result)
@@ -103,9 +134,9 @@ class OnDevicePairingManager: ObservableObject {
         }
     }
     
-    private func advertiseBonjour(serviceId: String, port: Int32, txtData: Data) {
+    private func advertiseBonjour(serviceId: String, port: UInt16, txtData: Data) {
         statusLog.append("Đang quảng bá Bonjour: \(serviceId) (Port \(port))")
-        netService = NetService(domain: "local.", type: "_remotepairing-pairable-host._tcp.", name: serviceId, port: port)
+        netService = NetService(domain: "local.", type: "_remotepairing-pairable-host._tcp.", name: serviceId, port: Int32(port))
         netService?.delegate = self
         netService?.setTXTRecord(txtData)
         netService?.publish()
@@ -126,6 +157,7 @@ class OnDevicePairingManager: ObservableObject {
     }
 }
 
+// MARK: - NetServiceDelegate
 extension OnDevicePairingManager: NetServiceDelegate {
     func netServiceDidPublish(_ sender: NetService) {
         statusLog.append("✅ Đã phát sóng Bonjour. Hãy vào Settings ngay!")
