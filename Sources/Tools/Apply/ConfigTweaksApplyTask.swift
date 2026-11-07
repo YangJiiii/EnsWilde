@@ -9,6 +9,7 @@ enum ConfigTweaksApplyTask {
     static func apply(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         let footnoteText = UserDefaults.standard.string(forKey: "ConfigFootnoteText") ?? ""
         let isSupervised = UserDefaults.standard.bool(forKey: "ConfigSupervised")
+        let orgName = UserDefaults.standard.string(forKey: "ConfigOrgName") ?? "EnsWilde"
 
         if footnoteText.isEmpty && !isSupervised {
             onLogUpdate("[Config] Không có thay đổi nào để ghi.")
@@ -18,9 +19,9 @@ enum ConfigTweaksApplyTask {
         let bq = BadQuery()
         let fm = FileManager.default
 
-        // 1. Xin quyền cho thư mục cha (giống Erosion)
+        // Xin quyền cho thư mục cha
         if !fm.isWritableFile(atPath: footnoteURL.path) || !fm.isWritableFile(atPath: supervisionURL.path) {
-            onLogUpdate("[Config] Đang xin quyền ghi vào thư mục ConfigurationProfiles...")
+            onLogUpdate("[Config] Đang xin quyền ghi vào ConfigurationProfiles...")
             let res = bq.grantAccess(atPath: configDir)
             if !res.0 {
                 throw NSError(domain: "ConfigTweak", code: -1, userInfo: [
@@ -30,7 +31,7 @@ enum ConfigTweaksApplyTask {
             onLogUpdate("[Config] ✅ Đã được cấp quyền ghi.")
         }
 
-        // 2. Xử lý Footnote
+        // 1. Xử lý Footnote
         if footnoteText.isEmpty {
             onLogUpdate("[Footnote] Không có text — xoá key nếu tồn tại.")
             try setString(url: footnoteURL, key: "LockScreenFootnote", value: nil)
@@ -40,12 +41,12 @@ enum ConfigTweaksApplyTask {
             onLogUpdate("[Footnote] ✅ Xong.")
         }
 
-        // 3. Xử lý Supervision
+        // 2. Xử lý Supervision
         if isSupervised {
             onLogUpdate("[Supervision] Bật supervision...")
             var dict = loadPlist(url: supervisionURL)
             dict["IsSupervised"] = true
-            dict["OrganizationName"] = "EnsWilde"
+            dict["OrganizationName"] = orgName
             try writePlist(dict, to: supervisionURL)
             onLogUpdate("[Supervision] ✅ Bật xong.")
         } else {
@@ -61,8 +62,6 @@ enum ConfigTweaksApplyTask {
 
         onLogUpdate("[Config] ✅ Config Tweaks đã apply. Respring để thay đổi có hiệu lực.")
     }
-
-    // MARK: - Plist I/O
 
     private static func loadPlist(url: URL) -> NSMutableDictionary {
         guard FileManager.default.fileExists(atPath: url.path) else {
