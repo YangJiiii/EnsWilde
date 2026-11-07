@@ -13,20 +13,21 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
 
     private struct ToneFile {
         let originalName: String
-        let remoteName: String
+        let silentName: String
+        let restoreName: String
     }
 
-    // Ánh xạ file trên máy với file tải từ GitHub
+    // Ánh xạ file gốc, file im lặng, và file khôi phục
     private let toneFiles = [
-        ToneFile(originalName: "StartDisclosureWithTone.m4a", remoteName: "AirBeepStartSilence.m4a"),
-        ToneFile(originalName: "StartDisclosure.caf", remoteName: "AirBeepStartSilence.caf"),
-        ToneFile(originalName: "StopDisclosure.caf", remoteName: "AirBeepStopSilence.caf")
+        ToneFile(originalName: "StartDisclosureWithTone.m4a", silentName: "AirBeepStartSilence.m4a", restoreName: "StartDisclosureWithTone.m4a"),
+        ToneFile(originalName: "StartDisclosure.caf", silentName: "AirBeepStartSilence.caf", restoreName: "StartDisclosure.caf"),
+        ToneFile(originalName: "StopDisclosure.caf", silentName: "AirBeepStopSilence.caf", restoreName: "StopDisclosure.caf")
     ]
     
-    // Link raw Github của bạn
-    private let githubBaseURL = "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde/main/Resources/"
+    private let baseURL = "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde/main/Resources/"
 
-    func apply(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
+    /// isRestore = true: Tải file gốc về. isRestore = false: Tải file im lặng về.
+    func apply(store: ToolStore, isRestore: Bool = false, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
         defer { isProcessing = false }
 
@@ -44,28 +45,32 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."])
         }
 
-        onLogUpdate("Đang tải file âm thanh im lặng từ GitHub...")
-        let stagingDir = try await downloadSilentFiles()
+        let actionName = isRestore ? "Khôi phục" : "Tắt tiếng"
+        onLogUpdate("Đang tải file âm thanh (\(actionName)) từ GitHub...")
+        let stagingDir = try await downloadFiles(isRestore: isRestore)
         defer { try? FileManager.default.removeItem(at: stagingDir) }
 
         onLogUpdate("Đang ghi đè âm thanh qua Airlift...")
         try await writeDirectory(pairingPath: pairingURL.path, sourceDir: stagingDir.path, onLogUpdate: onLogUpdate)
 
-        onLogUpdate("✅ Đã tắt âm thanh thông báo ghi âm cuộc gọi.")
+        onLogUpdate("✅ Đã \(actionName.lowercased()) âm thanh ghi âm cuộc gọi thành công.")
     }
 
-    private func downloadSilentFiles() async throws -> URL {
+    private func downloadFiles(isRestore: Bool) async throws -> URL {
         let stagingDir = FileManager.default.temporaryDirectory.appendingPathComponent("AirliftTones_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
 
         for tone in toneFiles {
-            guard let url = URL(string: githubBaseURL + tone.remoteName) else {
-                throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ cho \(tone.remoteName)"])
+            let remoteFileName = isRestore ? tone.restoreName : tone.silentName
+            let folder = isRestore ? "Original/" : ""
+            
+            guard let url = URL(string: baseURL + folder + remoteFileName) else {
+                throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ cho \(remoteFileName)"])
             }
             
             let (data, response) = try await URLSession.shared.data(from: url)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "Không thể tải \(tone.remoteName) từ GitHub. Hãy kiểm tra lại repo."])
+                throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "Không thể tải \(remoteFileName) từ GitHub. Hãy kiểm tra lại xem file đã có trong thư mục Resources/\(folder) chưa."])
             }
             
             let destURL = stagingDir.appendingPathComponent(tone.originalName)
