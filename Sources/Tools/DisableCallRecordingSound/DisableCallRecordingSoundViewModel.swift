@@ -262,7 +262,9 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
     }
 
     // MARK: - Helper
-    private static func makeError(code: Int, msg: String) -> NSError {
+    // nonisolated: hàm thuần, không đụng state actor, an toàn gọi từ mọi luồng.
+    // Đây chính là chỗ sửa warning Swift 6.
+    private nonisolated static func makeError(code: Int, msg: String) -> NSError {
         NSError(domain: "AirLift", code: code, userInfo: [NSLocalizedDescriptionKey: msg])
     }
 }
