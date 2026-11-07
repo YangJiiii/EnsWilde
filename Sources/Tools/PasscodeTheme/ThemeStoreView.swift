@@ -16,9 +16,9 @@ struct ThemeStoreView: View {
     var body: some View {
         Group {
             if storeManager.isLoading {
-                ProgressView("Đang tải...")
+                ProgressView("Loading...")
             } else if storeManager.repos.isEmpty {
-                ContentUnavailableView("Trống", systemImage: "tray", description: Text("Ấn nút + để thêm Nguồn."))
+                ContentUnavailableView("Empty", systemImage: "tray", description: Text("Press + to add source"))
             } else {
                 List {
                     ForEach(storeManager.repos) { repo in
@@ -56,16 +56,16 @@ struct ThemeStoreView: View {
                 .listStyle(.insetGrouped)
             }
         }
-        .navigationTitle("Nguồn")
+        .navigationTitle("Theme Store")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showAddRepo = true } label: { Image(systemName: "plus") }
             }
         }
-        .alert("Thêm Repo", isPresented: $showAddRepo) {
-            TextField("https://.../themes.json", text: $newRepoURL).textInputAutocapitalization(.never).keyboardType(.URL)
-            Button("Huỷ", role: .cancel) { newRepoURL = "" }
-            Button("Thêm") {
+        .alert("Add Repo", isPresented: $showAddRepo) {
+            TextField("Paste your repo", text: $newRepoURL).textInputAutocapitalization(.never).keyboardType(.URL)
+            Button("Cancel", role: .cancel) { newRepoURL = "" }
+            Button("Add") {
                 storeManager.addRepo(url: newRepoURL)
                 newRepoURL = ""
                 Task { await storeManager.fetchThemes() }
@@ -125,7 +125,7 @@ struct RepoDetailView: View {
             if repo.errorMessage == nil {
                 if repo.themes.isEmpty {
                     Section {
-                        Text("Nguồn này chưa có gói khả dụng. Hãy bật hoặc làm mới nguồn rồi thử lại.")
+                        Text("This repo don't have any packages available , refresh source or add new source")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }.listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
                 } else {
@@ -151,7 +151,7 @@ struct RepoDetailView: View {
                 }
             } else {
                 Section {
-                    Text("Nguồn này chưa có gói khả dụng. Hãy bật hoặc làm mới nguồn rồi thử lại.")
+                    Text("This repo don't have any packages available , refresh source or add new source")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }.listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
             }
@@ -169,7 +169,7 @@ struct PackageListView: View {
     @ObservedObject var viewModel: PasscodeThemeViewModel
 
     var filteredThemes: [RemoteTheme] {
-        if tagName == "Tất cả gói" { return repo.themes }
+        if tagName == "All Packages" { return repo.themes }
         return repo.themes.filter { $0.category == tagName || ($0.tags?.contains(tagName) ?? false) }
     }
 
@@ -216,11 +216,11 @@ struct RemoteThemeDownloadView: View {
             if let errorMessage = errorMessage { Text(errorMessage).foregroundStyle(.red) }
             
             if isDownloading {
-                ProgressView("Đang tải & Import...")
+                ProgressView("Downloading & Import...")
             } else {
-                Button("Tải & Import") { Task { await downloadAndImport() } }.buttonStyle(.borderedProminent)
+                Button("Download & Import") { Task { await downloadAndImport() } }.buttonStyle(.borderedProminent)
             }
-        }.padding().navigationTitle("Chi tiết").navigationBarTitleDisplayMode(.inline)
+        }.padding().navigationTitle("Detail").navigationBarTitleDisplayMode(.inline)
     }
     
     private func downloadAndImport() async {
@@ -233,7 +233,7 @@ struct RemoteThemeDownloadView: View {
             try await viewModel.importTheme(from: tempFileURL, name: remoteTheme.name)
             try? FileManager.default.removeItem(at: tempFileURL)
             dismiss()
-        } catch { errorMessage = "Lỗi: \(error.localizedDescription)" }
+        } catch { errorMessage = "Error: \(error.localizedDescription)" }
         isDownloading = false
     }
 }
