@@ -9,7 +9,7 @@ enum MobileGestaltApplyTask {
         let mgURL = URL(fileURLWithPath: onDeviceMGPath)
         let mgDir = mgURL.deletingLastPathComponent().path
 
-        guard !store.mgCurrentDict.isEmpty else {
+        guard store.mgCurrentDict.count > 0 else {
             throw mgError(-1, "Store rỗng. Chỉnh gì đó rồi Save Settings trước khi Apply.")
         }
         guard FileManager.default.fileExists(atPath: onDeviceMGPath) else {
