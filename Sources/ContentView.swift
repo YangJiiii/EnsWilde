@@ -62,8 +62,6 @@ struct ContentView: View {
             toolNavigationLink(value: "ConfigTweaks", title: "Config Tweaks", subtitle: "Custom Lock Screen Footnote", icon: "textformat", isEnabled: toolStore.configTweaksEnabled)
             toolNavigationLink(value: "PasscodeTheme", title: "Passcode Theme", subtitle: "Customize passcode screen", icon: "lock.rectangle", isEnabled: themeStore.passcodeThemeEnabled)
             toolNavigationLink(value: "AppleWallet", title: "Apple Wallet", subtitle: "Manage wallet cards", icon: "wallet.pass", isEnabled: walletStore.appleWalletEnabled)
-            
-            // ĐÃ SỬA ICON THÀNH "speaker.slash"
             toolNavigationLink(value: "DisableCallRecordingSound", title: "Disable Call Recording Sound", subtitle: "Disable call recording sound", icon: "speaker.slash", isEnabled: toolStore.disableCallRecordingSoundEnabled)
         }
     }
