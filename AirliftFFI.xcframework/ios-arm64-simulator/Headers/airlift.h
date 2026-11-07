@@ -89,6 +89,19 @@ int32_t al_exploit_run(const char *pairing_path,
                         char **out_json,
                         char **out_error);
 
+// Read one absolute iOS file through the AirTraffic exploit.
+// `out_data` is heap-allocated and must be released with al_bytes_free(out_data, out_len).
+int32_t al_exploit_read_file(const char *pairing_path,
+                              const char *ios_path,
+                              ALLogCallback log_cb,
+                              void *ctx,
+                              uint8_t **out_data,
+                              size_t *out_len,
+                              char **out_error);
+
+// Free bytes returned by al_exploit_read_file().
+void al_bytes_free(uint8_t *ptr, size_t len);
+
 // Write all files from `source_dir` into `target_dir` on the device.
 // Returns 0 on success, 1 on error (with out_error set).
 int32_t al_exploit_write_dir(const char *pairing_path,
