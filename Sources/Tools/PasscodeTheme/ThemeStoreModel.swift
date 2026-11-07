@@ -49,7 +49,7 @@ struct ThemeRepo: Identifiable {
     var errorMessage: String?
     
     var groupedTags: [(name: String, count: Int)] {
-        var counts: [String: Int] = ["Tất cả gói": themes.count]
+        var counts: [String: Int] = ["All Packages": themes.count]
         for theme in themes {
             if let cat = theme.category, !cat.isEmpty { counts[cat, default: 0] += 1 }
             if let tags = theme.tags {
@@ -57,8 +57,8 @@ struct ThemeRepo: Identifiable {
             }
         }
         return counts.map { (name: $0.key, count: $0.value) }.sorted {
-            if $0.name == "Tất cả gói" { return true }
-            if $1.name == "Tất cả gói" { return false }
+            if $0.name == "All Packages" { return true }
+            if $1.name == "All Packages" { return false }
             return $0.count > $1.count
         }
     }
