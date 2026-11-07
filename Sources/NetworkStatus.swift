@@ -1,21 +1,34 @@
 //  NetworkStatus.swift
 //  EnsWilde
+//
+//  Nhận diện động mọi IP của tunnel (utun/ipsec/tap/ppp), bao gồm cả
+//  Tunnel IP (ifa_addr) và Device/Peer IP (ifa_dstaddr).
+//  Dùng TCP probe để xác nhận IP nào thực sự route tới RSD 49152.
 
 import Foundation
 import Darwin
 
 enum NetworkStatus {
 
+    // MARK: - Public API
+
     static func isVPNTunnelPresent() -> Bool {
-        return detectActiveTunnelIP() != nil
+        return !detectAllTunnelIPs().isEmpty
     }
 
-    /// Trả về IP loopback đang hoạt động, hoặc nil nếu không có.
+    /// Trả về IP đầu tiên tìm thấy (tương thích ngược).
     static func detectActiveTunnelIP() -> String? {
+        return detectAllTunnelIPs().first
+    }
+
+    /// Quét TẤT CẢ các tunnel interface đang UP và trả về mọi IP IPv4
+    /// tìm thấy, bao gồm cả `ifa_addr` (Tunnel IP) và `ifa_dstaddr` (Device IP).
+    static func detectAllTunnelIPs() -> [String] {
         var addrs: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&addrs) == 0, let first = addrs else { return nil }
+        guard getifaddrs(&addrs) == 0, let first = addrs else { return [] }
         defer { freeifaddrs(addrs) }
 
+        var ips = Set<String>()
         var pointer: UnsafeMutablePointer<ifaddrs>? = first
 
         while let cur = pointer {
@@ -23,33 +36,34 @@ enum NetworkStatus {
             let name  = String(cString: iface.ifa_name)
             let flags = Int32(iface.ifa_flags)
             let isUp  = (flags & IFF_UP) != 0
-            
-            // Chỉ cần UP, không cần RUNNING (tránh false negative trên iOS 17+)
-            let isTunnel  = name.hasPrefix("utun") || name.hasPrefix("ipsec")
 
-            if isTunnel, isUp,
-               let addr = iface.ifa_addr,
-               addr.pointee.sa_family == UInt8(AF_INET) {
+            let isTunnel = name.hasPrefix("utun")
+                || name.hasPrefix("ipsec")
+                || name.hasPrefix("tap")
+                || name.hasPrefix("ppp")
 
-                var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                if getnameinfo(addr, socklen_t(addr.pointee.sa_len),
-                               &host, socklen_t(host.count),
-                               nil, 0, NI_NUMERICHOST) == 0 {
-                    let ip = String(cString: host)
-                    // Chấp nhận 10.7.x.x (bao gồm cả 10.7.1.1 của LocalDevVPN)
-                    if ip.hasPrefix("10.7.") || ip.hasPrefix("172.16.") || ip.hasPrefix("10.0.0.") {
-                        return ip
+            if isTunnel && isUp {
+                // 1. Tunnel IP (phía ta)
+                if let addr = iface.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
+                    if let ip = ipString(from: addr), isValidLoopback(ip) {
+                        ips.insert(ip)
+                    }
+                }
+                // 2. Device/Peer IP (phía bên kia của point-to-point tunnel)
+                if let dst = iface.ifa_dstaddr, dst.pointee.sa_family == UInt8(AF_INET) {
+                    if let ip = ipString(from: dst), isValidLoopback(ip) {
+                        ips.insert(ip)
                     }
                 }
             }
             pointer = iface.ifa_next
         }
-        return nil
+        return Array(ips).sorted()
     }
 
-    // MARK: - RSD / Lockdown probe
+    // MARK: - TCP probe
 
-    /// Thử TCP connect tới `host:port` với timeout ms. True nếu SYN-ACK nhận được.
+    /// Thử TCP connect tới `host:port` với timeout ms.
     static func probeTCP(host: String, port: UInt16, timeoutMs: Int32) -> Bool {
         let sock = socket(AF_INET, SOCK_STREAM, 0)
         guard sock >= 0 else { return false }
@@ -88,6 +102,8 @@ enum NetworkStatus {
         return (rsd, lockdown)
     }
 
+    // MARK: - Debug
+
     static func dumpInterfaces(log: @escaping (String) -> Void) {
         var addrs: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&addrs) == 0, let first = addrs else { return }
@@ -99,18 +115,38 @@ enum NetworkStatus {
             let name  = String(cString: iface.ifa_name)
             let flags = Int32(iface.ifa_flags)
             let up    = (flags & IFF_UP) != 0
-            
-            var ip = "-"
+
+            var addrStr = "-"
             if let addr = iface.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
-                var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                if getnameinfo(addr, socklen_t(addr.pointee.sa_len),
-                               &host, socklen_t(host.count),
-                               nil, 0, NI_NUMERICHOST) == 0 {
-                    ip = String(cString: host)
-                }
+                addrStr = ipString(from: addr) ?? "-"
             }
-            log("[Net] \(name) ip=\(ip) up=\(up)")
+            var dstStr = "-"
+            if let dst = iface.ifa_dstaddr, dst.pointee.sa_family == UInt8(AF_INET) {
+                dstStr = ipString(from: dst) ?? "-"
+            }
+
+            log("[Net] \(name) up=\(up) addr=\(addrStr) dst=\(dstStr)")
             pointer = iface.ifa_next
         }
+    }
+
+    // MARK: - Helpers
+
+    private static func ipString(from addr: UnsafeMutablePointer<sockaddr>) -> String? {
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        if getnameinfo(addr, socklen_t(addr.pointee.sa_len),
+                       &host, socklen_t(host.count),
+                       nil, 0, NI_NUMERICHOST) == 0 {
+            return String(cString: host)
+        }
+        return nil
+    }
+
+    /// Chỉ chấp nhận các dải IP loopback/private thường dùng cho tunnel.
+    private static func isValidLoopback(_ ip: String) -> Bool {
+        return ip.hasPrefix("10.")
+            || ip.hasPrefix("172.16.")
+            || ip.hasPrefix("192.168.")
+            || ip.hasPrefix("198.18.")
     }
 }
