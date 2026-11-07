@@ -30,7 +30,6 @@ class OnDevicePairingManager: ObservableObject {
         statusLog = ["Đang khởi tạo tiến trình Pairing..."]
         isSuccess = false
         
-        // Giữ app chạy nền trong lúc chờ user bấm Pair
         backgroundTask = UIApplication.shared.beginBackgroundTask {
             self.stopPairing()
         }
@@ -41,22 +40,17 @@ class OnDevicePairingManager: ObservableObject {
     }
     
     private func runAirliftPairing() async {
-        // Lưu file pairing vào Documents giống như các cách import khác
         let outPath = URL.documentsDirectory.appendingPathComponent("pairingFile.plist").path
-        
-        // Cấp con trỏ context để C callback có thể gọi ngược lại Swift
         let context = Unmanaged.passRetained(self).toOpaque()
         defer { Unmanaged<OnDevicePairingManager>.fromOpaque(context).release() }
         
         var result = ALPairResult()
         
-        // Callback khi Host đã sẵn sàng, cung cấp Service ID và Port
         let readyCb: ALPairReadyCb = { ctx, serviceIdPtr, port, txtKeysPtr, txtValsPtr, txtCount in
             guard let ctx = ctx, let serviceIdPtr = serviceIdPtr else { return }
             let manager = Unmanaged<OnDevicePairingManager>.fromOpaque(ctx).takeUnretainedValue()
             let serviceId = String(cString: serviceIdPtr)
             
-            // Build TXT record từ C
             var txtDict: [String: Data] = [:]
             if let txtKeysPtr = txtKeysPtr, let txtValsPtr = txtValsPtr {
                 for i in 0..<txtCount {
@@ -72,7 +66,6 @@ class OnDevicePairingManager: ObservableObject {
             }
         }
         
-        // Callback khi có mã PIN (6 số)
         let pinCb: ALPairPinCb = { pinPtr, ctx in
             guard let ctx = ctx, let pinPtr = pinPtr else { return }
             let manager = Unmanaged<OnDevicePairingManager>.fromOpaque(ctx).takeUnretainedValue()
@@ -84,21 +77,11 @@ class OnDevicePairingManager: ObservableObject {
             }
         }
         
-        // Gọi hàm Airlift (Hàm này sẽ block thread hiện tại)
         let rc = al_pairing_run_host(
-            "10.7.0.1", // Bind IP (loopback VPN)
-            0,          // Port 0 = OS tự chọn port trống
-            "EnsWilde",
-            "iPhone",
-            outPath,
-            nil,        // host_alt_irk_hex (nil nếu pair lần đầu)
-            readyCb,
-            pinCb,
-            context,
-            &result
+            "10.7.0.1", 0, "EnsWilde", "iPhone", outPath, nil,
+            readyCb, pinCb, context, &result
         )
         
-        // Xử lý kết quả
         if let error = result.error {
             let msg = String(cString: error)
             DispatchQueue.main.async {
@@ -109,6 +92,8 @@ class OnDevicePairingManager: ObservableObject {
             DispatchQueue.main.async {
                 self.statusLog.append("✅ Pairing thành công! Đã lưu pairingFile.plist.")
                 self.isSuccess = true
+                // Lưu key để SettingsView nhận diện
+                UserDefaults.standard.set("pairingFile.plist", forKey: "PairingFile")
             }
             al_pairing_result_free(&result)
         }
@@ -120,7 +105,6 @@ class OnDevicePairingManager: ObservableObject {
     
     private func advertiseBonjour(serviceId: String, port: Int32, txtData: Data) {
         statusLog.append("Đang quảng bá Bonjour: \(serviceId) (Port \(port))")
-        
         netService = NetService(domain: "local.", type: "_remotepairing-pairable-host._tcp.", name: serviceId, port: port)
         netService?.delegate = self
         netService?.setTXTRecord(txtData)
