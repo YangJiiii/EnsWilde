@@ -12,19 +12,28 @@ enum AirliftHostResolver {
         let lockdownReachable: Bool
     }
 
-    static let candidates: [String] = [
-        "10.7.0.1",   // LocalDevVPN / StikDebug / SideStore
+    /// Danh sách fallback cứng (dùng khi không phát hiện được IP động nào route được).
+    static let fallbackHosts: [String] = [
+        "10.7.0.1", "10.7.1.1",
         "172.16.0.1",
         "10.0.0.1"
     ]
 
     @discardableResult
     static func bestAvailable(log: @escaping (String) -> Void) async -> String? {
-        log("[Airlift] Đang probe TCP tới RSD 49152 / Lockdown 62078...")
+        // 1. Quét động toàn bộ IP của tunnel interfaces
+        let discovered = NetworkStatus.detectAllTunnelIPs()
+        log("[Airlift] IP phát hiện từ tunnel: \(discovered.isEmpty ? "không có" : discovered.joined(separator: ", "))")
+
+        // Tạo danh sách ứng viên: ưu tiên IP động, sau đó fallback chưa có trong danh sách động
+        var candidates = discovered
+        for fb in fallbackHosts where !candidates.contains(fb) {
+            candidates.append(fb)
+        }
 
         var resolved: ResolutionResult? = nil
-        
-        // Probe TCP trực tiếp. Không cần quan tâm tunnel IP là gì.
+
+        // 2. Probe TCP 49152 / 62078 trên từng ứng viên
         for host in candidates {
             let (rsd, lock) = NetworkStatus.probeDevicePorts(host: host, timeoutMs: 800)
             let rsdStr  = rsd  ? "✅" : "❌"
@@ -38,12 +47,12 @@ enum AirliftHostResolver {
         }
 
         guard let result = resolved else {
-            log("[Airlift] ❌ Không reach được RSD 49152 hoặc Lockdown 62078.")
-            log("[Airlift]    → Mở LocalDevVPN và đảm bảo nó báo 'Connected'.")
-            log("[Airlift]    → Nếu đã Connected, thử tắt/bật lại VPN.")
+            log("[Airlift] ❌ Không reach được RSD 49152 hoặc Lockdown 62078 trên bất kỳ IP nào.")
+            log("[Airlift]    → Đảm bảo LocalDevVPN/StikDebug đã 'Connected'.")
             return nil
         }
 
+        // 3. Set target host cho Airlift
         let setRC = al_set_target_host(result.host)
         if setRC != 0 {
             log("[Airlift] ⚠️ al_set_target_host(\(result.host)) trả mã \(setRC).")
