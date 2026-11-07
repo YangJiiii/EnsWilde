@@ -56,6 +56,61 @@ HEADER_DIR=$(dirname "$HEADER_FILE")
 echo "✅ Tìm thấy Header (device): $HEADER_FILE"
 # ==============================================================================
 
+# ==============================================================================
+# FIX DUPLICATE SYMBOL: _rust_eh_personality (và toàn bộ _rust_*) giữa
+# libairlift_ffi.a và libidevice_ffi.a.
+#
+# Cả 2 đều là Rust static lib, mỗi bên nhúng 1 bản Rust std -> trùng định nghĩa
+# _rust_eh_personality. Ta weaken toàn bộ symbol bắt đầu bằng _rust_* trong
+# libairlift_ffi.a để linker chọn bản strong từ libidevice_ffi.a.
+# ==============================================================================
+echo "==> Fix duplicate symbol: weaken Rust std symbols trong libairlift_ffi.a..."
+
+AIRLIFT_LIB_ABS="$(cd "$LIB_DIR" && pwd)/$(basename "$LIB_PATH")"
+
+# --- Tìm llvm-objcopy ---
+LLVM_OBJCOPY="$(xcrun -f llvm-objcopy 2>/dev/null || true)"
+if [ -z "$LLVM_OBJCOPY" ] || [ ! -x "$LLVM_OBJCOPY" ]; then
+  LLVM_OBJCOPY="$(xcode-select -p 2>/dev/null)/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objcopy"
+fi
+if [ ! -x "$LLVM_OBJCOPY" ]; then
+  for c in /opt/homebrew/opt/llvm/bin/llvm-objcopy /usr/local/opt/llvm/bin/llvm-objcopy; do
+    [ -x "$c" ] && { LLVM_OBJCOPY="$c"; break; }
+  done
+fi
+if [ ! -x "$LLVM_OBJCOPY" ]; then
+  echo "❌ Không tìm thấy llvm-objcopy (đã thử xcrun, Xcode toolchain, Homebrew)"
+  exit 1
+fi
+echo "    → llvm-objcopy: $LLVM_OBJCOPY"
+
+# --- Backup 1 lần (idempotent cho lần chạy lại) ---
+if [ ! -f "${AIRLIFT_LIB_ABS}.orig" ]; then
+  cp "$AIRLIFT_LIB_ABS" "${AIRLIFT_LIB_ABS}.orig"
+  echo "    → Đã backup: ${AIRLIFT_LIB_ABS}.orig"
+else
+  # Khôi phục từ backup trước khi weaken (để chạy lại sạch)
+  cp "${AIRLIFT_LIB_ABS}.orig" "$AIRLIFT_LIB_ABS"
+fi
+
+# --- Weaken toàn bộ _rust_* (bao gồm _rust_eh_personality) ---
+"$LLVM_OBJCOPY" --wildcard --weaken-symbol='_rust_*' "$AIRLIFT_LIB_ABS"
+
+# --- Verify: _rust_eh_personality phải là 'W' (weak) hoặc 'w' ---
+echo "    → Kiểm tra sau weaken:"
+VERIFY="$(nm -g "$AIRLIFT_LIB_ABS" 2>/dev/null | grep ' _rust_eh_personality$' | head -3 || true)"
+if [ -z "$VERIFY" ]; then
+  echo "    ⚠️  Không thấy _rust_eh_personality trong global symbol table (có thể đã ổn)"
+elif echo "$VERIFY" | grep -qE ' [Ww] _rust_eh_personality$'; then
+  echo "    ✅ _rust_eh_personality đã là WEAK:"
+  echo "$VERIFY" | sed 's/^/       /'
+else
+  echo "    ⚠️  Cảnh báo: _rust_eh_personality vẫn chưa chắc là weak:"
+  echo "$VERIFY" | sed 's/^/       /'
+fi
+echo "✅ Hoàn tất fix duplicate symbol."
+# ==============================================================================
+
 export LIB_PATH
 export LIB_DIR
 export HEADER_DIR
