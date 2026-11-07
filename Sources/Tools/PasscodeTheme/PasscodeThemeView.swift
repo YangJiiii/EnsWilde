@@ -41,8 +41,8 @@ struct PasscodeThemeView: View {
                         Text(version.displayName).tag(version.rawValue)
                     }
                 }
-                
-                // Picker chọn Bold Mode
+
+                // Picker Bold Mode
                 Picker("Bold Text Mode", selection: $themeStore.globalBoldModeRaw) {
                     ForEach(PasscodeTheme.BoldMode.allCases, id: \.self) { mode in
                         Text(mode.displayName).tag(mode.rawValue)
@@ -131,64 +131,13 @@ struct PasscodeThemeView: View {
         isResetting = true
         defer { isResetting = false }
 
-        themeStore.themes.removeAll()
-        themeStore.passcodeThemeEnabled = false
-        themeStore.saveThemes()
-
-        let themesURL = URL.documentsDirectory.appendingPathComponent("PasscodeThemes")
-        try? FileManager.default.removeItem(at: themesURL)
-
-        let bq = BadQuery()
-        let cachePaths = [
-            "/var/mobile/Library/Caches/TelephonyUI-8",
-            "/var/mobile/Library/Caches/TelephonyUI-9",
-            "/var/mobile/Library/Caches/TelephonyUI-10"
-        ]
-        for path in cachePaths {
-            if bq.grantAccess(atPath: path).0 {
-                try? FileManager.default.removeItem(atPath: path)
-            }
-        }
-
-        guard NetworkStatus.isVPNTunnelPresent() else {
-            errorMessage = "VPN chưa bật. Bật VPN (SideStore/StikDebug) để khởi động lại máy."
-            showErrorAlert = true
-            return
-        }
-        
-        let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
-        guard FileManager.default.fileExists(atPath: pairingURL.path) else {
-            errorMessage = "Không tìm thấy Pairing File. Vui lòng import lại Pairing File."
-            showErrorAlert = true
-            return
-        }
-
-        try? await Task.sleep(nanoseconds: 500_000_000)
-
-        let ok = rebootDevice(pairingURL: pairingURL)
-        if !ok {
-            errorMessage = "Không thể khởi động lại máy. Kiểm tra VPN và pairing file."
-            showErrorAlert = true
-        }
-    }
-
-    @discardableResult
-    private func rebootDevice(pairingURL: URL) -> Bool {
         do {
-            try JITEnableContext.shared.killProcess(withPID: 1, signal: 9)
-            return true
+            try await viewModel.resetTheme(store: ToolStore()) { log in
+                print(log)
+            }
         } catch {
-            NSLog("[Reboot] killProcess(withPID: 1, SIGKILL) failed: \(error.localizedDescription)")
+            errorMessage = "Lỗi reset: \(error.localizedDescription)"
+            showErrorAlert = true
         }
-
-        if FileManager.default.fileExists(atPath: pairingURL.path) {
-            var errPtr: UnsafeMutablePointer<CChar>? = nil
-            let res = al_device_respring(pairingURL.path, nil, nil, &errPtr)
-            if let e = errPtr { al_string_free(e) }
-            if res == 0 { return true }
-        }
-
-        try? RespringHelper.respring()
-        return false
     }
 }
