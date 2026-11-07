@@ -17,7 +17,25 @@ struct PasscodeTheme: Identifiable, Codable {
     var customPrefix: PrefixLanguage
     var keySize: KeySize
     var telephonyVersion: TelephonyVersion
+    var boldMode: BoldMode // Thuộc tính mới cho Regular / Bold / Full
     
+    // MARK: - Bold Mode Enum
+    enum BoldMode: String, Codable, CaseIterable {
+        case regular = "Regular"
+        case bold = "Bold"
+        case both = "Both (Full)"
+        
+        var displayName: String { rawValue }
+        
+        var suffixes: [String] {
+            switch self {
+            case .regular: return [""]
+            case .bold: return ["-bold"]
+            case .both: return ["", "-bold"]
+            }
+        }
+    }
+
     enum PrefixLanguage: String, Codable, CaseIterable {
         case af = "af"
         case ar = "ar"
@@ -154,21 +172,10 @@ struct PasscodeTheme: Identifiable, Codable {
         case small = "Small Keys"
         case big = "Big Keys"
         
-        /// Reference dimension for small passcode keys in pixels (from Nugget Python implementation)
-        /// Used as the base for calculating scale factors when converting between small and big sizes.
-        /// Value: 202 pixels
         static let smallTargetSize: CGFloat = 202.0
-        
-        /// Reference dimension for big passcode keys in pixels (from Nugget Python implementation)
-        /// Used as the base for calculating scale factors when converting between small and big sizes.
-        /// Value: 287 pixels
         static let bigTargetSize: CGFloat = 287.0
-        
-        /// Threshold for determining if scaling is needed (1% difference)
-        /// If the scale factor differs from 1.0 by less than this threshold, no resize is performed
         static let resizeThreshold: CGFloat = 0.01
         
-        /// Get the reference dimension for this key size
         var targetSize: CGFloat {
             switch self {
             case .small: return Self.smallTargetSize
@@ -178,8 +185,8 @@ struct PasscodeTheme: Identifiable, Codable {
         
         var scaleFactor: CGFloat {
             switch self {
-            case .small: return Self.smallTargetSize / Self.bigTargetSize  // Big to Small
-            case .big: return Self.bigTargetSize / Self.smallTargetSize    // Small to Big
+            case .small: return Self.smallTargetSize / Self.bigTargetSize
+            case .big: return Self.bigTargetSize / Self.smallTargetSize
             }
         }
     }
@@ -208,17 +215,15 @@ struct PasscodeTheme: Identifiable, Codable {
         case big = 2
     }
     
-    // Auto-detected size from ZIP file (before extraction)
     var detectedSize: DetectedSize = .unknown
     
-    // Get the theme's folder path in Documents
     var themeFolderURL: URL {
         URL.documentsDirectory
             .appendingPathComponent("PasscodeThemes")
             .appendingPathComponent(id.uuidString)
     }
     
-    init(id: UUID = UUID(), name: String, customPrefix: PrefixLanguage = .en, keySize: KeySize = .small, detectedSize: DetectedSize = .unknown, telephonyVersion: TelephonyVersion = .telephony10) {
+    init(id: UUID = UUID(), name: String, customPrefix: PrefixLanguage = .en, keySize: KeySize = .small, detectedSize: DetectedSize = .unknown, telephonyVersion: TelephonyVersion = .telephony10, boldMode: BoldMode = .both) {
         self.id = id
         self.name = name
         self.isSelected = false
@@ -226,14 +231,13 @@ struct PasscodeTheme: Identifiable, Codable {
         self.keySize = keySize
         self.detectedSize = detectedSize
         self.telephonyVersion = telephonyVersion
+        self.boldMode = boldMode
     }
     
-    // Get preview image (the "0" key image)
     func getPreviewImage() -> UIImage? {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(atPath: themeFolderURL.path) else { return nil }
         
-        // Look for file containing "-0-" or "-0@" for the 0 key
         if let zeroFile = files.first(where: { $0.contains("-0-") || $0.contains("-0@") }) {
             let imageURL = themeFolderURL.appendingPathComponent(zeroFile)
             return UIImage(contentsOfFile: imageURL.path)
@@ -242,12 +246,10 @@ struct PasscodeTheme: Identifiable, Codable {
         return nil
     }
     
-    // Get all image files in the theme folder
     func getImageFiles() -> [String] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(atPath: themeFolderURL.path) else { return [] }
         
-        // Filter for image files
         return files.filter { file in
             let ext = (file as NSString).pathExtension.lowercased()
             return ext == "png" || ext == "jpg" || ext == "jpeg"
@@ -261,6 +263,7 @@ class PasscodeThemeStore: ObservableObject {
     @AppStorage("PasscodeThemeEnabled") var passcodeThemeEnabled: Bool = false
     @AppStorage("GlobalPasscodeLanguage") var globalCustomPrefixRaw: String = "en"
     @AppStorage("GlobalTelephonyVersion") var globalTelephonyVersionRaw: String = "TelephonyUI-10"
+    @AppStorage("GlobalBoldMode") var globalBoldModeRaw: String = PasscodeTheme.BoldMode.both.rawValue
     
     var globalCustomPrefix: PasscodeTheme.PrefixLanguage {
         get { PasscodeTheme.PrefixLanguage(rawValue: globalCustomPrefixRaw) ?? .en }
@@ -270,6 +273,11 @@ class PasscodeThemeStore: ObservableObject {
     var globalTelephonyVersion: PasscodeTheme.TelephonyVersion {
         get { PasscodeTheme.TelephonyVersion(rawValue: globalTelephonyVersionRaw) ?? .telephony10 }
         set { globalTelephonyVersionRaw = newValue.rawValue }
+    }
+    
+    var globalBoldMode: PasscodeTheme.BoldMode {
+        get { PasscodeTheme.BoldMode(rawValue: globalBoldModeRaw) ?? .both }
+        set { globalBoldModeRaw = newValue.rawValue }
     }
     
     private let themesFileURL: URL
@@ -313,22 +321,16 @@ class PasscodeThemeStore: ObservableObject {
     func deleteTheme(_ theme: PasscodeTheme) {
         themes.removeAll { $0.id == theme.id }
         saveThemes()
-        
-        // Delete the theme's folder from Documents
         try? FileManager.default.removeItem(at: theme.themeFolderURL)
     }
     
     func selectTheme(_ theme: PasscodeTheme) {
-        // Deselect all themes first
         for i in 0..<themes.count {
             themes[i].isSelected = false
         }
-        
-        // Select the chosen theme
         if let index = themes.firstIndex(where: { $0.id == theme.id }) {
             themes[index].isSelected = true
         }
-        
         saveThemes()
     }
     
