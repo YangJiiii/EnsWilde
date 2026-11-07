@@ -80,8 +80,6 @@ struct MobileGestaltView: View {
         }
     }
 
-    // MARK: - Sections
-
     @ViewBuilder private var enableSection: some View {
         Section(header: Text(L("tool_mobile_gestalt"))) {
             Toggle(L("enable_tweak"), isOn: $toolStore.replaceMobileGestaltEnabled)
@@ -107,7 +105,6 @@ struct MobileGestaltView: View {
             .pickerStyle(.menu)
             .onChange(of: dynamicIslandType) { newValue in _ = store.applyDynamicIsland(type: newValue) }
 
-            // Custom Device Name: KHÔNG ICON
             Toggle(isOn: $enableModelName) {
                 Text(L("mg_change_model_name"))
             }
@@ -205,8 +202,6 @@ struct MobileGestaltView: View {
         }
     }
 
-    // MARK: - Actions
-
     private func saveChanges() {
         do {
             let onDeviceURL = URL(fileURLWithPath: MobileGestaltApplyTask.onDeviceMGPath)
@@ -272,8 +267,6 @@ struct MobileGestaltView: View {
             taskRunning = true
         }
     }
-
-    // MARK: - Bindings
 
     func bindingForAppleIntelligence() -> Binding<Bool> {
         guard let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary else { return .constant(false) }
