@@ -46,6 +46,7 @@ class ToolRunner: ObservableObject {
                 onLogUpdate(">> Config Tweaks Done.")
             }
             
+            // CHẠY TIẾN TRÌNH TẮT ÂM THANH GHI ÂM
             if store.disableCallRecordingSoundEnabled {
                 onLogUpdate(">> Applying Disable Call Recording Sound...")
                 let vm = DisableCallRecordingSoundViewModel()
