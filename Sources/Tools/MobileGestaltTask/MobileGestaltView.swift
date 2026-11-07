@@ -119,14 +119,14 @@ struct MobileGestaltView: View {
                 Text(L("mg_subtype_2868")).tag(6)
                 Text(L("mg_subtype_2736")).tag(7)
             } label: {
-                IconPickerLabel(title: L("mg_device_subtype_preset"), systemImage: "dynamicisland")
+                IconPickerLabel(title: L("mg_device_subtype_preset"), systemImage: "dynamicisland", color: .black)
             }
             .pickerStyle(.menu)
             .onChange(of: dynamicIslandType) { newValue in _ = store.applyDynamicIsland(type: newValue) }
 
             Toggle(isOn: $enableModelName) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("textformat")
+                    TweakRowIcon("textformat", color: .blue)
                     Text(L("mg_change_model_name"))
                 }
             }
@@ -138,27 +138,27 @@ struct MobileGestaltView: View {
 
     @ViewBuilder private var hardwareFeaturesSection: some View {
         Section(header: Text(L("section_hardware_features"))) {
-            IconToggle(title: L("mg_boot_chime"), systemImage: "bell.badge.fill", isOn: store.mgByteBinding(key: MGKey.bootChime))
-            IconToggle(title: L("mg_charge_limit"), systemImage: "battery.100percent.bolt", isOn: store.mgByteBinding(key: MGKey.chargeLim))
+            IconToggle(title: L("mg_boot_chime"), systemImage: "bell.badge.fill", color: .orange, isOn: store.mgByteBinding(key: MGKey.bootChime))
+            IconToggle(title: L("mg_charge_limit"), systemImage: "battery.100percent.bolt", color: .green, isOn: store.mgByteBinding(key: MGKey.chargeLim))
                 .disabled(Utils.requiresVersion(17))
             if UIDevice._hasHomeButton() {
-                IconToggle(title: L("mg_tap_to_wake"), systemImage: "hand.tap.fill", isOn: store.mgByteBinding(key: MGKey.tapToWake))
+                IconToggle(title: L("mg_tap_to_wake"), systemImage: "hand.tap.fill", color: .blue, isOn: store.mgByteBinding(key: MGKey.tapToWake))
             }
-            IconToggle(title: L("mg_camera_button"), systemImage: "camera.fill", isOn: store.mgByteBinding(key: MGKey.camButton))
+            IconToggle(title: L("mg_camera_button"), systemImage: "camera.fill", color: .gray, isOn: store.mgByteBinding(key: MGKey.camButton))
                 .disabled(Utils.requiresVersion(18))
         }
     }
 
     @ViewBuilder private var displayAndUISection: some View {
         Section(header: Text(L("section_display_and_ui"))) {
-            IconToggle(title: L("mg_stage_manager"), systemImage: "rectangle.on.rectangle.angled", isOn: store.mgByteBinding(key: MGKey.stageMgr))
-            IconToggle(title: L("mg_aod"), systemImage: "moon.stars.fill", isOn: store.mgByteBinding(key: MGKey.AOD))
+            IconToggle(title: L("mg_stage_manager"), systemImage: "rectangle.on.rectangle.angled", color: .indigo, isOn: store.mgByteBinding(key: MGKey.stageMgr))
+            IconToggle(title: L("mg_aod"), systemImage: "moon.stars.fill", color: .black, isOn: store.mgByteBinding(key: MGKey.AOD))
                 .disabled(Utils.requiresVersion(18))
-            IconToggle(title: L("mg_aod_vibrancy"), systemImage: "circle.lefthalf.filled", isOn: store.mgByteBinding(key: MGKey.AODVibrancy))
+            IconToggle(title: L("mg_aod_vibrancy"), systemImage: "circle.lefthalf.filled", color: .purple, isOn: store.mgByteBinding(key: MGKey.AODVibrancy))
                 .disabled(Utils.requiresVersion(18))
             Toggle(isOn: store.mgTrollPadBinding()) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("ipad.and.iphone")
+                    TweakRowIcon("ipad.and.iphone", color: .teal)
                     Text("Become iPadOS")
                 }
             }
@@ -169,31 +169,31 @@ struct MobileGestaltView: View {
         Section(header: Text(L("section_system_features"))) {
             Toggle(isOn: bindingForMGKeys(["9MZ5AdH43csAUajl/dU+IQ"], type: [Int].self, defaultValue: [1], enableValue: [1, 2])) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("square.grid.2x2.fill")
+                    TweakRowIcon("square.grid.2x2.fill", color: .cyan)
                     Text(L("mg_install_ipad_apps"))
                 }
             }
             Toggle(isOn: store.mgRegionRestrictionsBinding()) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("globe")
+                    TweakRowIcon("globe", color: .blue)
                     Text(L("mg_disable_region"))
                 }
             }
-            IconToggle(title: L("mg_apple_pencil"), systemImage: "pencil.tip", isOn: store.mgByteBinding(key: MGKey.appPencil))
-            IconToggle(title: L("mg_action_button"), systemImage: "button.programmable", isOn: store.mgByteBinding(key: MGKey.actButton))
+            IconToggle(title: L("mg_apple_pencil"), systemImage: "pencil.tip", color: .yellow, isOn: store.mgByteBinding(key: MGKey.appPencil))
+            IconToggle(title: L("mg_action_button"), systemImage: "button.programmable", color: .gray, isOn: store.mgByteBinding(key: MGKey.actButton))
                 .disabled(Utils.requiresVersion(17))
-            IconToggle(title: L("mg_crash_detection"), systemImage: "car.side.rear.and.collision.and.car.side.front", isOn: store.mgByteBinding(key: MGKey.crashDet))
+            IconToggle(title: L("mg_crash_detection"), systemImage: "car.side.rear.and.collision.and.car.side.front", color: .red, isOn: store.mgByteBinding(key: MGKey.crashDet))
         }
     }
 
     @ViewBuilder private var advancedSection: some View {
         Section(header: Text(L("section_internal_features"))) {
-            IconToggle(title: L("mg_internal_storage"), systemImage: "internaldrive.fill", isOn: store.mgByteBinding(key: MGKey.intBuild))
-            IconToggle(title: L("mg_internal_stuff"), systemImage: "wrench.and.screwdriver.fill", isOn: store.mgByteBinding(key: MGKey.intInstall))
-            IconToggle(title: L("mg_security_research"), systemImage: "shield.checkerboard", isOn: store.mgByteBinding(key: MGKey.srd))
+            IconToggle(title: L("mg_internal_storage"), systemImage: "internaldrive.fill", color: .gray, isOn: store.mgByteBinding(key: MGKey.intBuild))
+            IconToggle(title: L("mg_internal_stuff"), systemImage: "wrench.and.screwdriver.fill", color: .gray, isOn: store.mgByteBinding(key: MGKey.intInstall))
+            IconToggle(title: L("mg_security_research"), systemImage: "shield.checkerboard", color: .indigo, isOn: store.mgByteBinding(key: MGKey.srd))
             Toggle(isOn: bindingForAppleIntelligence()) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("sparkles")
+                    TweakRowIcon("sparkles", color: .pink)
                     Text(L("mg_apple_intelligence"))
                 }
             }
@@ -207,7 +207,7 @@ struct MobileGestaltView: View {
                     Text("iPhone 16 Pro Max").tag("iPhone17,2")
                 }
             } label: {
-                IconPickerLabel(title: L("mg_device_model"), systemImage: "iphone.gen3")
+                IconPickerLabel(title: L("mg_device_model"), systemImage: "iphone.gen3", color: .blue)
             }
             .pickerStyle(.menu)
         }
