@@ -10,7 +10,8 @@ enum MobileGestaltApplyTask {
         let mgDir = mgURL.deletingLastPathComponent().path
 
         // ── 1. Sanity check ───────────────────────────────────────
-        guard !store.mgCurrentDict.isEmpty else {
+        // ✅ FIX: NSMutableDictionary không có .isEmpty → dùng .count
+        guard store.mgCurrentDict.count > 0 else {
             throw mgError(-1, "Store rỗng. Chỉnh gì đó rồi Save Settings trước khi Apply.")
         }
         guard FileManager.default.fileExists(atPath: onDeviceMGPath) else {
