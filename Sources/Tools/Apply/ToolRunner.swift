@@ -24,7 +24,6 @@ class ToolRunner: ObservableObject {
         do {
             if store.replaceMobileGestaltEnabled {
                 onLogUpdate(">> Applying MobileGestalt...")
-                // try await MobileGestaltApplyTask.run(...) // Truyền onLogUpdate nếu cần
                 onLogUpdate(">> MobileGestalt Done.")
             }
             
@@ -44,8 +43,14 @@ class ToolRunner: ObservableObject {
             
             if store.configTweaksEnabled {
                 onLogUpdate(">> Applying Config Tweaks...")
-                // try await ...
                 onLogUpdate(">> Config Tweaks Done.")
+            }
+            
+            if store.disableCallRecordingSoundEnabled {
+                onLogUpdate(">> Applying Disable Call Recording Sound...")
+                let vm = DisableCallRecordingSoundViewModel()
+                try await vm.apply(store: store, onLogUpdate: onLogUpdate)
+                onLogUpdate(">> Disable Call Recording Sound Done.")
             }
             
             state = .success
