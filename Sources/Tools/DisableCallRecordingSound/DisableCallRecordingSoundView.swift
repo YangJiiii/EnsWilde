@@ -9,12 +9,16 @@ struct DisableCallRecordingSoundView: View {
     @Environment(\.dismiss) var dismiss
     
     @State private var showSavedAlert = false
+    @State private var isRestoring = false
+    @State private var restoreError: String?
+    
+    @StateObject private var vm = DisableCallRecordingSoundViewModel()
 
     var body: some View {
         Form {
             Section {
                 Toggle("Enable Tweak", isOn: $toolStore.disableCallRecordingSoundEnabled)
-            } // Đã xoá caption
+            }
 
             Section {
                 Button {
@@ -29,10 +33,26 @@ struct DisableCallRecordingSoundView: View {
                 }
                 .disabled(!toolStore.disableCallRecordingSoundEnabled)
             }
+            
+            // NÚT RESTORE
+            Section {
+                Button(role: .destructive) {
+                    restoreSounds()
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.counterclockwise")
+                        Text(isRestoring ? "Restoring..." : "Restore Default Sounds").font(.headline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                }
+                .disabled(isRestoring)
+            } footer: {
+                Text("Tải file âm thanh gốc từ GitHub (thư mục Resources/Original/) và khôi phục lại tiếng Bíp mặc định.")
+            }
         }
         .navigationTitle("Disable Call Recording Sound")
         .navigationBarTitleDisplayMode(.inline)
-        // Popup thông báo
         .alert("Saved", isPresented: $showSavedAlert) {
             Button("OK") {
                 showApplyTab = true
@@ -40,6 +60,32 @@ struct DisableCallRecordingSoundView: View {
             }
         } message: {
             Text("Changes saved. Please go to the Apply tab to apply them.")
+        }
+        .alert("Lỗi Restore", isPresented: .init(get: { restoreError != nil }, set: { if !$0 { restoreError = nil } })) {
+            Button("OK", role: .cancel) { restoreError = nil }
+        } message: {
+            Text(restoreError ?? "")
+        }
+    }
+    
+    private func restoreSounds() {
+        isRestoring = true
+        Task {
+            do {
+                try await vm.apply(store: toolStore, isRestore: true) { log in
+                    print(log)
+                }
+                await MainActor.run {
+                    toolStore.disableCallRecordingSoundEnabled = false // Tắt toggle
+                    isRestoring = false
+                    showSavedAlert = true 
+                }
+            } catch {
+                await MainActor.run {
+                    isRestoring = false
+                    restoreError = error.localizedDescription
+                }
+            }
         }
     }
 }
