@@ -63,8 +63,8 @@ struct ContentView: View {
             toolNavigationLink(value: "PasscodeTheme", title: "Passcode Theme", subtitle: "Customize passcode screen", icon: "lock.rectangle", isEnabled: themeStore.passcodeThemeEnabled)
             toolNavigationLink(value: "AppleWallet", title: "Apple Wallet", subtitle: "Manage wallet cards", icon: "wallet.pass", isEnabled: walletStore.appleWalletEnabled)
             
-            // ĐỔI ICON TẠI ĐÂY
-            toolNavigationLink(value: "DisableCallRecordingSound", title: "Disable Call Recording Sound", subtitle: "Disable call recording sound", icon: "speaker.slash.fill", isEnabled: toolStore.disableCallRecordingSoundEnabled)
+            // ĐÃ SỬA ICON THÀNH "speaker.slash"
+            toolNavigationLink(value: "DisableCallRecordingSound", title: "Disable Call Recording Sound", subtitle: "Disable call recording sound", icon: "speaker.slash", isEnabled: toolStore.disableCallRecordingSoundEnabled)
         }
     }
 
