@@ -71,10 +71,13 @@ struct ApplyTabView: View {
         return false
     }
 
+    // DANH SÁCH CÁC TWEAK ĐANG BẬT
     private var enabledTweaks: [(String, String)] {
         var list: [(String, String)] = []
         
-        if toolStore.disableCallRecordingSoundEnabled { list.append(("Disable Call Recording Sound", "phone.badge.waveform")) }
+        // ĐÃ SỬA ICON THÀNH speaker.slash CHO KHỚP VỚI TRANG CHỦ
+        if toolStore.disableCallRecordingSoundEnabled { list.append(("Disable Call Recording Sound", "speaker.slash")) }
+        
         if themeStore.passcodeThemeEnabled { list.append((L("tool_passcode_theme"), "lock.rectangle")) }
         if walletStore.appleWalletEnabled { list.append((L("tool_apple_wallet"), "wallet.pass")) }
         if toolStore.replaceMobileGestaltEnabled { list.append((L("tool_mobile_gestalt"), "cpu")) }
