@@ -5,13 +5,18 @@ import Network
 @MainActor
 class DisableCallRecordingSoundViewModel: ObservableObject {
     @Published var isProcessing = false
-    @Published var currentStatus: String = "Checking..."
-    @Published var isTweakActive: Bool = false
+    @Published var isChecking = false
+    
+    @Published var toneStatus: String = "Unknown"
+    @Published var isToneSilenced: Bool = false
+    
+    @Published var backupStatus: String = "Unknown"
+    @Published var isBackupReady: Bool = false
 
     private let targetDirectory = "/var/mobile/Library/CallServices/Greetings/default"
     
-    private var backupDirectory: URL {
-        URL.documentsDirectory.appendingPathComponent("CallSoundBackups", isDirectory: true)
+    var backupDirectory: URL {
+        URL.documentsDirectory.appendingPathComponent("AirBeepBackups", isDirectory: true)
     }
 
     private struct ToneFile {
@@ -27,39 +32,80 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
     
     private let githubBaseURL = "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde/main/Resources/"
 
-    // MARK: - Check Status
-    func checkStatus() {
-        let bq = BadQuery()
-        guard bq.grantAccess(atPath: targetDirectory).0 else {
-            currentStatus = "Không thể đọc quyền (BadQuery failed)"
-            isTweakActive = false
+    // MARK: - 1. Check Tone Status (Đọc file thực tế từ máy)
+    func checkToneStatus() async {
+        isChecking = true
+        defer { isChecking = false }
+        
+        let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
+        guard FileManager.default.fileExists(atPath: pairingURL.path), NetworkStatus.isVPNTunnelPresent() else {
+            toneStatus = "Cần VPN & Pairing File"
+            isToneSilenced = false
             return
         }
         
-        var isSilenced = 0
-        var isOriginal = 0
+        guard await AirliftHostResolver.bestAvailable(log: { _ in }) != nil else {
+            toneStatus = "Không tìm thấy RSD Tunnel"
+            isToneSilenced = false
+            return
+        }
+
+        // Đọc file StartDisclosureWithTone.m4a để check dung lượng
+        let remotePath = "\(targetDirectory)/StartDisclosureWithTone.m4a"
+        var outData: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: UInt = 0
+        var outErr: UnsafeMutablePointer<CChar>? = nil
         
-        for tone in toneFiles {
-            let fileURL = URL(fileURLWithPath: targetDirectory).appendingPathComponent(tone.originalName)
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-               let size = attrs[.size] as? UInt64 {
-                if size < 15000 {
-                    isSilenced += 1
-                } else {
-                    isOriginal += 1
-                }
+        let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: { _ in })
+        defer { AirliftFFIBridge.releaseLogCallback(ctx) }
+
+        let res = pairingURL.path.withCString { pPath in
+            remotePath.withCString { rPath in
+                al_exploit_read_file(pPath, rPath, cb, ctx, &outData, &outLen, &outErr)
             }
         }
-        
-        if isSilenced >= 2 {
-            isTweakActive = true
-            currentStatus = "Active (Đã tắt tiếng)"
-        } else if isOriginal >= 2 {
-            isTweakActive = false
-            currentStatus = "Inactive (Âm thanh gốc)"
+
+        if res == 0, let dataPtr = outData {
+            let size = Int(outLen)
+            al_bytes_free(dataPtr, outLen) // Giải phóng
+            
+            // File im lặng của AirBeep thường rất nhỏ (< 10KB)
+            // File gốc của Apple thường > 50KB
+            if size < 15000 {
+                isToneSilenced = true
+                toneStatus = "Silenced (Đã tắt tiếng - \(size) bytes)"
+            } else {
+                isToneSilenced = false
+                toneStatus = "Original (Âm thanh gốc - \(size) bytes)"
+            }
         } else {
-            isTweakActive = false
-            currentStatus = "Unknown (Thiếu file)"
+            if let errPtr = outErr {
+                toneStatus = "Lỗi: \(String(cString: errPtr))"
+                al_string_free(errPtr)
+            } else {
+                toneStatus = "Không thể đọc file (Code: \(res))"
+            }
+            isToneSilenced = false
+        }
+    }
+
+    // MARK: - 2. Check Backup Status
+    func checkBackupStatus() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: backupDirectory.path) else {
+            backupStatus = "Chưa có Backup"
+            isBackupReady = false
+            return
+        }
+        
+        let neededCount = toneFiles.filter { fm.fileExists(atPath: backupDirectory.appendingPathComponent($0.originalName).path) }.count
+        
+        if neededCount >= 2 {
+            isBackupReady = true
+            backupStatus = "Đã có Backup (\(neededCount)/3 files)"
+        } else {
+            isBackupReady = false
+            backupStatus = "Backup chưa đủ (\(neededCount)/3 files)"
         }
     }
 
@@ -82,93 +128,90 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."])
         }
 
-        var stagingDir: URL
-        
+        let stagingDir = FileManager.default.temporaryDirectory.appendingPathComponent("AirliftTones_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stagingDir) }
+
         if isRestore {
             onLogUpdate("Đang lấy file gốc từ bộ nhớ Backup của App...")
-            stagingDir = try prepareRestoreFiles()
+            guard isBackupReady else {
+                throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "Chưa có Backup. Hãy bật Tweak và Apply lần đầu để App tự động sao lưu."])
+            }
+            
+            for tone in toneFiles {
+                let backupURL = backupDirectory.appendingPathComponent(tone.originalName)
+                let destURL = stagingDir.appendingPathComponent(tone.originalName)
+                if FileManager.default.fileExists(atPath: backupURL.path) {
+                    try FileManager.default.copyItem(at: backupURL, to: destURL)
+                }
+            }
         } else {
-            onLogUpdate("Đang sao lưu file âm thanh gốc...")
-            try backupOriginalFiles()
+            try await autoBackupIfNeeded(pairingPath: pairingURL.path, onLogUpdate: onLogUpdate)
             
             onLogUpdate("Đang tải file âm thanh im lặng từ GitHub...")
-            stagingDir = try await downloadSilentFiles()
+            for tone in toneFiles {
+                guard let url = URL(string: githubBaseURL + tone.silentName) else {
+                    throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ cho \(tone.silentName)"])
+                }
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                    throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "Không thể tải \(tone.silentName) từ GitHub."])
+                }
+                let destURL = stagingDir.appendingPathComponent(tone.originalName)
+                try data.write(to: destURL)
+            }
         }
-        
-        defer { try? FileManager.default.removeItem(at: stagingDir) }
 
         onLogUpdate("Đang ghi đè âm thanh qua Airlift...")
         try await writeDirectory(pairingPath: pairingURL.path, sourceDir: stagingDir.path, onLogUpdate: onLogUpdate)
 
         let actionName = isRestore ? "khôi phục" : "tắt tiếng"
-        onLogUpdate("✅ Đã \(actionName) âm thanh ghi âm cuộc gọi thành công.")
+        onLogUpdate("✅ Đã \(actionName) âm thanh thành công.")
         
-        checkStatus()
+        checkBackupStatus()
+        await checkToneStatus()
     }
 
-    private func backupOriginalFiles() throws {
-        let bq = BadQuery()
-        guard bq.grantAccess(atPath: targetDirectory).0 else {
-            throw NSError(domain: "AirLift", code: -5, userInfo: [NSLocalizedDescriptionKey: "Không thể xin quyền BadQuery để sao lưu file gốc."])
-        }
-        
-        if !FileManager.default.fileExists(atPath: backupDirectory.path) {
-            try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
+    // MARK: - Tự động Backup
+    private func autoBackupIfNeeded(pairingPath: String, onLogUpdate: @escaping (String) -> Void) async throws {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: backupDirectory.path) {
+            try fm.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
         }
 
         for tone in toneFiles {
-            let remoteURL = URL(fileURLWithPath: targetDirectory).appendingPathComponent(tone.originalName)
-            let backupURL = backupDirectory.appendingPathComponent(tone.originalName)
+            let backupPath = backupDirectory.appendingPathComponent(tone.originalName).path
+            if fm.fileExists(atPath: backupPath) { continue }
             
-            if !FileManager.default.fileExists(atPath: backupURL.path) {
-                if FileManager.default.fileExists(atPath: remoteURL.path) {
-                    try FileManager.default.copyItem(at: remoteURL, to: backupURL)
+            let remotePath = "\(targetDirectory)/\(tone.originalName)"
+            var outData: UnsafeMutablePointer<UInt8>? = nil
+            var outLen: UInt = 0
+            var outErr: UnsafeMutablePointer<CChar>? = nil
+
+            onLogUpdate("[Backup] Đang trích xuất \(tone.originalName)...")
+            
+            let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
+            defer { AirliftFFIBridge.releaseLogCallback(ctx) }
+
+            let res = pairingPath.withCString { pPath in
+                remotePath.withCString { rPath in
+                    al_exploit_read_file(pPath, rPath, cb, ctx, &outData, &outLen, &outErr)
+                }
+            }
+
+            if res == 0, let dataPtr = outData, outLen > 0 {
+                let data = Data(bytes: dataPtr, count: Int(outLen))
+                try data.write(to: URL(fileURLWithPath: backupPath))
+                al_bytes_free(dataPtr, outLen)
+                onLogUpdate("[Backup] ✅ Đã sao lưu \(tone.originalName) (\(outLen) bytes)")
+            } else {
+                if let errPtr = outErr {
+                    let msg = String(cString: errPtr)
+                    onLogUpdate("⚠️ Không thể đọc \(tone.originalName): \(msg)")
+                    al_string_free(errPtr)
                 }
             }
         }
-    }
-
-    private func prepareRestoreFiles() throws -> URL {
-        let stagingDir = FileManager.default.temporaryDirectory.appendingPathComponent("AirliftRestore_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
-        
-        var foundAny = false
-        for tone in toneFiles {
-            let backupURL = backupDirectory.appendingPathComponent(tone.originalName)
-            let destURL = stagingDir.appendingPathComponent(tone.originalName)
-            
-            if FileManager.default.fileExists(atPath: backupURL.path) {
-                try FileManager.default.copyItem(at: backupURL, to: destURL)
-                foundAny = true
-            }
-        }
-        
-        guard foundAny else {
-            throw NSError(domain: "AirLift", code: -6, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy file backup nào. Có thể bạn chưa từng Apply tính năng này."])
-        }
-        
-        return stagingDir
-    }
-    
-    private func downloadSilentFiles() async throws -> URL {
-        let stagingDir = FileManager.default.temporaryDirectory.appendingPathComponent("AirliftTones_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
-
-        for tone in toneFiles {
-            guard let url = URL(string: githubBaseURL + tone.silentName) else {
-                throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ cho \(tone.silentName)"])
-            }
-            
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "Không thể tải \(tone.silentName) từ GitHub."])
-            }
-            
-            let destURL = stagingDir.appendingPathComponent(tone.originalName)
-            try data.write(to: destURL)
-        }
-
-        return stagingDir
     }
 
     private func writeDirectory(pairingPath: String, sourceDir: String, onLogUpdate: @escaping (String) -> Void) async throws {
