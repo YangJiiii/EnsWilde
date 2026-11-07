@@ -3,7 +3,7 @@ import PhotosUI
 import UniformTypeIdentifiers
 import ZIPFoundation
 
-// MARK: - WalletCardPreview
+// MARK: - WalletCardPreview (Giao diện ngoài danh sách)
 struct WalletCardPreview: View {
     let card: AppleWalletCard
     let index: Int
@@ -50,42 +50,33 @@ struct WalletCardPreview: View {
     }
 }
 
-// MARK: - AppleWalletCardDetailView
+// MARK: - AppleWalletCardDetailView (Giao diện sửa Card)
 struct AppleWalletCardDetailView: View {
     @State private var card: AppleWalletCard
     @ObservedObject var walletStore: AppleWalletStore
     @Environment(\.dismiss) var dismiss
 
     @State private var cardName: String
-    @State private var useRetina: Bool
     @State private var enabled: Bool
     @State private var primaryAccountSuffix: String
     @State private var hasPassJSON: Bool
 
-    @State private var backgroundImage: UIImage?
-    @State private var frontFaceImage: UIImage?
-    @State private var placeHolderImage: UIImage?
-    @State private var previewImage: UIImage?
-
-    @State private var selectedType: ImageType?
+    @State private var cardImage: UIImage?
     @State private var pickerItem: PhotosPickerItem?
     @State private var showPicker = false
     @State private var showDeleteAlert = false
-
-    enum ImageType: String { case background, frontFace, placeHolder, preview }
 
     init(card: AppleWalletCard, walletStore: AppleWalletStore) {
         _card = State(initialValue: card)
         self.walletStore = walletStore
         _cardName = State(initialValue: card.name)
-        _useRetina = State(initialValue: card.useRetina)
         _enabled = State(initialValue: card.enabled)
         _primaryAccountSuffix = State(initialValue: card.getPrimaryAccountSuffix() ?? "")
         _hasPassJSON = State(initialValue: card.hasPassJSON)
-        _backgroundImage = State(initialValue: card.backgroundImageData.flatMap(UIImage.init(data:)))
-        _frontFaceImage = State(initialValue: card.frontFaceImageData.flatMap(UIImage.init(data:)))
-        _placeHolderImage = State(initialValue: card.placeHolderImageData.flatMap(UIImage.init(data:)))
-        _previewImage = State(initialValue: card.previewImageData.flatMap(UIImage.init(data:)))
+        
+        // Ưu tiên load backgroundImage, nếu không có thì load previewImage
+        let imgData = card.backgroundImageData ?? card.previewImageData
+        _cardImage = State(initialValue: imgData.flatMap(UIImage.init(data:)))
     }
 
     var body: some View {
@@ -93,27 +84,48 @@ struct AppleWalletCardDetailView: View {
             Section(header: Text("Card Info")) {
                 TextField("Card Name", text: $cardName)
                 Text("ID: \(card.id)").font(.caption).foregroundStyle(.secondary)
-                Toggle("Enabled", isOn: $enabled)
-                Toggle("Use @3x (Retina)", isOn: $useRetina)
-            }
-
-            Section(header: Text("Images")) {
-                imageRow("Background", image: backgroundImage) { pick(.background) }
-                imageRow("Front Face", image: frontFaceImage) { pick(.frontFace) }
-                imageRow("Placeholder", image: placeHolderImage) { pick(.placeHolder) }
-                imageRow("Preview", image: previewImage) { pick(.preview) }
-            }
-
-            Section(header: Text("pass.json")) {
+                
+                // Thêm ô nhập số cuối thẻ (8390)
                 if hasPassJSON {
-                    TextField("primaryAccountSuffix", text: $primaryAccountSuffix)
-                    Button("Save pass.json") { card.setPrimaryAccountSuffix(primaryAccountSuffix) }
-                    Button(role: .destructive) {
-                        card.deletePassJSON(); hasPassJSON = false
-                    } label: { Text("Delete pass.json") }
-                } else {
-                    Text("No pass.json in this card.").foregroundStyle(.secondary)
+                    HStack {
+                        Text("Last 4 Digits")
+                        Spacer()
+                        TextField("8390", text: $primaryAccountSuffix)
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.numberPad)
+                    }
                 }
+                
+                Toggle("Enabled", isOn: $enabled)
+            }
+
+            Section(header: Text("Card Image (Preview)")) {
+                Button {
+                    showPicker = true
+                } label: {
+                    if let cardImage {
+                        Image(uiImage: cardImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 180)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    } else {
+                        VStack(spacing: 12) {
+                            Image(systemName: "photo")
+                                .font(.system(size: 40))
+                                .foregroundStyle(.secondary)
+                            Text("Tap to select card image")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 180)
+                        .background(Color.secondary.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+                .buttonStyle(.plain)
             }
 
             Section {
@@ -131,52 +143,35 @@ struct AppleWalletCardDetailView: View {
         } message: { Text("Delete this card permanently?") }
         .photosPicker(isPresented: $showPicker, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { item in
-            guard let item, let type = selectedType else { return }
+            guard let item else { return }
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self),
                    let ui = UIImage(data: data) {
                     await MainActor.run {
-                        switch type {
-                        case .background: backgroundImage = ui
-                        case .frontFace: frontFaceImage = ui
-                        case .placeHolder: placeHolderImage = ui
-                        case .preview: previewImage = ui
-                        }
-                        selectedType = nil; pickerItem = nil
+                        cardImage = ui
+                        pickerItem = nil
                     }
                 }
             }
         }
     }
 
-    private func pick(_ t: ImageType) { selectedType = t; showPicker = true }
-
-    @ViewBuilder
-    private func imageRow(_ title: String, image: UIImage?, onTap: @escaping () -> Void) -> some View {
-        Button(action: onTap) {
-            HStack {
-                Text(title)
-                Spacer()
-                if let image {
-                    Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
-                        .frame(width: 60, height: 40).clipShape(RoundedRectangle(cornerRadius: 6))
-                } else {
-                    Text("None").foregroundStyle(.secondary)
-                }
-                Image(systemName: "chevron.right").foregroundStyle(.secondary)
-            }
-        }.buttonStyle(.plain)
-    }
-
     private func saveAll() {
         card.name = cardName
-        card.useRetina = useRetina
         card.enabled = enabled
-        if let backgroundImage { card.backgroundImageData = backgroundImage.pngData() }
-        if let frontFaceImage { card.frontFaceImageData = frontFaceImage.pngData() }
-        if let placeHolderImage { card.placeHolderImageData = placeHolderImage.pngData() }
-        if let previewImage { card.previewImageData = previewImage.pngData() }
-        if hasPassJSON { card.setPrimaryAccountSuffix(primaryAccountSuffix) }
+        
+        if let cardImage {
+            // Gán 1 ảnh này cho cả 3 vị trí để thẻ hiển thị đẹp nhất
+            let data = cardImage.pngData()
+            card.backgroundImageData = data
+            card.previewImageData = data
+            card.frontFaceImageData = data
+            card.placeHolderImageData = data
+        }
+        
+        if hasPassJSON {
+            card.setPrimaryAccountSuffix(primaryAccountSuffix)
+        }
         walletStore.updateCard(card)
     }
 }
