@@ -5,7 +5,7 @@ struct TweakRowIcon: View {
     var body: some View {
         Image(systemName: systemImage)
             .font(.system(size: 20, weight: .medium))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.secondary) // Đơn sắc xám
             .frame(width: 26, alignment: .center)
             .accessibilityHidden(true)
     }
