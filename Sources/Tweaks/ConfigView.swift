@@ -6,27 +6,22 @@ struct ConfigView: View {
     @AppStorage("ConfigFootnoteText") private var footnoteText: String = ""
     @AppStorage("ConfigSupervised") private var supervised: Bool = false
     @AppStorage("ConfigOrgName") private var orgName: String = ""
-
+    
     @State private var showSavedAlert = false
 
     var body: some View {
         Form {
             Section(header: Text("Config Tweaks")) {
-                // Bỏ icon, chỉ để Toggle
                 Toggle("Enable Tweak", isOn: $toolStore.configTweaksEnabled)
             }
 
             Section(header: Text("Lock Screen Footnote")) {
-                // Bỏ icon, chỉ để TextField với placeholder
                 TextField("Nhập chữ cho màn hình khoá...", text: $footnoteText)
                     .autocorrectionDisabled()
                 
-                // Khung preview
                 if !footnoteText.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Preview:")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Text("Preview:").font(.caption).foregroundStyle(.secondary)
                         Text(footnoteText)
                             .font(.body)
                             .padding(8)
@@ -41,16 +36,12 @@ struct ConfigView: View {
                 Toggle("Enable Supervision", isOn: $supervised)
                 
                 if supervised {
-                    // Ô nhập Organization Name với placeholder xám
                     TextField("Nhập tên tổ chức (Organization Name)...", text: $orgName)
                         .autocorrectionDisabled()
                     
-                    // Khung preview
                     if !orgName.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Preview:")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Text("Preview:").font(.caption).foregroundStyle(.secondary)
                             Text(orgName)
                                 .font(.body)
                                 .padding(8)
@@ -70,22 +61,25 @@ struct ConfigView: View {
                     HStack {
                         Image(systemName: "square.and.arrow.down")
                         Text("Apply Save Changes").font(.headline)
-                    }
-                    .frame(maxWidth: .infinity)
+                    }.frame(maxWidth: .infinity)
                 }
 
                 Button(role: .destructive) {
-                    // Xoá sạch dữ liệu
+                    // Reset sạch AppStorage
                     toolStore.configTweaksEnabled = false
                     footnoteText = ""
                     supervised = false
                     orgName = ""
+                    
+                    // Force UserDefaults update
+                    UserDefaults.standard.removeObject(forKey: "ConfigFootnoteText")
+                    UserDefaults.standard.removeObject(forKey: "ConfigSupervised")
+                    UserDefaults.standard.removeObject(forKey: "ConfigOrgName")
                 } label: {
                     HStack {
                         Image(systemName: "arrow.counterclockwise")
                         Text("Restore Save Changes").font(.headline)
-                    }
-                    .frame(maxWidth: .infinity)
+                    }.frame(maxWidth: .infinity)
                 }
             }
         }
