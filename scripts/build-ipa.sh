@@ -68,18 +68,32 @@ echo "==> Fix duplicate symbol: weaken Rust std symbols trong libairlift_ffi.a..
 
 AIRLIFT_LIB_ABS="$(cd "$LIB_DIR" && pwd)/$(basename "$LIB_PATH")"
 
-# --- Tìm llvm-objcopy ---
+# --- Tìm hoặc CÀI ĐẶT llvm-objcopy ---
 LLVM_OBJCOPY="$(xcrun -f llvm-objcopy 2>/dev/null || true)"
+
+# Nếu chưa có, thử tìm trong Homebrew (cả Intel lẫn Apple Silicon)
 if [ -z "$LLVM_OBJCOPY" ] || [ ! -x "$LLVM_OBJCOPY" ]; then
-  LLVM_OBJCOPY="$(xcode-select -p 2>/dev/null)/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objcopy"
-fi
-if [ ! -x "$LLVM_OBJCOPY" ]; then
-  for c in /opt/homebrew/opt/llvm/bin/llvm-objcopy /usr/local/opt/llvm/bin/llvm-objcopy; do
-    [ -x "$c" ] && { LLVM_OBJCOPY="$c"; break; }
+  for c in \
+    /opt/homebrew/opt/llvm/bin/llvm-objcopy \
+    /usr/local/opt/llvm/bin/llvm-objcopy; do
+    if [ -x "$c" ]; then LLVM_OBJCOPY="$c"; break; fi
   done
 fi
-if [ ! -x "$LLVM_OBJCOPY" ]; then
-  echo "❌ Không tìm thấy llvm-objcopy (đã thử xcrun, Xcode toolchain, Homebrew)"
+
+# Nếu vẫn chưa có, CÀI qua Homebrew (dành cho runner CI)
+if [ -z "$LLVM_OBJCOPY" ] || [ ! -x "$LLVM_OBJCOPY" ]; then
+  echo "    → Không tìm thấy llvm-objcopy. Đang cài đặt qua Homebrew..."
+  if command -v brew >/dev/null 2>&1; then
+    brew install llvm >/dev/null 2>&1 || true
+    BREW_PREFIX="$(brew --prefix)"
+    LLVM_OBJCOPY="${BREW_PREFIX}/opt/llvm/bin/llvm-objcopy"
+  fi
+fi
+
+# Kiểm tra lần cuối
+if [ -z "$LLVM_OBJCOPY" ] || [ ! -x "$LLVM_OBJCOPY" ]; then
+  echo "❌ Vẫn không tìm thấy llvm-objcopy sau khi cài đặt."
+  echo "   Vui lòng chạy thủ công: brew install llvm"
   exit 1
 fi
 echo "    → llvm-objcopy: $LLVM_OBJCOPY"
@@ -187,7 +201,6 @@ ruby -e '
     ldflags << "-Wl,-exported_symbols_list,\"#{ENV["EXPORT_SYMBOLS_FILE"]}\""
     ldflags << "-Wl,-u,_ALGetGrappaToken"
     ldflags << "-Wl,-force_load,\"#{abs_lib_path}\""
-    # ❌ ĐÃ BỎ: -Wl,-no_dead_strip_inits_and_terms (obsolete)
     config.build_settings["OTHER_LDFLAGS"] = ldflags
 
     config.build_settings["STRIP_INSTALLED_PRODUCT"] = "NO"
