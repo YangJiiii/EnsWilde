@@ -78,7 +78,7 @@ struct SettingsView: View {
                     if #available(iOS 27.0, *) {
                         Button { showOnDevicePairing = true } label: {
                             Label("Pair On Device (iOS 27+)", systemImage: "iphone.radiowaves.left.and.right")
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(.orage)
                         }
                     }
                 }
@@ -303,19 +303,21 @@ struct AboutView: View {
                 Button(action: { if let url = URL(string: "https://t.me/lsnguyengr") { UIApplication.shared.open(url) } }) {
                     Label(L("about_group_ls"), systemImage: "safari")
                 }
-                Button(action: { if let url = URL(string: "https://t.me/duongduong0908") { UIApplication.shared.open(url) } }) {
+                Button(action: { if let url = URL(string: "https://t.me/lsnguyyniu") { UIApplication.shared.open(url) } }) {
                     Label(L("about_contact"), systemImage: "paperplane.fill")
                 }
             }
             Section(header: Text(L("settings_thanks_to"))) {
-                creditRow(name: "@YangJiii", desc: "Developed EnsWilde")
-                creditRow(name: "@LSNguyen", desc: "Rebuild EnsWilde")
-                creditRow(name: "@skadz108 & @rooootdev", desc: "NeoSpring method")
-                creditRow(name: "@Sidestore team", desc: "Get Pairing File on iOS: StikPair")
-                creditRow(name: "@0xjohnnydev", desc: "Developed the AirLift sandbox escape")
-                creditRow(name: "@forcequit", desc: "Developed the bad_query sandbox escape")
-                creditRow(name: "@jailbreakdotparty", desc: "Source for changing MobileGestalt logic, config file")
-                creditRow(name: "@mak5er", desc: "Dev App AirCard. Method for AirLift Gappa")
+                creditRow(name: "@YangJiii", desc: "For supporting me during development")
+                creditRow(name: "@YangJiii", desc: "Original developer of EnsWilde")
+                creditRow(name: "@LSNguyen", desc: "Developer of new EnsWilde")
+                creditRow(name: "@forcequitOS", desc: "Bad_query exploit")
+                creditRow(name: "@0xjohnnydev", desc: "Airlift exploit")
+                creditRow(name: "@mak5er", desc: "Airlift-On-Device")
+                creditRow(name: "@jailbreakdotparty", desc: "Config tweak , new logic mobilegestalt")
+                creditRow(name: "@LikePass888", desc: "Disable Call Recording Sound (iOS 27)")
+                creditRow(name: "@YiHoooong", desc: "For the silent tone assets and replacement research.")
+                creditRow(name: "@Cộng đồng LSNguyen & YangJiii và những người bạn chat ⚡️", desc: "For support my project.")
             }
             Section(header: Text(L("settings_translators"))) {
                 ForEach(languageManager.availableLanguages.filter { $0.translator != nil && !($0.translator?.isEmpty ?? true) }) { langInfo in
