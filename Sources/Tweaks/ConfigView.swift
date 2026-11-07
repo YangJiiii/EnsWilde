@@ -15,7 +15,7 @@ struct ConfigView: View {
             }
             Section(header: Text("Lock Screen Footnote")) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("text.bubble.fill")
+                    TweakRowIcon("text.bubble.fill", color: .blue)
                     TextField("Footnote text", text: $footnoteText)
                         .autocorrectionDisabled()
                 }
@@ -23,7 +23,7 @@ struct ConfigView: View {
             Section(header: Text("Supervision")) {
                 Toggle(isOn: $supervised) {
                     HStack(spacing: 12) {
-                        TweakRowIcon("checkmark.shield.fill")
+                        TweakRowIcon("checkmark.shield.fill", color: .green)
                         Text("Enable Supervision")
                     }
                 }
