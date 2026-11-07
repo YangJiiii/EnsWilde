@@ -1,6 +1,3 @@
-//  OnDevicePairingManager.swift
-//  EnsWilde
-
 import Foundation
 import AirliftFFI
 import Network
@@ -15,43 +12,44 @@ class OnDevicePairingManager: NSObject, ObservableObject {
     
     private var netService: NetService?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
-    private var pairingTask: Task<Void, Never>?
+    private var isCancelled = false
     
-    override init() {
-        super.init()
-    }
+    override init() { super.init() }
     
     func startPairing() {
         guard #available(iOS 27.0, *) else {
             statusLog.append("❌ Chỉ hỗ trợ Pair On Device trên iOS 27 trở lên.")
             return
         }
-        
         guard !isPairing else { return }
         
         isPairing = true
+        isCancelled = false
         pin = ""
         statusLog = ["Đang khởi tạo tiến trình Pairing..."]
         isSuccess = false
         
+        // Cấp quyền chạy ngầm (tối đa 30s)
         backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
             self?.stopPairing()
         }
         
-        // Kích hoạt xin quyền Local Network
         triggerLocalNetworkPermission { [weak self] granted in
             guard let self = self else { return }
             guard granted else {
                 DispatchQueue.main.async {
-                    self.statusLog.append("❌ Quyền Local Network bị từ chối. Vui lòng bật trong Cài đặt > Quyền riêng tư > Mạng cục bộ.")
+                    self.statusLog.append("❌ Quyền Local Network bị từ chối.")
                     self.isPairing = false
                 }
                 return
             }
             
-            self.pairingTask = Task.detached(priority: .userInitiated) {
-                await self.runAirliftPairing()
+            // SỬ DỤNG THREAD RIÊNG BIỆT CHO HÀM C BLOCKING
+            let thread = Thread {
+                self.runAirliftPairing()
             }
+            thread.qualityOfService = .userInitiated
+            thread.start()
         }
     }
     
@@ -70,7 +68,7 @@ class OnDevicePairingManager: NSObject, ObservableObject {
                 finished = true
                 browser.cancel()
                 DispatchQueue.main.async { completion(false) }
-                print("Local Network permission check failed: \(error)")
+                print("Local Network permission failed: \(error)")
             default:
                 break
             }
@@ -81,19 +79,17 @@ class OnDevicePairingManager: NSObject, ObservableObject {
             guard !finished else { return }
             finished = true
             browser.cancel()
-            DispatchQueue.main.async { completion(false) }
+            DispatchQueue.main.async { completion(true) } // Cố gắng tiếp tục dù timeout
         }
     }
     
-    private func runAirliftPairing() async {
+    // CHẠY TRÊN THREAD RIÊNG (KHÔNG PHẢI MAIN THREAD)
+    nonisolated private func runAirliftPairing() {
         let outPath = URL.documentsDirectory.appendingPathComponent("pairingFile.plist").path
-        let context = Unmanaged.passRetained(self).toOpaque()
+        let context = Unmanaged.passUnretained(self).toOpaque() // Dùng unretained vì View giữ Manager
         
-        // KHÔNG DÙNG [weak self] TRONG C CLOSURE
         let readyCb: ALPairReadyCb = { ctx, serviceIdPtr, port, txtKeysPtr, txtValsPtr, txtCount in
             guard let ctx = ctx, let serviceIdPtr = serviceIdPtr else { return }
-            
-            // Lấy lại instance từ ctx
             let manager = Unmanaged<OnDevicePairingManager>.fromOpaque(ctx).takeUnretainedValue()
             let serviceId = String(cString: serviceIdPtr)
             
@@ -101,9 +97,7 @@ class OnDevicePairingManager: NSObject, ObservableObject {
             if let txtKeysPtr = txtKeysPtr, let txtValsPtr = txtValsPtr {
                 for i in 0..<Int(txtCount) {
                     if let keyPtr = txtKeysPtr[i], let valPtr = txtValsPtr[i] {
-                        let key = String(cString: keyPtr)
-                        let val = String(cString: valPtr)
-                        txtDict[key] = val.data(using: .utf8)
+                        txtDict[String(cString: keyPtr)] = String(cString: valPtr).data(using: .utf8)
                     }
                 }
             }
@@ -116,13 +110,12 @@ class OnDevicePairingManager: NSObject, ObservableObject {
         
         let pinCb: ALPairPinCb = { pinPtr, ctx in
             guard let ctx = ctx, let pinPtr = pinPtr else { return }
-            
             let manager = Unmanaged<OnDevicePairingManager>.fromOpaque(ctx).takeUnretainedValue()
             let pin = String(cString: pinPtr)
             
             DispatchQueue.main.async {
                 manager.pin = pin
-                manager.statusLog.append("🔑 Mã PIN: \(pin) — hãy nhập vào Settings.")
+                manager.statusLog.append("🔑 Mã PIN: \(pin) — hãy nhập ngay vào Settings.")
             }
         }
         
@@ -131,31 +124,18 @@ class OnDevicePairingManager: NSObject, ObservableObject {
             "EnsWilde".withCString { name in
                 "iPhone".withCString { model in
                     outPath.withCString { outPathPtr in
-                        al_pairing_run_host(
-                            bindAddr,
-                            0,
-                            name,
-                            model,
-                            outPathPtr,
-                            nil,
-                            readyCb,
-                            pinCb,
-                            context,
-                            &result
-                        )
+                        al_pairing_run_host(bindAddr, 0, name, model, outPathPtr, nil, readyCb, pinCb, context, &result)
                     }
                 }
             }
         }
-        
-        Unmanaged<OnDevicePairingManager>.fromOpaque(context).release()
         
         DispatchQueue.main.async {
             if rc != 0 || result.error != nil {
                 let msg = result.error != nil ? String(cString: result.error!) : "Mã lỗi C: \(rc)"
                 self.statusLog.append("❌ Pairing thất bại: \(msg)")
             } else {
-                self.statusLog.append("✅ Pairing thành công! Đã lưu pairingFile.plist.")
+                self.statusLog.append("✅ Pairing thành công! Đã lưu file.")
                 self.isSuccess = true
                 UserDefaults.standard.set("pairingFile.plist", forKey: "PairingFile")
             }
@@ -164,6 +144,7 @@ class OnDevicePairingManager: NSObject, ObservableObject {
         }
     }
     
+    @MainActor
     private func advertiseBonjour(serviceId: String, port: UInt16, txtData: Data) {
         statusLog.append("Đang quảng bá Bonjour: \(serviceId) (Port \(port))")
         netService = NetService(domain: "local.", type: "_remotepairing-pairable-host._tcp.", name: serviceId, port: Int32(port))
@@ -173,6 +154,7 @@ class OnDevicePairingManager: NSObject, ObservableObject {
     }
     
     func stopPairing() {
+        isCancelled = true
         netService?.stop()
         netService = nil
         
@@ -180,10 +162,7 @@ class OnDevicePairingManager: NSObject, ObservableObject {
             UIApplication.shared.endBackgroundTask(backgroundTask)
             backgroundTask = .invalid
         }
-        
         isPairing = false
-        pairingTask?.cancel()
-        pairingTask = nil
     }
 }
 
@@ -191,8 +170,7 @@ extension OnDevicePairingManager: NetServiceDelegate {
     func netServiceDidPublish(_ sender: NetService) {
         statusLog.append("✅ Đã phát sóng Bonjour. Hãy vào Settings ngay!")
     }
-    
     func netService(_ sender: NetService, didNotPublish errorDict: [String : NSNumber]) {
-        statusLog.append("❌ Lỗi phát sóng Bonjour: \(errorDict)")
+        statusLog.append("❌ Lỗi Bonjour: \(errorDict)")
     }
 }
