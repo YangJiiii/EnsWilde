@@ -56,26 +56,12 @@ struct MobileGestaltView: View {
         }
         .onChange(of: enableModelName) { enabled in if enabled { applyModelName() } else { removeModelName() } }
         .onChange(of: modelName) { _ in if enableModelName && !modelName.isEmpty { applyModelName() } }
-        .onChange(of: scenePhase) { _ in
-            if scenePhase == .inactive {
-                Utils.bgTask = UIApplication.shared.beginBackgroundTask(expirationHandler: {
-                    UIApplication.shared.endBackgroundTask(Utils.bgTask)
-                    Utils.bgTask = .invalid
-                })
-            } else if scenePhase == .active {
-                if Utils.bgTask != .invalid {
-                    UIApplication.shared.endBackgroundTask(Utils.bgTask)
-                    Utils.bgTask = .invalid
-                }
-            }
-        }
     }
 
     private func hydrateFromDict() {
         if let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary {
             productType = cacheExtra[MGKey.prodType] as? String ?? productType
-            if let artwork = cacheExtra[MGKey.artwork] as? NSDictionary,
-               let subtype = artwork["ArtworkDeviceSubType"] as? Int {
+            if let artwork = cacheExtra[MGKey.artwork] as? NSDictionary, let subtype = artwork["ArtworkDeviceSubType"] as? Int {
                 switch subtype {
                 case 2436: dynamicIslandType = 1
                 case 2556: dynamicIslandType = 2
@@ -87,9 +73,7 @@ struct MobileGestaltView: View {
                 default: dynamicIslandType = 0
                 }
             }
-            if let artwork = cacheExtra[MGKey.artwork] as? NSDictionary,
-               let name = artwork["ArtworkDeviceProductDescription"] as? String,
-               !name.isEmpty {
+            if let artwork = cacheExtra[MGKey.artwork] as? NSDictionary, let name = artwork["ArtworkDeviceProductDescription"] as? String, !name.isEmpty {
                 enableModelName = true
                 modelName = name
             }
@@ -100,7 +84,6 @@ struct MobileGestaltView: View {
 
     @ViewBuilder private var enableSection: some View {
         Section(header: Text(L("tool_mobile_gestalt"))) {
-            // Bỏ icon ở dòng Enable Tweak theo yêu cầu
             Toggle(L("enable_tweak"), isOn: $toolStore.replaceMobileGestaltEnabled)
                 .onChange(of: toolStore.replaceMobileGestaltEnabled) { isEnabled in
                     if !isEnabled { showApplyTab = false }
@@ -119,16 +102,14 @@ struct MobileGestaltView: View {
                 Text(L("mg_subtype_2868")).tag(6)
                 Text(L("mg_subtype_2736")).tag(7)
             } label: {
-                IconPickerLabel(title: L("mg_device_subtype_preset"), systemImage: "dynamicisland", color: .black)
+                IconPickerLabel(title: L("mg_device_subtype_preset"), systemImage: "iphone")
             }
             .pickerStyle(.menu)
             .onChange(of: dynamicIslandType) { newValue in _ = store.applyDynamicIsland(type: newValue) }
 
+            // Custom Device Name: KHÔNG ICON
             Toggle(isOn: $enableModelName) {
-                HStack(spacing: 12) {
-                    TweakRowIcon("textformat", color: .blue)
-                    Text(L("mg_change_model_name"))
-                }
+                Text(L("mg_change_model_name"))
             }
             if enableModelName {
                 TextField(L("mg_model_name_placeholder"), text: $modelName)
@@ -138,27 +119,27 @@ struct MobileGestaltView: View {
 
     @ViewBuilder private var hardwareFeaturesSection: some View {
         Section(header: Text(L("section_hardware_features"))) {
-            IconToggle(title: L("mg_boot_chime"), systemImage: "bell.badge.fill", color: .orange, isOn: store.mgByteBinding(key: MGKey.bootChime))
-            IconToggle(title: L("mg_charge_limit"), systemImage: "battery.100percent.bolt", color: .green, isOn: store.mgByteBinding(key: MGKey.chargeLim))
+            IconToggle(title: L("mg_boot_chime"), systemImage: "speaker.wave.2.fill", isOn: store.mgByteBinding(key: MGKey.bootChime))
+            IconToggle(title: L("mg_charge_limit"), systemImage: "battery.100percent.bolt", isOn: store.mgByteBinding(key: MGKey.chargeLim))
                 .disabled(Utils.requiresVersion(17))
             if UIDevice._hasHomeButton() {
-                IconToggle(title: L("mg_tap_to_wake"), systemImage: "hand.tap.fill", color: .blue, isOn: store.mgByteBinding(key: MGKey.tapToWake))
+                IconToggle(title: L("mg_tap_to_wake"), systemImage: "hand.tap.fill", isOn: store.mgByteBinding(key: MGKey.tapToWake))
             }
-            IconToggle(title: L("mg_camera_button"), systemImage: "camera.fill", color: .gray, isOn: store.mgByteBinding(key: MGKey.camButton))
+            IconToggle(title: L("mg_camera_button"), systemImage: "camera.fill", isOn: store.mgByteBinding(key: MGKey.camButton))
                 .disabled(Utils.requiresVersion(18))
         }
     }
 
     @ViewBuilder private var displayAndUISection: some View {
         Section(header: Text(L("section_display_and_ui"))) {
-            IconToggle(title: L("mg_stage_manager"), systemImage: "rectangle.on.rectangle.angled", color: .indigo, isOn: store.mgByteBinding(key: MGKey.stageMgr))
-            IconToggle(title: L("mg_aod"), systemImage: "moon.stars.fill", color: .black, isOn: store.mgByteBinding(key: MGKey.AOD))
+            IconToggle(title: L("mg_stage_manager"), systemImage: "rectangle.on.rectangle.angled", isOn: store.mgByteBinding(key: MGKey.stageMgr))
+            IconToggle(title: L("mg_aod"), systemImage: "moon.stars.fill", isOn: store.mgByteBinding(key: MGKey.AOD))
                 .disabled(Utils.requiresVersion(18))
-            IconToggle(title: L("mg_aod_vibrancy"), systemImage: "circle.lefthalf.filled", color: .purple, isOn: store.mgByteBinding(key: MGKey.AODVibrancy))
+            IconToggle(title: L("mg_aod_vibrancy"), systemImage: "circle.lefthalf.filled", isOn: store.mgByteBinding(key: MGKey.AODVibrancy))
                 .disabled(Utils.requiresVersion(18))
             Toggle(isOn: store.mgTrollPadBinding()) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("ipad.and.iphone", color: .teal)
+                    TweakRowIcon(systemImage: "ipad.and.iphone")
                     Text("Become iPadOS")
                 }
             }
@@ -169,31 +150,31 @@ struct MobileGestaltView: View {
         Section(header: Text(L("section_system_features"))) {
             Toggle(isOn: bindingForMGKeys(["9MZ5AdH43csAUajl/dU+IQ"], type: [Int].self, defaultValue: [1], enableValue: [1, 2])) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("square.grid.2x2.fill", color: .cyan)
+                    TweakRowIcon(systemImage: "square.grid.2x2.fill")
                     Text(L("mg_install_ipad_apps"))
                 }
             }
             Toggle(isOn: store.mgRegionRestrictionsBinding()) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("globe", color: .blue)
+                    TweakRowIcon(systemImage: "globe")
                     Text(L("mg_disable_region"))
                 }
             }
-            IconToggle(title: L("mg_apple_pencil"), systemImage: "pencil.tip", color: .yellow, isOn: store.mgByteBinding(key: MGKey.appPencil))
-            IconToggle(title: L("mg_action_button"), systemImage: "button.programmable", color: .gray, isOn: store.mgByteBinding(key: MGKey.actButton))
+            IconToggle(title: L("mg_apple_pencil"), systemImage: "applepencil", isOn: store.mgByteBinding(key: MGKey.appPencil))
+            IconToggle(title: L("mg_action_button"), systemImage: "button.horizontal.top.press", isOn: store.mgByteBinding(key: MGKey.actButton))
                 .disabled(Utils.requiresVersion(17))
-            IconToggle(title: L("mg_crash_detection"), systemImage: "car.side.rear.and.collision.and.car.side.front", color: .red, isOn: store.mgByteBinding(key: MGKey.crashDet))
+            IconToggle(title: L("mg_crash_detection"), systemImage: "car.side.rear.and.collision.and.car.side.front", isOn: store.mgByteBinding(key: MGKey.crashDet))
         }
     }
 
     @ViewBuilder private var advancedSection: some View {
         Section(header: Text(L("section_internal_features"))) {
-            IconToggle(title: L("mg_internal_storage"), systemImage: "internaldrive.fill", color: .gray, isOn: store.mgByteBinding(key: MGKey.intBuild))
-            IconToggle(title: L("mg_internal_stuff"), systemImage: "wrench.and.screwdriver.fill", color: .gray, isOn: store.mgByteBinding(key: MGKey.intInstall))
-            IconToggle(title: L("mg_security_research"), systemImage: "shield.checkerboard", color: .indigo, isOn: store.mgByteBinding(key: MGKey.srd))
+            IconToggle(title: L("mg_internal_storage"), systemImage: "internaldrive.fill", isOn: store.mgByteBinding(key: MGKey.intBuild))
+            IconToggle(title: L("mg_internal_stuff"), systemImage: "wrench.and.screwdriver.fill", isOn: store.mgByteBinding(key: MGKey.intInstall))
+            IconToggle(title: L("mg_security_research"), systemImage: "terminal", isOn: store.mgByteBinding(key: MGKey.srd))
             Toggle(isOn: bindingForAppleIntelligence()) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("sparkles", color: .pink)
+                    TweakRowIcon(systemImage: "apple.intelligence")
                     Text(L("mg_apple_intelligence"))
                 }
             }
@@ -207,7 +188,7 @@ struct MobileGestaltView: View {
                     Text("iPhone 16 Pro Max").tag("iPhone17,2")
                 }
             } label: {
-                IconPickerLabel(title: L("mg_device_model"), systemImage: "iphone.gen3", color: .blue)
+                IconPickerLabel(title: L("mg_device_model"), systemImage: "iphone.gen3")
             }
             .pickerStyle(.menu)
         }
@@ -243,9 +224,7 @@ struct MobileGestaltView: View {
             try mobileGestalt.write(to: modMGURL)
             store.loadFromPlist(url: modMGURL)
             showApplyTab = true
-            lastError = MobileGestaltBackupManager.shared.hasBackup
-                ? "Đã lưu + backup pristine. Tab Apply đã mở."
-                : "Đã lưu. Tab Apply đã mở."
+            lastError = "Đã lưu. Tab Apply đã mở."
             showErrorAlert = true
         } catch {
             lastError = "Save failed: \(error)"
@@ -268,8 +247,6 @@ struct MobileGestaltView: View {
             showErrorAlert = true
         }
     }
-
-    // MARK: - Init
 
     init(toolStore: ToolStore) {
         self.toolStore = toolStore
