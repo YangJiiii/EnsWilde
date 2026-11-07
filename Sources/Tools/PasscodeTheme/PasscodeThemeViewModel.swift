@@ -1,7 +1,5 @@
 //  PasscodeThemeViewModel.swift
 //  EnsWilde
-//
-//  Full implementation: Import, Apply (via Airlift), and Reset (Reboot device).
 
 import Foundation
 import SwiftUI
@@ -67,12 +65,7 @@ class PasscodeThemeViewModel: ObservableObject {
         self.store.addTheme(themeWithSize)
     }
 
-    /// Hàm tương thích với View call site cũ
-    func importDefaultPasscode(
-        from sourceURL: URL,
-        name: String,
-        themeStore: PasscodeThemeStore
-    ) async throws {
+    func importDefaultPasscode(from sourceURL: URL, name: String, themeStore: PasscodeThemeStore) async throws {
         try await importTheme(from: sourceURL, name: name)
     }
 
@@ -195,20 +188,17 @@ class PasscodeThemeViewModel: ObservableObject {
 
         onLogUpdate("Preparing Passcode Theme...")
 
-        // 1. Xử lý ảnh
         let processedFiles = try processThemeFiles(theme: theme, globalPrefix: globalPrefix)
         guard !processedFiles.isEmpty else {
             throw PasscodeThemeError.noImagesProcessed
         }
 
-        // 2. Pairing file
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         guard FileManager.default.fileExists(atPath: pairingURL.path) else {
             throw NSError(domain: "AirLift", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."])
         }
 
-        // 3. Thư mục tạm
         let tempFolderName = "AirLiftPayload_\(UUID().uuidString)"
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(tempFolderName)
@@ -219,13 +209,11 @@ class PasscodeThemeViewModel: ObservableObject {
             try imageData.write(to: tempDir.appendingPathComponent(targetFilename))
         }
 
-        // 4. Target path
         var targetPath = globalTelephony.cachePath
         if targetPath.hasSuffix("/") {
             targetPath = String(targetPath.dropLast())
         }
 
-        // 5. Xoá cache cũ
         onLogUpdate("Clearing old cache at \(targetPath)...")
         let bq = BadQuery()
         if bq.grantAccess(atPath: targetPath).0 {
@@ -242,14 +230,12 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
 
-        // 6. Resolve target host (RSD 49152 + Lockdown 62078 probe)
         onLogUpdate("Đang dò tunnel IP + probe RSD 49152 / Lockdown 62078...")
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
             throw NSError(domain: "AirLift", code: -3,
                           userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN. Hãy kiểm tra LocalDevVPN đã Connected chưa."])
         }
 
-        // 7. Gọi Airlift FFI
         onLogUpdate("Đang ghi qua AirTraffic...")
         let pairingPath = pairingURL.path
         let srcDir      = tempDir.path
@@ -305,7 +291,6 @@ class PasscodeThemeViewModel: ObservableObject {
         
         onLogUpdate("Đang tiến hành Reset Passcode Theme...")
         
-        // 1. Xoá thư mục cache TelephonyUI bằng BadQuery
         let bq = BadQuery()
         if bq.grantAccess(atPath: targetPath).0 {
             do {
@@ -325,11 +310,9 @@ class PasscodeThemeViewModel: ObservableObject {
                           userInfo: [NSLocalizedDescriptionKey: "Không thể xin quyền xoá file (BadQuery failed)."])
         }
         
-        // 2. Gọi Reboot thiết bị
         onLogUpdate("🔄 Đang khởi động lại thiết bị (Reboot)...")
-        try await Task.sleep(nanoseconds: 800_000_000) // Đợi 0.8s để log kịp hiện lên UI
+        try await Task.sleep(nanoseconds: 800_000_000)
         
-        // Gọi hàm Reboot
         RebootHelper.rebootDevice()
     }
 }
