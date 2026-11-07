@@ -78,7 +78,7 @@ struct SettingsView: View {
                     if #available(iOS 27.0, *) {
                         Button { showOnDevicePairing = true } label: {
                             Label("Pair On Device (iOS 27+)", systemImage: "iphone.radiowaves.left.and.right")
-                                .foregroundStyle(.orage)
+                                .foregroundStyle(.orange)
                         }
                     }
                 }
