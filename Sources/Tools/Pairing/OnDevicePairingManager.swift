@@ -2,6 +2,7 @@ import Foundation
 import AirliftFFI
 import Network
 import UIKit
+import AVFoundation
 
 @MainActor
 class OnDevicePairingManager: NSObject, ObservableObject {
@@ -13,6 +14,9 @@ class OnDevicePairingManager: NSObject, ObservableObject {
     private var netService: NetService?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var isCancelled = false
+    
+    // Audio player để giữ app chạy ngầm vô hạn
+    private var audioPlayer: AVAudioPlayer?
     
     override init() { super.init() }
     
@@ -29,7 +33,10 @@ class OnDevicePairingManager: NSObject, ObservableObject {
         statusLog = ["Đang khởi tạo tiến trình Pairing..."]
         isSuccess = false
         
-        // Cấp quyền chạy ngầm (tối đa 30s)
+        // 1. Kích hoạt chế độ chạy ngầm vô hạn bằng âm thanh
+        activateBackgroundAudio()
+        
+        // 2. Cấp quyền chạy ngầm tạm thời (fallback)
         backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
             self?.stopPairing()
         }
@@ -44,13 +51,41 @@ class OnDevicePairingManager: NSObject, ObservableObject {
                 return
             }
             
-            // SỬ DỤNG THREAD RIÊNG BIỆT CHO HÀM C BLOCKING
+            // Chạy hàm C trên Thread riêng
             let thread = Thread {
                 self.runAirliftPairing()
             }
             thread.qualityOfService = .userInitiated
             thread.start()
         }
+    }
+    
+    // Kích hoạt âm thanh im lặng để giữ app không bị suspend
+    private func activateBackgroundAudio() {
+        do {
+            // Tạo file âm thanh im lặng tạm thời trong bộ nhớ
+            let silentData = Data(count: 44100 * 2) // 1 giây audio 16-bit
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("silent.wav")
+            try silentData.write(to: tempURL)
+            
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try AVAudioSession.sharedInstance().setActive(true)
+            
+            audioPlayer = try AVAudioPlayer(contentsOf: tempURL)
+            audioPlayer?.numberOfLoops = -1 // Lặp vô hạn
+            audioPlayer?.volume = 0.0 // Không phát ra tiếng
+            audioPlayer?.play()
+            
+            statusLog.append("🔊 Đã bật chế độ chạy ngầm (Audio Silent).")
+        } catch {
+            statusLog.append("⚠️ Không thể bật chạy ngầm: \(error.localizedDescription)")
+        }
+    }
+    
+    private func stopBackgroundAudio() {
+        audioPlayer?.stop()
+        audioPlayer = nil
+        try? AVAudioSession.sharedInstance().setActive(false)
     }
     
     private func triggerLocalNetworkPermission(completion: @escaping (Bool) -> Void) {
@@ -64,11 +99,10 @@ class OnDevicePairingManager: NSObject, ObservableObject {
                 finished = true
                 browser.cancel()
                 DispatchQueue.main.async { completion(true) }
-            case .failed(let error):
+            case .failed:
                 finished = true
                 browser.cancel()
                 DispatchQueue.main.async { completion(false) }
-                print("Local Network permission failed: \(error)")
             default:
                 break
             }
@@ -79,14 +113,13 @@ class OnDevicePairingManager: NSObject, ObservableObject {
             guard !finished else { return }
             finished = true
             browser.cancel()
-            DispatchQueue.main.async { completion(true) } // Cố gắng tiếp tục dù timeout
+            DispatchQueue.main.async { completion(true) }
         }
     }
     
-    // CHẠY TRÊN THREAD RIÊNG (KHÔNG PHẢI MAIN THREAD)
     nonisolated private func runAirliftPairing() {
         let outPath = URL.documentsDirectory.appendingPathComponent("pairingFile.plist").path
-        let context = Unmanaged.passUnretained(self).toOpaque() // Dùng unretained vì View giữ Manager
+        let context = Unmanaged.passUnretained(self).toOpaque()
         
         let readyCb: ALPairReadyCb = { ctx, serviceIdPtr, port, txtKeysPtr, txtValsPtr, txtCount in
             guard let ctx = ctx, let serviceIdPtr = serviceIdPtr else { return }
@@ -115,7 +148,7 @@ class OnDevicePairingManager: NSObject, ObservableObject {
             
             DispatchQueue.main.async {
                 manager.pin = pin
-                manager.statusLog.append("🔑 Mã PIN: \(pin) — hãy nhập ngay vào Settings.")
+                manager.statusLog.append("🔑 Mã PIN: \(pin) — hãy nhập vào Settings.")
             }
         }
         
@@ -147,16 +180,20 @@ class OnDevicePairingManager: NSObject, ObservableObject {
     @MainActor
     private func advertiseBonjour(serviceId: String, port: UInt16, txtData: Data) {
         statusLog.append("Đang quảng bá Bonjour: \(serviceId) (Port \(port))")
+        
+        // SỬA LỖI 48: Bỏ option .listenForConnections vì al_pairing_run_host đã lắng nghe trên cổng này rồi
         netService = NetService(domain: "local.", type: "_remotepairing-pairable-host._tcp.", name: serviceId, port: Int32(port))
         netService?.delegate = self
         netService?.setTXTRecord(txtData)
-        netService?.publish(options: .listenForConnections)
+        netService?.publish() // Chỉ quảng bá, không mở socket trùng
     }
     
     func stopPairing() {
         isCancelled = true
         netService?.stop()
         netService = nil
+        
+        stopBackgroundAudio()
         
         if backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTask)
