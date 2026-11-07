@@ -8,15 +8,25 @@ import Network
 @MainActor
 final class DisableCallRecordingSoundViewModel: ObservableObject {
 
-    // MARK: - Published (View tiêu thụ)
+    // MARK: - Published state
     @Published private(set) var isProcessing: Bool = false
     @Published private(set) var currentStatus: String = "Checking..."
+
+    /// Toggle "tweak đang bật" — suy ra từ backup existence (user đã từng Apply chưa).
+    /// - Nếu backup tồn tại → true (toggle ON)
+    /// - Sau Restore: VẪN GIỮ giá trị cũ (không bị reset về false)
+    /// - Chỉ khi mất backup mới bị set = false
     @Published private(set) var isTweakActive: Bool = false
 
-    // Các thuộc tính View đang dùng trực tiếp
     @Published private(set) var isChecking: Bool = false
-    @Published private(set) var toneStatus: String = "Unknown"
+
+    /// Trạng thái THỰC TẾ của 3 file tone trên thiết bị (được app track theo hành động).
+    /// - `Apply`    → true  (đã ghi đè file im lặng)
+    /// - `Restore`  → false (đã khôi phục file gốc)
+    /// Dùng giá trị này để hiển thị `toneStatus` — không dùng `isTweakActive` nữa.
     @Published private(set) var isToneSilenced: Bool = false
+
+    @Published private(set) var toneStatus: String = "Unknown"
     @Published private(set) var backupStatus: String = "Checking..."
     @Published private(set) var isBackupReady: Bool = false
 
@@ -43,12 +53,23 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
 
     // MARK: - Init
     init() {
-        // Đồng bộ state ngay khi khởi tạo, tránh UI hiển thị "Checking..." mãi
         refreshBackupState()
+        // Nếu đã có backup → user đã từng Apply → coi như file đang silenced.
+        // Đây là giả định mặc định; user có thể bấm Restore để đưa về Original.
+        if isBackupReady {
+            isTweakActive  = true
+            isToneSilenced = true
+            toneStatus     = "Silenced (tweak active)"
+        } else {
+            isTweakActive  = false
+            isToneSilenced = false
+            toneStatus     = "Original"
+        }
     }
 
     // MARK: - Backup state
-    /// Đọc trạng thái backup từ đĩa và cập nhật toàn bộ @Published liên quan.
+    /// Đọc trạng thái backup từ đĩa.
+    /// KHÔNG set `isTweakActive = false` khi backup tồn tại → giữ toggle ON sau Restore.
     private func refreshBackupState() {
         let fm = FileManager.default
         let backupCount: Int
@@ -60,39 +81,39 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
 
         let ready = backupCount >= toneFiles.count
         currentStatus = ready ? "Backup Ready (Có thể Restore)" : "No Backup Found"
-        isTweakActive = ready
         backupStatus  = currentStatus
         isBackupReady = ready
+
+        // Nếu KHÔNG có backup → chắc chắn tweak không thể active
+        if !ready {
+            isTweakActive = false
+        }
+        // Nếu CÓ backup → giữ nguyên isTweakActive (đừng reset về false sau Restore).
     }
 
-    /// Public API cho View (giữ đúng tên method View gọi).
+    /// Public API cho View.
     func checkStatus()       { refreshBackupState() }
     func checkBackupStatus() { refreshBackupState() }
 
     // MARK: - Tone status
-    /// Best-effort check trạng thái tone hiện tại.
-    /// - Nếu thiếu pairing/VPN: báo lỗi ngay, không block UI.
-    /// - Nếu có backup: suy luận tone đã bị silenced (vì lần Apply gần nhất đã ghi file im lặng).
     func checkToneStatus() async {
         isChecking = true
         defer { isChecking = false }
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         guard FileManager.default.fileExists(atPath: pairingURL.path) else {
-            toneStatus     = "Pairing file not found"
-            isToneSilenced = false
+            toneStatus = "Pairing file not found"
             return
         }
         guard NetworkStatus.isVPNTunnelPresent() else {
-            toneStatus     = "VPN required"
-            isToneSilenced = false
+            toneStatus = "VPN required"
             return
         }
 
-        // Đảm bảo backup state đồng bộ trước khi suy luận
         refreshBackupState()
-        toneStatus     = isTweakActive ? "Silenced (tweak active)" : "Original"
-        isToneSilenced = isTweakActive
+        // FIX: dùng isToneSilenced (trạng thái file thực tế) — KHÔNG dùng isTweakActive.
+        // Nhờ vậy sau Restore, toneStatus sẽ hiện "Original" đúng.
+        toneStatus = isToneSilenced ? "Silenced (tweak active)" : "Original"
     }
 
     // MARK: - Import backup thủ công (nếu cần)
@@ -148,6 +169,23 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
 
         let action = isRestore ? "khôi phục" : "tắt tiếng"
         onLogUpdate("✅ Đã \(action) âm thanh thành công.")
+
+        // ────────────────────────────────────────────────────────────────
+        // FIX STATE sau khi action thành công:
+        // ────────────────────────────────────────────────────────────────
+        if isRestore {
+            // Restore: file trên máy giờ là bản gốc.
+            isToneSilenced = false
+            toneStatus     = "Original"
+            // KHÔNG đổi isTweakActive. Toggle vẫn ON (nếu có backup)
+            // → user qua trang Apply bấm Apply là silence lại ngay.
+        } else {
+            // Apply: file trên máy giờ là bản im lặng.
+            isToneSilenced = true
+            toneStatus     = "Silenced (tweak active)"
+            isTweakActive  = true
+        }
+
         refreshBackupState()
     }
 
@@ -208,7 +246,6 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
             let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
             defer { AirliftFFIBridge.releaseLogCallback(ctx) }
 
-            // Đảm bảo buffer luôn được free, kể cả khi write lỗi
             defer {
                 if let ptr = outData, outLen > 0 {
                     al_bytes_free(ptr, outLen)
@@ -238,7 +275,6 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
     private func writeDirectory(pairingPath: String,
                                 sourceDir: String,
                                 onLogUpdate: @escaping (String) -> Void) async throws {
-        // Chụp targetDirectory trước khi rời MainActor để tránh warning Swift 6
         let target = self.targetDirectory
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -262,8 +298,8 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
     }
 
     // MARK: - Helper
-    // nonisolated: hàm thuần, không đụng state actor, an toàn gọi từ mọi luồng.
-    // Đây chính là chỗ sửa warning Swift 6.
+    // `nonisolated`: hàm thuần, không đụng state của actor → an toàn gọi từ mọi luồng.
+    // Đây là chỗ fix warning Swift 6 concurrency.
     private nonisolated static func makeError(code: Int, msg: String) -> NSError {
         NSError(domain: "AirLift", code: code, userInfo: [NSLocalizedDescriptionKey: msg])
     }
