@@ -5,29 +5,63 @@ struct ConfigView: View {
     @AppStorage("ShowApplyTab") private var showApplyTab: Bool = false
     @AppStorage("ConfigFootnoteText") private var footnoteText: String = ""
     @AppStorage("ConfigSupervised") private var supervised: Bool = false
+    @AppStorage("ConfigOrgName") private var orgName: String = ""
+
     @State private var showSavedAlert = false
 
     var body: some View {
         Form {
             Section(header: Text("Config Tweaks")) {
-                // Bỏ icon ở dòng Enable Tweak
+                // Bỏ icon, chỉ để Toggle
                 Toggle("Enable Tweak", isOn: $toolStore.configTweaksEnabled)
             }
+
             Section(header: Text("Lock Screen Footnote")) {
-                HStack(spacing: 12) {
-                    TweakRowIcon("text.bubble.fill", color: .blue)
-                    TextField("Footnote text", text: $footnoteText)
-                        .autocorrectionDisabled()
-                }
-            }
-            Section(header: Text("Supervision")) {
-                Toggle(isOn: $supervised) {
-                    HStack(spacing: 12) {
-                        TweakRowIcon("checkmark.shield.fill", color: .green)
-                        Text("Enable Supervision")
+                // Bỏ icon, chỉ để TextField với placeholder
+                TextField("Nhập chữ cho màn hình khoá...", text: $footnoteText)
+                    .autocorrectionDisabled()
+                
+                // Khung preview
+                if !footnoteText.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Preview:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(footnoteText)
+                            .font(.body)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.secondarySystemBackground))
+                            .cornerRadius(8)
                     }
                 }
             }
+
+            Section(header: Text("Supervision")) {
+                Toggle("Enable Supervision", isOn: $supervised)
+                
+                if supervised {
+                    // Ô nhập Organization Name với placeholder xám
+                    TextField("Nhập tên tổ chức (Organization Name)...", text: $orgName)
+                        .autocorrectionDisabled()
+                    
+                    // Khung preview
+                    if !orgName.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Preview:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(orgName)
+                                .font(.body)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color(.secondarySystemBackground))
+                                .cornerRadius(8)
+                        }
+                    }
+                }
+            }
+
             Section {
                 Button {
                     showApplyTab = true
@@ -39,10 +73,13 @@ struct ConfigView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
+
                 Button(role: .destructive) {
+                    // Xoá sạch dữ liệu
                     toolStore.configTweaksEnabled = false
                     footnoteText = ""
                     supervised = false
+                    orgName = ""
                 } label: {
                     HStack {
                         Image(systemName: "arrow.counterclockwise")
@@ -56,7 +93,7 @@ struct ConfigView: View {
         .alert("Saved", isPresented: $showSavedAlert) {
             Button("OK") {}
         } message: {
-            Text("Tab Apply đã được mở. Chuyển sang tab Apply và bấm Apply.")
+            Text("Đã lưu. Chuyển sang tab Apply để áp dụng.")
         }
     }
 }
