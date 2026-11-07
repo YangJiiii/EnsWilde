@@ -1,8 +1,9 @@
 //  PasscodeThemeViewModel.swift
 //  EnsWilde
 //
-//  Sửa: applyTheme chạy mượt hơn, không dùng global airliftLogSink,
-//  đảm bảo tất cả FFI call trên background thread.
+//  - Thêm importDefaultPasscode(from:name:themeStore:) để khớp call site.
+//  - Bỏ LogBox riêng — dùng AirliftFFIBridge.makeLogCallback (đã có trong repo)
+//    để tránh conflict symbol "LogBox is ambiguous".
 
 import Foundation
 import SwiftUI
@@ -21,7 +22,7 @@ class PasscodeThemeViewModel: ObservableObject {
         self.store = store
     }
 
-    // MARK: - Import (giữ nguyên)
+    // MARK: - Import (public)
 
     func importTheme(from sourceURL: URL, name: String) async throws {
         isProcessing = true
@@ -66,6 +67,18 @@ class PasscodeThemeViewModel: ObservableObject {
         var themeWithSize = result.0
         themeWithSize.detectedSize = result.1
         self.store.addTheme(themeWithSize)
+    }
+
+    /// API tương thích với call site cũ trong view.
+    /// `themeStore` param chỉ để khớp signature — nếu view truyền vào store khác
+    /// với `self.store` thì vẫn chỉ `self.store` được add; thường view truyền
+    /// cùng instance nên không khác biệt.
+    func importDefaultPasscode(
+        from sourceURL: URL,
+        name: String,
+        themeStore: PasscodeThemeStore
+    ) async throws {
+        try await importTheme(from: sourceURL, name: name)
     }
 
     // MARK: - Xử lý ảnh (giữ nguyên)
@@ -171,7 +184,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try? fm.removeItem(at: telephonyFolderURL)
     }
 
-    // MARK: - Apply (PHẦN ĐƯỢC VIẾT LẠI)
+    // MARK: - Apply
 
     func applyTheme(
         _ theme: PasscodeTheme,
@@ -187,16 +200,16 @@ class PasscodeThemeViewModel: ObservableObject {
 
         onLogUpdate("Preparing Passcode Theme...")
 
-        // 1. Xử lý ảnh (chạy trên background vì resize khá nặng)
+        // 1. Xử lý ảnh (resize nặng → chạy background)
         let processedFiles = try processThemeFiles(theme: theme, globalPrefix: globalPrefix)
         guard !processedFiles.isEmpty else {
             throw PasscodeThemeError.noImagesProcessed
         }
 
-        // 2. Kiểm tra VPN
+        // 2. VPN check — dùng NetworkStatus (đã có probe 49152/62078)
         guard NetworkStatus.isVPNTunnelPresent() else {
             throw NSError(domain: "AirLift", code: -10,
-                          userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
+                          userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật hoặc tunnel chưa có IP loopback."])
         }
 
         // 3. Pairing file
@@ -206,7 +219,7 @@ class PasscodeThemeViewModel: ObservableObject {
                           userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."])
         }
 
-        // 4. Chuẩn bị thư mục tạm chứa ảnh đã xử lý
+        // 4. Thư mục tạm chứa ảnh đã xử lý
         let tempFolderName = "AirLiftPayload_\(UUID().uuidString)"
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(tempFolderName)
@@ -240,11 +253,11 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
 
-        // 7. Resolve target host (RSD 49152 + Lockdown 62078)
-        onLogUpdate("Đang dò tunnel IP...")
+        // 7. Resolve target host (RSD 49152 + Lockdown 62078 probe)
+        onLogUpdate("Đang dò tunnel IP + probe RSD 49152 / Lockdown 62078...")
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
             throw NSError(domain: "AirLift", code: -3,
-                          userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."])
+                          userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel (49152 đóng và 62078 đóng)."])
         }
 
         // 8. Gọi Airlift FFI trên background thread
@@ -254,25 +267,17 @@ class PasscodeThemeViewModel: ObservableObject {
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
-                // Tạo log callback C-convention, giữ closure Swift trên heap
-                let logBox = LogBox(onLine: onLogUpdate)
-                let opaque = Unmanaged.passRetained(logBox).toOpaque()
-                defer { Unmanaged<LogBox>.fromOpaque(opaque).release() }
-
-                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { ctx, msgPtr in
-                    guard let ctx = ctx, let msgPtr = msgPtr else { return }
-                    let box = Unmanaged<LogBox>.fromOpaque(ctx).takeUnretainedValue()
-                    let line = String(cString: msgPtr)
-                    DispatchQueue.main.async { box.onLine(line) }
-                }
+                // Dùng AirliftFFIBridge — tránh tự khai báo LogBox gây conflict.
+                let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
+                defer { AirliftFFIBridge.releaseLogCallback(ctx) }
 
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
                 let res = al_exploit_write_dir(
                     pairingPath,
                     srcDir,
                     targetPath,
-                    logCallback,
-                    opaque,
+                    cb,
+                    ctx,
                     &errPtr
                 )
 
@@ -293,13 +298,6 @@ class PasscodeThemeViewModel: ObservableObject {
 
         onLogUpdate("✅ Passcode applied successfully.")
     }
-}
-
-// MARK: - Box cho log callback
-
-private final class LogBox {
-    let onLine: (String) -> Void
-    init(onLine: @escaping (String) -> Void) { self.onLine = onLine }
 }
 
 // MARK: - Errors
