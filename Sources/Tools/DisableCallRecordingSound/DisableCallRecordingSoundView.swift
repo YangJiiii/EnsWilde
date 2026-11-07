@@ -13,19 +13,48 @@ struct DisableCallRecordingSoundView: View {
 
     var body: some View {
         Form {
+            // PHẦN 1: TONE STATUS
             Section {
                 HStack {
-                    Text("Status")
+                    Text("Current Tone")
                     Spacer()
-                    Text(vm.currentStatus)
-                        .foregroundStyle(vm.isTweakActive ? .green : .secondary)
+                    Text(vm.toneStatus)
+                        .foregroundStyle(vm.isToneSilenced ? .orange : .green)
                         .fontWeight(.semibold)
                 }
-                Button("Refresh Status") {
-                    vm.checkStatus()
+                Button {
+                    Task {
+                        await vm.checkToneStatus()
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "waveform")
+                        Text(vm.isChecking ? "Checking..." : "Check Tone Status")
+                    }
+                }
+                .disabled(vm.isChecking)
+            } header: {
+                Text("Tone Status")
+            } footer: {
+                Text("Kiểm tra xem file âm thanh trên máy đang là file gốc của Apple hay đã bị ghi đè bằng file im lặng.")
+            }
+
+            // PHẦN 2: BACKUP STATUS
+            Section {
+                HStack {
+                    Text("Backup Status")
+                    Spacer()
+                    Text(vm.backupStatus)
+                        .foregroundStyle(vm.isBackupReady ? .green : .secondary)
+                        .fontWeight(.semibold)
+                }
+                Button("Refresh Backup Status") {
+                    vm.checkBackupStatus()
                 }
             } header: {
-                Text("Current Device Status")
+                Text("Backup System")
+            } footer: {
+                Text("Ở lần Apply đầu tiên, App sẽ tự động trích xuất file gốc vào bộ nhớ máy.")
             }
 
             Section {
@@ -46,6 +75,7 @@ struct DisableCallRecordingSoundView: View {
                 .disabled(!toolStore.disableCallRecordingSoundEnabled)
             }
             
+            // PHẦN 3: NÚT RESTORE
             Section {
                 Button(role: .destructive) {
                     restoreSounds()
@@ -57,15 +87,18 @@ struct DisableCallRecordingSoundView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
                 }
-                .disabled(isRestoring)
+                .disabled(isRestoring || !vm.isBackupReady)
             } footer: {
-                Text("Khôi phục lại âm thanh gốc từ bộ nhớ Backup của App.")
+                Text("Khôi phục lại âm thanh gốc từ bản Backup đã được tạo tự động.")
             }
         }
         .navigationTitle("Disable Call Recording Sound")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            vm.checkStatus()
+            vm.checkBackupStatus()
+            Task {
+                await vm.checkToneStatus()
+            }
         }
         .alert("Saved", isPresented: $showSavedAlert) {
             Button("OK") {
