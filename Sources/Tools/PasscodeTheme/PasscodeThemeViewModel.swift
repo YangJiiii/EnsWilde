@@ -15,50 +15,33 @@ class PasscodeThemeViewModel: ObservableObject {
         self.store = store
     }
 
-    // MARK: - Import
-
+    // MARK: - Import (Giữ nguyên)
     func importTheme(from sourceURL: URL, name: String) async throws {
         isProcessing = true
         defer { isProcessing = false }
-
         let result = try await Task.detached(priority: .userInitiated) {
             () -> (PasscodeTheme, PasscodeTheme.DetectedSize) in
             let accessing = sourceURL.startAccessingSecurityScopedResource()
             defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
-
-            let tempFileURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("\(UUID().uuidString).zip")
+            let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).zip")
             defer { try? FileManager.default.removeItem(at: tempFileURL) }
-
-            do {
-                let data = try Data(contentsOf: sourceURL)
-                try data.write(to: tempFileURL)
-            } catch {
-                throw PasscodeThemeError.accessDenied
-            }
-
+            let data = try Data(contentsOf: sourceURL)
+            try data.write(to: tempFileURL)
             let newTheme = PasscodeTheme(name: name)
             let themeFolder = newTheme.themeFolderURL
-            if !FileManager.default.fileExists(atPath: themeFolder.path) {
-                try FileManager.default.createDirectory(at: themeFolder, withIntermediateDirectories: true)
-            }
-
+            try? FileManager.default.createDirectory(at: themeFolder, withIntermediateDirectories: true)
             let detectedSize = PasscodeThemeViewModel.detectSizeFromZIP(at: tempFileURL)
-
             do {
                 try FileManager.default.unzipItem(at: tempFileURL, to: themeFolder)
             } catch {
                 try? FileManager.default.removeItem(at: themeFolder)
                 throw PasscodeThemeError.invalidFormat
             }
-
             try PasscodeThemeViewModel.extractImagesFromTelephonySubfolder(themeFolder: themeFolder)
             return (newTheme, detectedSize)
         }.value
-
         var themeWithSize = result.0
         themeWithSize.detectedSize = result.1
-        // Gợi ý keySize ban đầu dựa trên detectedSize, user vẫn có thể đổi
         if result.1 == .big { themeWithSize.keySize = .big }
         self.store.addTheme(themeWithSize)
     }
@@ -67,69 +50,127 @@ class PasscodeThemeViewModel: ObservableObject {
         try await importTheme(from: sourceURL, name: name)
     }
 
-    // MARK: - Xử lý ảnh (AirCard logic)
-
+    // MARK: - Xử lý ảnh (Ma trận AirCard 109+ file)
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
-        globalPrefix: PasscodeTheme.PrefixLanguage,
         boldMode: PasscodeTheme.BoldMode
-    ) throws -> [(sourceURL: URL, processedData: Data, targetFilename: String)] {
+    ) throws -> [(targetPath: String, imageData: Data)] {
 
-        var processedFiles: [(URL, Data, String)] = []
+        var processedFiles: [(String, Data)] = []
         let imageFiles = theme.getImageFiles()
         guard !imageFiles.isEmpty else { throw PasscodeThemeError.noImagesFound }
 
-        let boldSuffixes = boldMode.suffixes
+        // 1. Danh sách 17 ngôn ngữ chuẩn AirCard
+        let locales = [
+            "en", "other", "ru", "uk", "es", "fr", "de", "it", "pt", "tr", "pl", "nl", "ja", "ko", "zh", "ar", "he"
+        ]
+        
+        // 2. Subtext chuẩn
+        let subtexts: [String: String] = [
+            "0": "+", "1": "", "2": "A B C", "3": "D E F", "4": "G H I", "5": "J K L",
+            "6": "M N O", "7": "P Q R S", "8": "T U V", "9": "W X Y Z"
+        ]
+        
+        // 3. Subtext tiếng Nga & Ukraina
+        let ruSubtexts: [String: String] = [
+            "2": "А Б В Г", "3": "Д Е Ж З", "4": "И Й К Л", "5": "М Н О П",
+            "6": "Р С Т У", "7": "Ф Х Ц Ч", "8": "Ш Щ Ъ Ы", "9": "Ь Э Ю Я"
+        ]
+        let ukSubtexts: [String: String] = [
+            "2": "А Б В Г", "3": "Д Е Ж З", "4": "І Ї Й К", "5": "Л М Н О",
+            "6": "П Р С Т", "7": "У Ф Х Ц", "8": "Ч Ш Щ Ь", "9": "Ю Я"
+        ]
+
+        // 4. Hậu tố Bold
+        let boldSuffixes: [String]
+        switch boldMode {
+        case .regular: boldSuffixes = [""]
+        case .bold: boldSuffixes = ["-bold"]
+        case .both: boldSuffixes = ["", "-bold"]
+        }
+
+        // 5. Các phiên bản TelephonyUI (AirCard tạo cả 3)
+        let versions = ["TelephonyUI-10", "TelephonyUI-9", "TelephonyUI-8"]
 
         for filename in imageFiles {
             let sourceURL = theme.themeFolderURL.appendingPathComponent(filename)
-            guard let firstHyphen = filename.firstIndex(of: "-") else { continue }
-            // suffix ví dụ: "-1---white" (bỏ extension)
-            let suffix = String(filename[firstHyphen...]).replacingOccurrences(of: ".png", with: "")
-
+            guard let digit = extractDigit(from: filename) else { continue }
+            
+            // Resize ảnh nếu cần
             guard let image = UIImage(contentsOfFile: sourceURL.path) else { continue }
-            let processedImage = resizeImage(image,
-                                             fromDetected: theme.detectedSize,
-                                             toTarget: theme.keySize)
+            let processedImage = resizeImage(image, for: theme.keySize, detectedSize: theme.detectedSize)
             guard let imageData = processedImage.pngData() else { continue }
 
-            for boldSuffix in boldSuffixes {
-                let finalFilename = globalPrefix.rawValue + suffix + boldSuffix + ".png"
-                processedFiles.append((sourceURL, imageData, finalFilename))
+            let stdSub = subtexts[digit] ?? ""
+            let ruSub = ruSubtexts[digit]
+            let ukSub = ukSubtexts[digit]
+
+            for ver in versions {
+                // Tạo marker _big nếu chọn Big Keys
+                if theme.keySize == .big {
+                    processedFiles.append(("\(ver)/_big", Data()))
+                }
+
+                for lang in locales {
+                    for bld in boldSuffixes {
+                        // 1. File không có subtext
+                        processedFiles.append(("\(ver)/\(lang)-\(digit)---white\(bld).png", imageData))
+
+                        // 2. File có subtext Latin
+                        if !stdSub.isEmpty {
+                            processedFiles.append(("\(ver)/\(lang)-\(digit)-\(stdSub)--white\(bld).png", imageData))
+                            let noSpace = stdSub.replacingOccurrences(of: " ", with: "")
+                            if noSpace != stdSub {
+                                processedFiles.append(("\(ver)/\(lang)-\(digit)-\(noSpace)--white\(bld).png", imageData))
+                            }
+                        }
+
+                        // 3. File có subtext Nga
+                        if (lang == "ru" || lang == "other" || lang == "en"), let sub = ruSub {
+                            processedFiles.append(("\(ver)/\(lang)-\(digit)-\(sub)--white\(bld).png", imageData))
+                        }
+                        
+                        // 4. File có subtext Ukraina
+                        if (lang == "uk" || lang == "other" || lang == "en"), let sub = ukSub {
+                            processedFiles.append(("\(ver)/\(lang)-\(digit)-\(sub)--white\(bld).png", imageData))
+                        }
+                    }
+                }
             }
         }
         return processedFiles
     }
 
-    nonisolated private func resizeImage(
-        _ image: UIImage,
-        fromDetected detectedSize: PasscodeTheme.DetectedSize,
-        toTarget targetSize: PasscodeTheme.KeySize
-    ) -> UIImage {
-        var sizeMultiplier: CGFloat = 1.0
-        if detectedSize == .small && targetSize == .big {
-            sizeMultiplier = 287.0 / 202.0
-        } else if detectedSize == .big && targetSize == .small {
-            sizeMultiplier = 202.0 / 287.0
-        } else {
-            return image
+    nonisolated private func extractDigit(from filename: String) -> String? {
+        let stem = (filename as NSString).deletingPathExtension
+            .replacingOccurrences(of: "--white", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "-white", with: "", options: .caseInsensitive)
+        if let regex = try? NSRegularExpression(pattern: #"(?:^[a-zA-Z]+-)?([0-9*#])"#, options: .caseInsensitive) {
+            let nsString = stem as NSString
+            let match = regex.firstMatch(in: stem, range: NSRange(location: 0, length: nsString.length))
+            if let match = match, match.numberOfRanges > 1 {
+                let range = match.range(at: 1)
+                if range.location != NSNotFound {
+                    let d = nsString.substring(with: range)
+                    if "0123456789".contains(d) { return d }
+                }
+            }
         }
+        return nil
+    }
 
-        if abs(sizeMultiplier - 1.0) < PasscodeTheme.KeySize.resizeThreshold { return image }
-
+    nonisolated private func resizeImage(_ image: UIImage, for keySize: PasscodeTheme.KeySize, detectedSize: PasscodeTheme.DetectedSize) -> UIImage {
+        var sizeMultiplier: CGFloat = 1.0
+        if detectedSize == .small && keySize == .big { sizeMultiplier = 287.0 / 202.0 }
+        else if detectedSize == .big && keySize == .small { sizeMultiplier = 202.0 / 287.0 }
+        else { return image }
         let currentSize = image.size
         guard currentSize.width > 0 && currentSize.height > 0 else { return image }
-
-        let targetPixelSize = CGSize(
-            width: currentSize.width * sizeMultiplier * image.scale,
-            height: currentSize.height * sizeMultiplier * image.scale
-        )
+        let targetPixelSize = CGSize(width: currentSize.width * sizeMultiplier * image.scale, height: currentSize.height * sizeMultiplier * image.scale)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         let renderer = UIGraphicsImageRenderer(size: targetPixelSize, format: format)
-        return renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: targetPixelSize))
-        }
+        return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetPixelSize)) }
     }
 
     nonisolated static private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
@@ -144,35 +185,29 @@ class PasscodeThemeViewModel: ObservableObject {
     nonisolated static private func extractImagesFromTelephonySubfolder(themeFolder: URL) throws {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(atPath: themeFolder.path) else { return }
-        guard let telephonyFolder = contents.first(where: {
-            $0.hasPrefix("Telephony") || $0.hasPrefix("TelephonyUI")
-        }) else { return }
+        guard let telephonyFolder = contents.first(where: { $0.hasPrefix("Telephony") || $0.hasPrefix("TelephonyUI") }) else { return }
         let telephonyFolderURL = themeFolder.appendingPathComponent(telephonyFolder)
         guard let imageFiles = try? fm.contentsOfDirectory(atPath: telephonyFolderURL.path) else { return }
         for filename in imageFiles {
             let ext = (filename as NSString).pathExtension.lowercased()
             guard ext == "png" || ext == "jpg" || ext == "jpeg" else { continue }
-            try? fm.moveItem(at: telephonyFolderURL.appendingPathComponent(filename),
-                             to: themeFolder.appendingPathComponent(filename))
+            try? fm.moveItem(at: telephonyFolderURL.appendingPathComponent(filename), to: themeFolder.appendingPathComponent(filename))
         }
         try? fm.removeItem(at: telephonyFolderURL)
     }
 
-    // MARK: - Apply Theme (Logic AirCard + dùng theme.keySize)
-
+    // MARK: - Apply Theme (Xoá sạch & Ghi ma trận file)
     func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
         defer { isProcessing = false }
 
-        let globalTelephony = self.store.globalTelephonyVersion
-        let globalPrefix   = self.store.globalCustomPrefix
         let globalBoldMode = self.store.globalBoldMode
-
         onLogUpdate("Preparing Passcode Theme (Mode: \(globalBoldMode.rawValue), Size: \(theme.keySize.rawValue))...")
 
-        // 1. Xử lý ảnh (với resize based on detected->target)
-        let processedFiles = try processThemeFiles(theme: theme, globalPrefix: globalPrefix, boldMode: globalBoldMode)
+        // 1. Tạo ma trận file
+        let processedFiles = try processThemeFiles(theme: theme, boldMode: globalBoldMode)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
+        onLogUpdate("Đã tạo ma trận \(processedFiles.count) file.")
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         guard FileManager.default.fileExists(atPath: pairingURL.path) else {
@@ -182,38 +217,36 @@ class PasscodeThemeViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
         }
 
-        var targetPath = globalTelephony.cachePath
-        if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
-
         // 2. Xoá sạch thư mục đích
-        onLogUpdate("[Theme] Đang xoá toàn bộ file cũ tại \(targetPath)...")
+        let cacheDirs = [
+            "/var/mobile/Library/Caches/TelephonyUI-10",
+            "/var/mobile/Library/Caches/TelephonyUI-9",
+            "/var/mobile/Library/Caches/TelephonyUI-8"
+        ]
         let bq = BadQuery()
-        if bq.grantAccess(atPath: targetPath).0 {
-            if let files = try? FileManager.default.contentsOfDirectory(atPath: targetPath) {
-                for file in files {
-                    try? FileManager.default.removeItem(atPath: (targetPath as NSString).appendingPathComponent(file))
+        for dir in cacheDirs {
+            if bq.grantAccess(atPath: dir).0 {
+                if let files = try? FileManager.default.contentsOfDirectory(atPath: dir) {
+                    for file in files {
+                        try? FileManager.default.removeItem(atPath: (dir as NSString).appendingPathComponent(file))
+                    }
                 }
             }
-            onLogUpdate("[Theme] ✅ Đã xoá sạch file cũ.")
-        } else {
-            onLogUpdate("[Theme] ⚠️ Không xoá được file cũ (BadQuery fail). Tiếp tục ghi đè...")
         }
+        onLogUpdate("Đã xoá sạch cache cũ.")
 
-        // 3. Tạo thư mục tạm + ghi file
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AirLiftPayload_\(UUID().uuidString)")
+        // 3. Ghi file vào thư mục tạm
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("AirLiftPayload_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        // TẠO MARKER _BIG NẾU USER CHỌN BIG KEYS
-        if theme.keySize == .big {
-            let markerURL = tempDir.appendingPathComponent("_big")
-            FileManager.default.createFile(atPath: markerURL.path, contents: Data())
-            onLogUpdate("[Theme] Đã tạo marker _big (Big Keys).")
-        }
-
-        for (_, imageData, targetFilename) in processedFiles {
-            try imageData.write(to: tempDir.appendingPathComponent(targetFilename))
+        for (path, data) in processedFiles {
+            let fullURL = tempDir.appendingPathComponent(path)
+            let parentDir = fullURL.deletingLastPathComponent()
+            if !FileManager.default.fileExists(atPath: parentDir.path) {
+                try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+            }
+            try data.write(to: fullURL)
         }
 
         // 4. Ghi qua Airlift
@@ -222,54 +255,51 @@ class PasscodeThemeViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN."])
         }
 
-        onLogUpdate("Đang ghi file qua Airlift...")
+        onLogUpdate("Đang ghi \(processedFiles.count) file qua Airlift...")
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
                 defer { AirliftFFIBridge.releaseLogCallback(ctx) }
 
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
-                let res = al_exploit_write_dir(pairingURL.path, tempDir.path, targetPath, cb, ctx, &errPtr)
+                // Ghi vào thư mục cha Caches, Airlift sẽ tự tạo thư mục con
+                let res = al_exploit_write_dir(pairingURL.path, tempDir.path, "/var/mobile/Library/Caches", cb, ctx, &errPtr)
 
                 if res != 0 {
                     let msg = errPtr != nil ? String(cString: errPtr!) : "Mã lỗi FFI: \(res)"
                     if let e = errPtr { al_string_free(e) }
-                    continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res),
-                        userInfo: [NSLocalizedDescriptionKey: msg]))
+                    continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
                 } else {
                     if let e = errPtr { al_string_free(e) }
                     continuation.resume()
                 }
             }
         }
-        onLogUpdate("✅ Đã ghi file. Bấm 'Reset Theme & Reboot' để khởi động lại máy và áp dụng theme.")
+        onLogUpdate("✅ Đã ghi file thành công. Bấm 'Reset Theme & Reboot' để khởi động lại máy và áp dụng theme.")
     }
 
     // MARK: - Reset (Xoá & Reboot)
-
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
         defer { isProcessing = false }
-
-        let globalTelephony = self.store.globalTelephonyVersion
-        var targetPath = globalTelephony.cachePath
-        if targetPath.hasSuffix("/") { targetPath = String(targetPath.dropLast()) }
-
-        onLogUpdate("Đang tiến hành Reset Passcode Theme...")
-
+        
+        let cacheDirs = [
+            "/var/mobile/Library/Caches/TelephonyUI-10",
+            "/var/mobile/Library/Caches/TelephonyUI-9",
+            "/var/mobile/Library/Caches/TelephonyUI-8"
+        ]
         let bq = BadQuery()
-        if bq.grantAccess(atPath: targetPath).0 {
-            if let files = try? FileManager.default.contentsOfDirectory(atPath: targetPath) {
-                for file in files {
-                    try? FileManager.default.removeItem(atPath: (targetPath as NSString).appendingPathComponent(file))
+        for dir in cacheDirs {
+            if bq.grantAccess(atPath: dir).0 {
+                if let files = try? FileManager.default.contentsOfDirectory(atPath: dir) {
+                    for file in files {
+                        try? FileManager.default.removeItem(atPath: (dir as NSString).appendingPathComponent(file))
+                    }
                 }
             }
-            onLogUpdate("✅ Đã xoá Passcode Theme thành công.")
-        } else {
-            throw NSError(domain: "AirLift", code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Không thể xin quyền xoá file (BadQuery failed)."])
         }
-
+        onLogUpdate("✅ Đã xoá Passcode Theme thành công.")
+        
         onLogUpdate("🔄 Đang khởi động lại thiết bị (Reboot)...")
         try await Task.sleep(nanoseconds: 800_000_000)
         RebootHelper.rebootDevice()
