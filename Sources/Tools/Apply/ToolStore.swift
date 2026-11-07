@@ -19,6 +19,6 @@ final class ToolStore: ObservableObject {
     @AppStorage("ConfigTweaksEnabled") var configTweaksEnabled: Bool = false
     @AppStorage("ConfigFootnoteText") var configFootnoteText: String = ""
     
-    // Thêm tính năng Disable Call Recording Sound
+    // Trạng thái cho tính năng Disable Call Recording Sound
     @AppStorage("DisableCallRecordingSoundEnabled") var disableCallRecordingSoundEnabled: Bool = false
 }
