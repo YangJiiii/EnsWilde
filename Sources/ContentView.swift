@@ -34,7 +34,7 @@ struct ContentView: View {
                 // Đã xóa respringSection ở đây
             }
             .headerProminence(.increased)
-            .navigationTitle("EnsWilde,")
+            .navigationTitle("EnsWilde")
             .navigationDestination(for: String.self) { route in
                 destinationView(for: route)
             }
@@ -48,7 +48,7 @@ struct ContentView: View {
                 Image(systemName: "checkmark.seal.fill").font(.system(size: 22)).foregroundStyle(.green)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("System Status").font(.body)
-                    Text("Ready - Bad_query")
+                    Text("Ready")
                         .font(.footnote)
                         .foregroundStyle(.green)
                 }
