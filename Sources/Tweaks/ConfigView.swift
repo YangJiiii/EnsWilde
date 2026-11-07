@@ -65,13 +65,11 @@ struct ConfigView: View {
                 }
 
                 Button(role: .destructive) {
-                    // Reset sạch AppStorage
                     toolStore.configTweaksEnabled = false
                     footnoteText = ""
                     supervised = false
                     orgName = ""
                     
-                    // Force UserDefaults update
                     UserDefaults.standard.removeObject(forKey: "ConfigFootnoteText")
                     UserDefaults.standard.removeObject(forKey: "ConfigSupervised")
                     UserDefaults.standard.removeObject(forKey: "ConfigOrgName")
