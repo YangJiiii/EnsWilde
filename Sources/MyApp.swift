@@ -123,7 +123,7 @@ struct VersionBlockedView: View {
                     }) {
                         HStack(spacing: 8) {
                             Image(systemName: "airplane.circle.fill")
-                            Text("Tiếp tục với AirLift (Không có MobileGestalt)")
+                            Text("Continue with Airlift (For iOS 27 Developer Beta 5+)")
                                 .font(.subheadline).fontWeight(.semibold)
                         }
                         .frame(maxWidth: .infinity)
