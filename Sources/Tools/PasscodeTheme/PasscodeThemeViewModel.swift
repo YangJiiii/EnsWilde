@@ -1,5 +1,7 @@
 //  PasscodeThemeViewModel.swift
 //  EnsWilde
+//
+//  Full implementation: Import, Apply (via Airlift), and Reset (Reboot device).
 
 import Foundation
 import SwiftUI
@@ -65,7 +67,7 @@ class PasscodeThemeViewModel: ObservableObject {
         self.store.addTheme(themeWithSize)
     }
 
-    /// Hàm tương thích với View gọi tới
+    /// Hàm tương thích với View call site cũ
     func importDefaultPasscode(
         from sourceURL: URL,
         name: String,
@@ -177,7 +179,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try? fm.removeItem(at: telephonyFolderURL)
     }
 
-    // MARK: - Apply
+    // MARK: - Apply Theme
 
     func applyTheme(
         _ theme: PasscodeTheme,
@@ -254,7 +256,6 @@ class PasscodeThemeViewModel: ObservableObject {
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
-                // Dùng AirliftFFIBridge để tránh khai báo trùng LogBox
                 let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
                 defer { AirliftFFIBridge.releaseLogCallback(ctx) }
 
@@ -284,6 +285,52 @@ class PasscodeThemeViewModel: ObservableObject {
         }
 
         onLogUpdate("✅ Passcode applied successfully.")
+    }
+
+    // MARK: - Reset Theme (Xoá cache & Reboot)
+
+    func resetTheme(
+        store: ToolStore,
+        onLogUpdate: @escaping (String) -> Void
+    ) async throws {
+        
+        isProcessing = true
+        defer { isProcessing = false }
+        
+        let globalTelephony = self.store.globalTelephonyVersion
+        var targetPath = globalTelephony.cachePath
+        if targetPath.hasSuffix("/") {
+            targetPath = String(targetPath.dropLast())
+        }
+        
+        onLogUpdate("Đang tiến hành Reset Passcode Theme...")
+        
+        // 1. Xoá thư mục cache TelephonyUI bằng BadQuery
+        let bq = BadQuery()
+        if bq.grantAccess(atPath: targetPath).0 {
+            do {
+                if FileManager.default.fileExists(atPath: targetPath) {
+                    try FileManager.default.removeItem(atPath: targetPath)
+                }
+                try FileManager.default.createDirectory(atPath: targetPath,
+                                                        withIntermediateDirectories: true,
+                                                        attributes: nil)
+                onLogUpdate("✅ Đã xoá Passcode Theme thành công.")
+            } catch {
+                onLogUpdate("⚠️ Lỗi khi xoá cache: \(error.localizedDescription)")
+                throw error
+            }
+        } else {
+            throw NSError(domain: "AirLift", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Không thể xin quyền xoá file (BadQuery failed)."])
+        }
+        
+        // 2. Gọi Reboot thiết bị
+        onLogUpdate("🔄 Đang khởi động lại thiết bị (Reboot)...")
+        try await Task.sleep(nanoseconds: 800_000_000) // Đợi 0.8s để log kịp hiện lên UI
+        
+        // Gọi hàm Reboot
+        RebootHelper.rebootDevice()
     }
 }
 
