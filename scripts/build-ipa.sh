@@ -13,25 +13,33 @@ echo "==> Bắt đầu build $APP_NAME ($CONFIG)"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-# FIX: TÌM FILE .A LINH HOẠT HƠN (Tìm trên toàn bộ thư mục Frameworks)
-LIB_PATH=$(find ./Frameworks -name "*.a" 2>/dev/null | grep -i "airlift" | head -n 1)
+# ==============================================================================
+# FIX LỖI: Thêm || true để grep không làm sập script khi không tìm thấy
+# Mở rộng tìm kiếm ra toàn bộ thư mục dự án (.) thay vì chỉ ./Frameworks
+# ==============================================================================
+echo "==> Đang tìm file thư viện (.a) và header (.h)..."
+LIB_PATH=$(find . -name "*airlift*.a" 2>/dev/null | head -n 1 || true)
 if [ -z "$LIB_PATH" ]; then 
-  echo "❌ LỖI: Đ*o tìm thấy file thư viện Airlift (.a) trong thư mục ./Frameworks"
-  echo "Danh sách file trong Frameworks:"
-  find ./Frameworks -type f | head -n 20
+  LIB_PATH=$(find . -name "*.a" 2>/dev/null | head -n 1 || true)
+fi
+
+if [ -z "$LIB_PATH" ]; then 
+  echo "❌ LỖI: Đ*o tìm thấy file thư viện (.a) trong dự án."
+  echo "Danh sách file hiện tại:"
+  ls -la
   exit 1
 fi
 LIB_DIR=$(dirname "$LIB_PATH")
 echo "✅ Tìm thấy Lib: $LIB_PATH"
 
-# FIX: TÌM HEADER LINH HOẠT
-HEADER_FILE=$(find ./Frameworks -name "airlift.h" | head -n 1)
+HEADER_FILE=$(find . -name "airlift.h" 2>/dev/null | head -n 1 || true)
 if [ -z "$HEADER_FILE" ]; then 
-  echo "❌ LỖI: Đ*o tìm thấy airlift.h trong thư mục ./Frameworks"
+  echo "❌ LỖI: Đ*o tìm thấy airlift.h trong dự án."
   exit 1
 fi
 HEADER_DIR=$(dirname "$HEADER_FILE")
 echo "✅ Tìm thấy Header: $HEADER_FILE"
+# ==============================================================================
 
 export LIB_PATH
 export LIB_DIR
