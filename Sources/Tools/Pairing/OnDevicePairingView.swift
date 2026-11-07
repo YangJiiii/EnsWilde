@@ -1,6 +1,3 @@
-//  OnDevicePairingView.swift
-//  EnsWilde
-
 import SwiftUI
 
 struct OnDevicePairingView: View {
@@ -11,13 +8,24 @@ struct OnDevicePairingView: View {
         Form {
             Section {
                 if manager.isPairing {
-                    VStack(spacing: 12) {
+                    VStack(spacing: 16) {
                         Text("Nhập mã PIN này vào Cài đặt")
                             .font(.headline)
                         
-                        Text(manager.pin.isEmpty ? "------" : manager.pin)
-                            .font(.system(size: 48, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.blue)
+                        HStack {
+                            Text(manager.pin.isEmpty ? "------" : manager.pin)
+                                .font(.system(size: 48, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.blue)
+                            
+                            if !manager.pin.isEmpty {
+                                Button {
+                                    UIPasteboard.general.string = manager.pin
+                                } label: {
+                                    Image(systemName: "doc.on.doc")
+                                        .font(.title2)
+                                }
+                            }
+                        }
                         
                         Text("Cài đặt > Quyền riêng tư & Bảo mật > Chế độ nhà phát triển > Pair with EnsWilde")
                             .font(.caption)
@@ -42,12 +50,11 @@ struct OnDevicePairingView: View {
                     Button("Bắt đầu Pair On Device") {
                         manager.startPairing()
                     }
-                    .disabled(manager.isPairing)
                 }
             } header: {
                 Text("Pair On Device (iOS 27+)")
             } footer: {
-                Text("Quảng bá Bonjour service để thiết bị tự pair với chính nó. Không cần máy tính.")
+                Text("Lưu ý: Bạn chỉ có 30 giây để chuyển sang Settings và nhập PIN. Nếu quá thời gian, app sẽ bị iOS tắt ngầm.")
             }
             
             if !manager.statusLog.isEmpty {
@@ -69,5 +76,9 @@ struct OnDevicePairingView: View {
         }
         .navigationTitle("Pair On Device")
         .navigationBarTitleDisplayMode(.inline)
+        .onDisappear {
+            // Dọn dẹp khi view bị đóng để tránh rò rỉ
+            manager.stopPairing()
+        }
     }
 }
