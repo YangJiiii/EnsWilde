@@ -52,7 +52,7 @@ struct MainViewWithNavigation: View {
     }
 }
 
-// MARK: - APPLY TAB VIEW (FIX UI LOG & BUTTON)
+// MARK: - APPLY TAB VIEW
 struct ApplyTabView: View {
     @ObservedObject var toolStore: ToolStore
     @ObservedObject var toolRunner: ToolRunner
@@ -71,8 +71,13 @@ struct ApplyTabView: View {
         return false
     }
 
+    // DANH SÁCH CÁC TWEAK ĐANG BẬT
     private var enabledTweaks: [(String, String)] {
         var list: [(String, String)] = []
+        
+        // Icon speaker.slash đã khớp với trang chủ
+        if toolStore.disableCallRecordingSoundEnabled { list.append(("Disable Call Recording Sound", "speaker.slash")) }
+        
         if themeStore.passcodeThemeEnabled { list.append((L("tool_passcode_theme"), "lock.rectangle")) }
         if walletStore.appleWalletEnabled { list.append((L("tool_apple_wallet"), "wallet.pass")) }
         if toolStore.replaceMobileGestaltEnabled { list.append((L("tool_mobile_gestalt"), "cpu")) }
@@ -102,7 +107,6 @@ struct ApplyTabView: View {
                 }
                 .listRowBackground(Color(.secondarySystemGroupedBackground))
 
-                // FIX: Status hiển thị FULL LOG bằng ScrollView
                 Section(header: Text("Status").font(.headline).textCase(nil)) {
                     ScrollViewReader { proxy in
                         ScrollView {
@@ -125,10 +129,11 @@ struct ApplyTabView: View {
                 .listRowBackground(Color(.secondarySystemGroupedBackground))
 
                 Section {
+                    // Gọi WalletStyleButton từ file khác trong dự án của bạn
                     WalletStyleButton(
                         title: isApplying ? "Applying..." : L("apply_enabled_tweaks"),
                         isLoading: isApplying,
-                        disabled: isApplying, // Nút xám đi khi đang apply
+                        disabled: isApplying,
                         action: performApply
                     )
                 }

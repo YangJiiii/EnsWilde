@@ -31,7 +31,6 @@ struct ContentView: View {
             Form {
                 statusSection
                 tweaksSection
-                // Đã xóa respringSection ở đây
             }
             .headerProminence(.increased)
             .navigationTitle("EnsWilde")
@@ -63,6 +62,7 @@ struct ContentView: View {
             toolNavigationLink(value: "ConfigTweaks", title: "Config Tweaks", subtitle: "Custom Lock Screen Footnote", icon: "textformat", isEnabled: toolStore.configTweaksEnabled)
             toolNavigationLink(value: "PasscodeTheme", title: "Passcode Theme", subtitle: "Customize passcode screen", icon: "lock.rectangle", isEnabled: themeStore.passcodeThemeEnabled)
             toolNavigationLink(value: "AppleWallet", title: "Apple Wallet", subtitle: "Manage wallet cards", icon: "wallet.pass", isEnabled: walletStore.appleWalletEnabled)
+            toolNavigationLink(value: "DisableCallRecordingSound", title: "Disable Call Recording Sound", subtitle: "Disable call recording sound", icon: "speaker.slash", isEnabled: toolStore.disableCallRecordingSoundEnabled)
         }
     }
 
@@ -72,6 +72,7 @@ struct ContentView: View {
         else if route == "ConfigTweaks" { ConfigView(toolStore: toolStore) }
         else if route == "AppleWallet" { AppleWalletView(walletStore: walletStore) }
         else if route == "PasscodeTheme" { PasscodeThemeView(themeStore: themeStore) }
+        else if route == "DisableCallRecordingSound" { DisableCallRecordingSoundView(toolStore: toolStore) }
     }
 
     @ViewBuilder
