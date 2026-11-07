@@ -32,13 +32,12 @@
 	<key>UISupportsDocumentBrowser</key>
 	<true/>
 	
-	<!-- BẮT BUỘC THÊM 2 KEY DƯỚI ĐÂY ĐỂ CHẠY PAIR ON DEVICE -->
+	<!-- BẮT BUỘC CHO PAIR ON DEVICE (BONJOUR) -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Ứng dụng cần quyền mạng cục bộ để phát hiện thiết bị và thực hiện Pairing không dây qua Bonjour.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_remotepairing-pairable-host._tcp</string>
 	</array>
-	
 </dict>
 </plist>
