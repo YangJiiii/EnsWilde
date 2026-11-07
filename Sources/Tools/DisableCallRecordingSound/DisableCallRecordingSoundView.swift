@@ -1,6 +1,3 @@
-//  DisableCallRecordingSoundView.swift
-//  EnsWilde
-
 import SwiftUI
 
 struct DisableCallRecordingSoundView: View {
@@ -16,7 +13,6 @@ struct DisableCallRecordingSoundView: View {
 
     var body: some View {
         Form {
-            // PHẦN CHECK STATUS
             Section {
                 HStack {
                     Text("Status")
@@ -50,7 +46,6 @@ struct DisableCallRecordingSoundView: View {
                 .disabled(!toolStore.disableCallRecordingSoundEnabled)
             }
             
-            // NÚT RESTORE
             Section {
                 Button(role: .destructive) {
                     restoreSounds()
@@ -64,7 +59,7 @@ struct DisableCallRecordingSoundView: View {
                 }
                 .disabled(isRestoring)
             } footer: {
-                Text("Khôi phục lại âm thanh gốc từ bộ nhớ Backup của App. (App sẽ tự động sao lưu file gốc ở lần Apply đầu tiên).")
+                Text("Khôi phục lại âm thanh gốc từ bộ nhớ Backup của App.")
             }
         }
         .navigationTitle("Disable Call Recording Sound")
@@ -95,7 +90,7 @@ struct DisableCallRecordingSoundView: View {
                     print(log)
                 }
                 await MainActor.run {
-                    toolStore.disableCallRecordingSoundEnabled = false // Tắt toggle
+                    toolStore.disableCallRecordingSoundEnabled = false
                     isRestoring = false
                     showSavedAlert = true 
                 }
