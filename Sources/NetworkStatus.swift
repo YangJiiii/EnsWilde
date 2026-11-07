@@ -1,7 +1,5 @@
 //  NetworkStatus.swift
 //  EnsWilde
-//
-//  Sửa: Chấp nhận mọi IP 10.7.x.x và bỏ check IFF_RUNNING để tránh false negative.
 
 import Foundation
 import Darwin
@@ -51,6 +49,7 @@ enum NetworkStatus {
 
     // MARK: - RSD / Lockdown probe
 
+    /// Thử TCP connect tới `host:port` với timeout ms. True nếu SYN-ACK nhận được.
     static func probeTCP(host: String, port: UInt16, timeoutMs: Int32) -> Bool {
         let sock = socket(AF_INET, SOCK_STREAM, 0)
         guard sock >= 0 else { return false }
