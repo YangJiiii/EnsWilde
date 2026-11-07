@@ -1,6 +1,7 @@
 import Foundation
 
 enum ConfigTweaksApplyTask {
+    // Path chuẩn iOS 16/17/18 (dùng trong Nugget, Geranium, Cowabunga Lite)
     static let footnotePath = "/var/mobile/Library/Preferences/com.apple.lockscreen.shared.plist"
     static let footnoteKey  = "SBLockScreenFootnoteText"
 
@@ -9,22 +10,21 @@ enum ConfigTweaksApplyTask {
     static let supervisorHostKey = "SupervisorHostName"
 
     static func apply(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
-        // Đọc state trực tiếp từ UserDefaults (AppStorage trong ConfigView)
         let footnoteText = UserDefaults.standard.string(forKey: "ConfigFootnoteText") ?? ""
         let isSupervised = UserDefaults.standard.bool(forKey: "ConfigSupervised")
 
         if footnoteText.isEmpty && !isSupervised {
-            onLogUpdate("[Config] Không có thay đổi nào cần ghi (footnote trống + supervision tắt).")
+            onLogUpdate("[Config] Không có thay đổi nào để ghi (footnote trống + supervision tắt).")
             return
         }
 
         // ── 1. FOOTNOTE ────────────────────────────────────────────
         if footnoteText.isEmpty {
-            onLogUpdate("[Footnote] Không có text → xoá key (nếu tồn tại).")
-            try updatePlistString(path: footnotePath, key: footnoteKey, value: nil)
+            onLogUpdate("[Footnote] Không có text — xoá key nếu tồn tại.")
+            try setString(path: footnotePath, key: footnoteKey, value: nil)
         } else {
             onLogUpdate("[Footnote] Ghi \"\(footnoteText)\"...")
-            try updatePlistString(path: footnotePath, key: footnoteKey, value: footnoteText)
+            try setString(path: footnotePath, key: footnoteKey, value: footnoteText)
             onLogUpdate("[Footnote] ✅ Xong.")
         }
 
@@ -37,7 +37,7 @@ enum ConfigTweaksApplyTask {
             try writePlist(dict, to: supervisionPath)
             onLogUpdate("[Supervision] ✅ Bật xong.")
         } else {
-            onLogUpdate("[Supervision] Tắt supervision (xoá key nếu tồn tại).")
+            onLogUpdate("[Supervision] Tắt supervision.")
             let dict = loadPlist(at: supervisionPath)
             if dict[supervisionKey] != nil || dict[supervisorHostKey] != nil {
                 dict.removeObject(forKey: supervisionKey)
@@ -47,63 +47,44 @@ enum ConfigTweaksApplyTask {
             onLogUpdate("[Supervision] ✅ Tắt xong.")
         }
 
-        onLogUpdate("[Config] ✅ Config Tweak đã apply. Respring để thay đổi có hiệu lực.")
+        onLogUpdate("[Config] ✅ Config Tweaks đã apply. Respring để thay đổi có hiệu lực.")
     }
 
-    // MARK: - Helpers
+    // MARK: - Plist I/O
 
     private static func loadPlist(at path: String) -> NSMutableDictionary {
         guard FileManager.default.fileExists(atPath: path) else {
             return NSMutableDictionary()
         }
-        if let dict = NSMutableDictionary(contentsOfFile: path) {
-            return dict
-        }
-        // File tồn tại nhưng parse fail → KHÔNG ghi đè để tránh corrupt thêm
-        return NSMutableDictionary()
+        return NSMutableDictionary(contentsOfFile: path) ?? NSMutableDictionary()
     }
 
     private static func writePlist(_ dict: NSMutableDictionary, to path: String) throws {
-        // Serialize binary plist (iOS gốc dùng binary, không dùng XML)
         let data: Data
         do {
             data = try PropertyListSerialization.data(fromPropertyList: dict, format: .binary, options: 0)
         } catch {
-            throw NSError(domain: "ConfigTweak", code: -20, userInfo: [
-                NSLocalizedDescriptionKey: "Serialize plist thất bại: \(error.localizedDescription)"
-            ])
+            throw cfgError(-20, "Serialize plist thất bại: \(error.localizedDescription)")
         }
-
-        // Verify in-memory trước khi ghi
         guard (try? PropertyListSerialization.propertyList(from: data, format: nil)) != nil else {
-            throw NSError(domain: "ConfigTweak", code: -21, userInfo: [
-                NSLocalizedDescriptionKey: "Verify in-memory thất bại, không ghi file."
-            ])
+            throw cfgError(-21, "Verify in-memory thất bại, không ghi.")
         }
-
-        // Ghi qua BadQueryWrapper (atomic)
         do {
             try BadQueryWrapper.writeFile(at: path, data: data)
         } catch {
-            throw NSError(domain: "ConfigTweak", code: -22, userInfo: [
-                NSLocalizedDescriptionKey: "Ghi plist thất bại tại \(path): \(error.localizedDescription)"
-            ])
+            let hint = (error as? BadQueryError)?.errorDescription ?? error.localizedDescription
+            throw cfgError(-22, "Ghi thất bại tại \(path): \(hint)")
         }
-
         // Verify từ đĩa
-        if let writtenData = try? Data(contentsOf: URL(fileURLWithPath: path)),
-           (try? PropertyListSerialization.propertyList(from: writtenData, format: nil)) == nil {
-            throw NSError(domain: "ConfigTweak", code: -23, userInfo: [
-                NSLocalizedDescriptionKey: "File sau khi ghi không parse được: \(path)"
-            ])
+        if let written = try? Data(contentsOf: URL(fileURLWithPath: path)),
+           (try? PropertyListSerialization.propertyList(from: written, format: nil)) == nil {
+            throw cfgError(-23, "File sau khi ghi không parse được: \(path)")
         }
     }
 
-    private static func updatePlistString(path: String, key: String, value: String?) throws {
-        // Nếu file không tồn tại và không có gì để ghi → bỏ qua
+    private static func setString(path: String, key: String, value: String?) throws {
         if !FileManager.default.fileExists(atPath: path) && value == nil { return }
-
-        var dict = loadPlist(at: path)
+        let dict = loadPlist(at: path)
         if let value = value {
             dict[key] = value
         } else {
@@ -111,5 +92,9 @@ enum ConfigTweaksApplyTask {
             dict.removeObject(forKey: key)
         }
         try writePlist(dict, to: path)
+    }
+
+    private static func cfgError(_ code: Int, _ msg: String) -> NSError {
+        NSError(domain: "ConfigTweak", code: code, userInfo: [NSLocalizedDescriptionKey: msg])
     }
 }
