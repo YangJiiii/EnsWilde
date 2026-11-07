@@ -48,7 +48,7 @@ struct DisableCallRecordingSoundView: View {
                 }
                 .disabled(isRestoring)
             } footer: {
-                Text("Tải file âm thanh gốc từ GitHub (thư mục Resources/Original/) và khôi phục lại tiếng Bíp mặc định.")
+                Text("Khôi phục lại âm thanh gốc từ bộ nhớ Backup của App. (App sẽ tự động sao lưu file gốc ở lần Apply đầu tiên).")
             }
         }
         .navigationTitle("Disable Call Recording Sound")
