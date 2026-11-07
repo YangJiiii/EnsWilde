@@ -12,7 +12,8 @@ enum MobileGestaltApplyTask {
         let mgURL  = URL(fileURLWithPath: mgPath)
 
         // ── L1: Sanity ─────────────────────────────────────────────
-        guard !store.mgCurrentDict.isEmpty else {
+        // ✅ FIX: NSMutableDictionary không có .isEmpty → dùng .count
+        guard store.mgCurrentDict.count > 0 else {
             throw mgError(-1, "Store rỗng. Vào tab MobileGestalt, chỉnh vài thứ rồi Save Settings trước khi Apply.")
         }
         guard FileManager.default.fileExists(atPath: mgPath) else {
