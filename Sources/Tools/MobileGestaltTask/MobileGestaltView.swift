@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AirliftFFI
 
 struct MobileGestaltView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
@@ -7,7 +8,7 @@ struct MobileGestaltView: View {
     @Environment(\.scenePhase) var scenePhase
     @ObservedObject var toolStore: ToolStore
     @StateObject private var store = GestaltStore.shared
-    
+
     @AppStorage("ShowApplyTab") private var showApplyTab: Bool = false
 
     @State var mbdb: Backup?
@@ -51,25 +52,7 @@ struct MobileGestaltView: View {
                 showErrorAlert.toggle()
                 return
             }
-            if let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary {
-                productType = cacheExtra[MGKey.prodType] as? String ?? productType
-                if let diValue = cacheExtra[MGKey.artwork] as? NSDictionary, let subtype = diValue["ArtworkDeviceSubType"] as? Int {
-                    switch subtype {
-                    case 2436: dynamicIslandType = 1
-                    case 2556: dynamicIslandType = 2
-                    case 2796: dynamicIslandType = 3
-                    case 2976: dynamicIslandType = 4
-                    case 2622: dynamicIslandType = 5
-                    case 2868: dynamicIslandType = 6
-                    case 2736: dynamicIslandType = 7
-                    default: dynamicIslandType = 0
-                    }
-                }
-                if let diValue = cacheExtra[MGKey.artwork] as? NSDictionary, let modelNameValue = diValue["ArtworkDeviceProductDescription"] as? String, !modelNameValue.isEmpty {
-                    enableModelName = true
-                    modelName = modelNameValue
-                }
-            }
+            hydrateFromDict()
         }
         .onChange(of: enableModelName) { enabled in if enabled { applyModelName() } else { removeModelName() } }
         .onChange(of: modelName) { _ in if enableModelName && !modelName.isEmpty { applyModelName() } }
@@ -88,16 +71,50 @@ struct MobileGestaltView: View {
         }
     }
 
+    private func hydrateFromDict() {
+        if let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary {
+            productType = cacheExtra[MGKey.prodType] as? String ?? productType
+            if let artwork = cacheExtra[MGKey.artwork] as? NSDictionary,
+               let subtype = artwork["ArtworkDeviceSubType"] as? Int {
+                switch subtype {
+                case 2436: dynamicIslandType = 1
+                case 2556: dynamicIslandType = 2
+                case 2796: dynamicIslandType = 3
+                case 2976: dynamicIslandType = 4
+                case 2622: dynamicIslandType = 5
+                case 2868: dynamicIslandType = 6
+                case 2736: dynamicIslandType = 7
+                default: dynamicIslandType = 0
+                }
+            }
+            if let artwork = cacheExtra[MGKey.artwork] as? NSDictionary,
+               let name = artwork["ArtworkDeviceProductDescription"] as? String,
+               !name.isEmpty {
+                enableModelName = true
+                modelName = name
+            }
+        }
+    }
+
+    // MARK: - Sections
+
     @ViewBuilder private var enableSection: some View {
         Section(header: Text(L("tool_mobile_gestalt"))) {
-            Toggle(L("enable_tweak"), isOn: $toolStore.replaceMobileGestaltEnabled)
-                .onChange(of: toolStore.replaceMobileGestaltEnabled) { isEnabled in if !isEnabled { showApplyTab = false } }
+            IconToggle(
+                title: L("enable_tweak"),
+                systemImage: "gearshape.2.fill",
+                color: .gray,
+                isOn: $toolStore.replaceMobileGestaltEnabled
+            )
+            .onChange(of: toolStore.replaceMobileGestaltEnabled) { isEnabled in
+                if !isEnabled { showApplyTab = false }
+            }
         }
     }
 
     @ViewBuilder private var deviceSubtypeSection: some View {
         Section(header: Text(L("section_device_subtype"))) {
-            Picker(L("mg_device_subtype_preset"), selection: $dynamicIslandType) {
+            Picker(selection: $dynamicIslandType) {
                 Text(L("mg_subtype_none")).tag(0)
                 Text(L("mg_subtype_2436")).tag(1)
                 Text(L("mg_subtype_2796")).tag(3)
@@ -105,112 +122,205 @@ struct MobileGestaltView: View {
                 Text(L("mg_subtype_2622")).tag(5)
                 Text(L("mg_subtype_2868")).tag(6)
                 Text(L("mg_subtype_2736")).tag(7)
-            }.pickerStyle(.menu).onChange(of: dynamicIslandType) { newValue in _ = store.applyDynamicIsland(type: newValue) }
+            } label: {
+                IconPickerLabel(title: L("mg_device_subtype_preset"), systemImage: "dynamicisland", color: .black)
+            }
+            .pickerStyle(.menu)
+            .onChange(of: dynamicIslandType) { newValue in _ = store.applyDynamicIsland(type: newValue) }
 
-            Toggle(L("mg_change_model_name"), isOn: $enableModelName)
-            if enableModelName { TextField(L("mg_model_name_placeholder"), text: $modelName) }
+            Toggle(isOn: $enableModelName) {
+                HStack(spacing: 12) {
+                    TweakRowIcon("textformat", color: .blue)
+                    Text(L("mg_change_model_name"))
+                }
+            }
+            if enableModelName {
+                TextField(L("mg_model_name_placeholder"), text: $modelName)
+            }
         }
     }
 
     @ViewBuilder private var hardwareFeaturesSection: some View {
         Section(header: Text(L("section_hardware_features"))) {
-            Toggle(L("mg_boot_chime"), isOn: store.mgByteBinding(key: MGKey.bootChime))
-            Toggle(L("mg_charge_limit"), isOn: store.mgByteBinding(key: MGKey.chargeLim)).disabled(Utils.requiresVersion(17))
-            if UIDevice._hasHomeButton() { Toggle(L("mg_tap_to_wake"), isOn: store.mgByteBinding(key: MGKey.tapToWake)) }
-            Toggle(L("mg_camera_button"), isOn: store.mgByteBinding(key: MGKey.camButton)).disabled(Utils.requiresVersion(18))
+            IconToggle(title: L("mg_boot_chime"),
+                       systemImage: "bell.badge.fill",
+                       color: .orange,
+                       isOn: store.mgByteBinding(key: MGKey.bootChime))
+            IconToggle(title: L("mg_charge_limit"),
+                       systemImage: "battery.100percent.bolt",
+                       color: .green,
+                       isOn: store.mgByteBinding(key: MGKey.chargeLim))
+                .disabled(Utils.requiresVersion(17))
+            if UIDevice._hasHomeButton() {
+                IconToggle(title: L("mg_tap_to_wake"),
+                           systemImage: "hand.tap.fill",
+                           color: .blue,
+                           isOn: store.mgByteBinding(key: MGKey.tapToWake))
+            }
+            IconToggle(title: L("mg_camera_button"),
+                       systemImage: "camera.fill",
+                       color: .gray,
+                       isOn: store.mgByteBinding(key: MGKey.camButton))
+                .disabled(Utils.requiresVersion(18))
         }
     }
 
     @ViewBuilder private var displayAndUISection: some View {
         Section(header: Text(L("section_display_and_ui"))) {
-            Toggle(L("mg_stage_manager"), isOn: store.mgByteBinding(key: MGKey.stageMgr))
-            Toggle(L("mg_aod"), isOn: store.mgByteBinding(key: MGKey.AOD)).disabled(Utils.requiresVersion(18))
-            Toggle(L("mg_aod_vibrancy"), isOn: store.mgByteBinding(key: MGKey.AODVibrancy)).disabled(Utils.requiresVersion(18))
-            Toggle(isOn: store.mgTrollPadBinding()) { Text("Become iPadOS") }
+            IconToggle(title: L("mg_stage_manager"),
+                       systemImage: "rectangle.on.rectangle.angled",
+                       color: .indigo,
+                       isOn: store.mgByteBinding(key: MGKey.stageMgr))
+            IconToggle(title: L("mg_aod"),
+                       systemImage: "moon.stars.fill",
+                       color: .black,
+                       isOn: store.mgByteBinding(key: MGKey.AOD))
+                .disabled(Utils.requiresVersion(18))
+            IconToggle(title: L("mg_aod_vibrancy"),
+                       systemImage: "circle.lefthalf.filled",
+                       color: .purple,
+                       isOn: store.mgByteBinding(key: MGKey.AODVibrancy))
+                .disabled(Utils.requiresVersion(18))
+            Toggle(isOn: store.mgTrollPadBinding()) {
+                HStack(spacing: 12) {
+                    TweakRowIcon("ipad.and.iphone", color: .teal)
+                    Text("Become iPadOS")
+                }
+            }
         }
     }
 
     @ViewBuilder private var systemFeaturesSection: some View {
         Section(header: Text(L("section_system_features"))) {
-            Toggle(L("mg_install_ipad_apps"), isOn: bindingForMGKeys(["9MZ5AdH43csAUajl/dU+IQ"], type: [Int].self, defaultValue: [1], enableValue: [1, 2]))
-            Toggle(L("mg_disable_region"), isOn: store.mgRegionRestrictionsBinding())
-            Toggle(L("mg_apple_pencil"), isOn: store.mgByteBinding(key: MGKey.appPencil))
-            Toggle(L("mg_action_button"), isOn: store.mgByteBinding(key: MGKey.actButton)).disabled(Utils.requiresVersion(17))
-            Toggle(L("mg_crash_detection"), isOn: store.mgByteBinding(key: MGKey.crashDet))
+            Toggle(isOn: bindingForMGKeys(["9MZ5AdH43csAUajl/dU+IQ"], type: [Int].self, defaultValue: [1], enableValue: [1, 2])) {
+                HStack(spacing: 12) {
+                    TweakRowIcon("square.grid.2x2.fill", color: .cyan)
+                    Text(L("mg_install_ipad_apps"))
+                }
+            }
+            Toggle(isOn: store.mgRegionRestrictionsBinding()) {
+                HStack(spacing: 12) {
+                    TweakRowIcon("globe", color: .blue)
+                    Text(L("mg_disable_region"))
+                }
+            }
+            IconToggle(title: L("mg_apple_pencil"),
+                       systemImage: "pencil.tip",
+                       color: .yellow,
+                       isOn: store.mgByteBinding(key: MGKey.appPencil))
+            IconToggle(title: L("mg_action_button"),
+                       systemImage: "button.programmable",
+                       color: .gray,
+                       isOn: store.mgByteBinding(key: MGKey.actButton))
+                .disabled(Utils.requiresVersion(17))
+            IconToggle(title: L("mg_crash_detection"),
+                       systemImage: "car.side.rear.and.collision.and.car.side.front",
+                       color: .red,
+                       isOn: store.mgByteBinding(key: MGKey.crashDet))
         }
     }
 
     @ViewBuilder private var advancedSection: some View {
         Section(header: Text(L("section_internal_features"))) {
-            Toggle(L("mg_internal_storage"), isOn: store.mgByteBinding(key: MGKey.intBuild))
-            Toggle(L("mg_internal_stuff"), isOn: store.mgByteBinding(key: MGKey.intInstall))
-            Toggle(L("mg_security_research"), isOn: store.mgByteBinding(key: MGKey.srd))
-            Toggle(L("mg_apple_intelligence"), isOn: bindingForAppleIntelligence()).disabled(Utils.requiresVersion(18))
-            Picker(L("mg_device_model"), selection: $productType) {
+            IconToggle(title: L("mg_internal_storage"),
+                       systemImage: "internaldrive.fill",
+                       color: .gray,
+                       isOn: store.mgByteBinding(key: MGKey.intBuild))
+            IconToggle(title: L("mg_internal_stuff"),
+                       systemImage: "wrench.and.screwdriver.fill",
+                       color: .gray,
+                       isOn: store.mgByteBinding(key: MGKey.intInstall))
+            IconToggle(title: L("mg_security_research"),
+                       systemImage: "shield.checkerboard",
+                       color: .indigo,
+                       isOn: store.mgByteBinding(key: MGKey.srd))
+            Toggle(isOn: bindingForAppleIntelligence()) {
+                HStack(spacing: 12) {
+                    TweakRowIcon("sparkles", color: .pink)
+                    Text(L("mg_apple_intelligence"))
+                }
+            }
+            .disabled(Utils.requiresVersion(18))
+            Picker(selection: $productType) {
                 Text(L("mg_device_model_unchanged")).tag(MobileGestaltView.machineName())
-                if UIDevice.current.userInterfaceIdiom == .pad { Text("iPad Pro 11 inch 5th Gen").tag("iPad16,3") }
-                else {
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    Text("iPad Pro 11 inch 5th Gen").tag("iPad16,3")
+                } else {
                     Text("iPhone 15 Pro Max").tag("iPhone16,2")
                     Text("iPhone 16 Pro Max").tag("iPhone17,2")
                 }
-            }.pickerStyle(.menu)
+            } label: {
+                IconPickerLabel(title: L("mg_device_model"), systemImage: "iphone.gen3", color: .blue)
+            }
+            .pickerStyle(.menu)
         }
     }
 
     @ViewBuilder private var saveResetSection: some View {
         Section(header: Text(L("section_save_reset"))) {
-            Button(action: {
-                do {
-                    let onDevicePath = MobileGestaltApplyTask.onDeviceMGPath
-                    let onDeviceURL = URL(fileURLWithPath: onDevicePath)
-                    if let originalData = try? Data(contentsOf: onDeviceURL) {
-                        try? MobileGestaltBackupManager.shared.ensureBackup(from: originalData)
-                    }
-                    saveProductType()
-                    if let storeCacheExtra = store.mgCurrentDict["CacheExtra"] as? NSMutableDictionary, let localCacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary {
-                        for (key, value) in storeCacheExtra { localCacheExtra[key as! String] = value }
-                    }
-                    if let storeCacheData = store.mgCurrentDict["CacheData"] { mobileGestalt["CacheData"] = storeCacheData }
-                    try mobileGestalt.write(to: modMGURL)
-                    store.loadFromPlist(url: modMGURL)
-                    showApplyTab = true 
-                    lastError = MobileGestaltBackupManager.shared.hasBackup ? "Đã lưu + tạo backup pristine. Tab Apply đã được mở ở dưới." : "Đã lưu. Tab Apply đã được mở ở dưới."
-                    showErrorAlert = true
-                } catch {
-                    lastError = "Save failed: \(error)"
-                    showErrorAlert = true
-                }
-            }) {
+            Button(action: saveChanges) {
                 Label(L("mg_save_settings"), systemImage: "square.and.arrow.down")
             }
-
-            Button(role: .destructive, action: {
-                do {
-                    let pristineData = try MobileGestaltBackupManager.shared.restoreData()
-                    try pristineData.write(to: modMGURL)
-                    mobileGestalt = try NSMutableDictionary(contentsOf: modMGURL, error: ())
-                    store.loadFromPlist(url: modMGURL)
-                    toolStore.replaceMobileGestaltEnabled = true
-                    showApplyTab = true
-                    lastError = "Đã reset về pristine backup. Tab Apply đã được mở — bấm Apply để ghi lại vào hệ thống."
-                    showErrorAlert = true
-                } catch {
-                    lastError = "Reset failed: \(error)"
-                    showErrorAlert = true
-                }
-            }) {
+            Button(role: .destructive, action: resetOriginal) {
                 Label("Reset Original", systemImage: "arrow.counterclockwise")
             }
         }
     }
 
+    // MARK: - Actions
+
+    private func saveChanges() {
+        do {
+            let onDeviceURL = URL(fileURLWithPath: MobileGestaltApplyTask.onDeviceMGPath)
+            if let originalData = try? Data(contentsOf: onDeviceURL) {
+                try? MobileGestaltBackupManager.shared.ensureBackup(from: originalData)
+            }
+            saveProductType()
+            if let storeCacheExtra = store.mgCurrentDict["CacheExtra"] as? NSMutableDictionary,
+               let localCacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary {
+                for (key, value) in storeCacheExtra { localCacheExtra[key as! String] = value }
+            }
+            if let storeCacheData = store.mgCurrentDict["CacheData"] {
+                mobileGestalt["CacheData"] = storeCacheData
+            }
+            try mobileGestalt.write(to: modMGURL)
+            store.loadFromPlist(url: modMGURL)
+            showApplyTab = true
+            lastError = MobileGestaltBackupManager.shared.hasBackup
+                ? "Đã lưu + backup pristine. Tab Apply đã mở."
+                : "Đã lưu. Tab Apply đã mở."
+            showErrorAlert = true
+        } catch {
+            lastError = "Save failed: \(error)"
+            showErrorAlert = true
+        }
+    }
+
+    private func resetOriginal() {
+        do {
+            let pristineData = try MobileGestaltBackupManager.shared.restoreData()
+            try pristineData.write(to: modMGURL)
+            mobileGestalt = try NSMutableDictionary(contentsOf: modMGURL, error: ())
+            store.loadFromPlist(url: modMGURL)
+            toolStore.replaceMobileGestaltEnabled = true
+            showApplyTab = true
+            lastError = "Đã reset về pristine backup. Bấm Apply để ghi lại."
+            showErrorAlert = true
+        } catch {
+            lastError = "Reset failed: \(error)"
+            showErrorAlert = true
+        }
+    }
+
+    // MARK: - Init
+
     init(toolStore: ToolStore) {
         self.toolStore = toolStore
-        let documentsDirectory = URL.documentsDirectory
-        featFlagsURL = documentsDirectory.appendingPathComponent("FeatureFlags.plist", conformingTo: .data)
-        origMGURL = documentsDirectory.appendingPathComponent("OriginalMobileGestalt.plist", conformingTo: .data)
-        modMGURL = documentsDirectory.appendingPathComponent("ModifiedMobileGestalt.plist", conformingTo: .data)
-        resolutionURL = documentsDirectory.appendingPathComponent("Resolution.plist", conformingTo: .data)
+        let docs = URL.documentsDirectory
+        featFlagsURL   = docs.appendingPathComponent("FeatureFlags.plist", conformingTo: .data)
+        origMGURL      = docs.appendingPathComponent("OriginalMobileGestalt.plist", conformingTo: .data)
+        modMGURL       = docs.appendingPathComponent("ModifiedMobileGestalt.plist", conformingTo: .data)
+        resolutionURL  = docs.appendingPathComponent("Resolution.plist", conformingTo: .data)
         do {
             if !FileManager.default.fileExists(atPath: origMGURL.path) {
                 let url = URL(filePath: MobileGestaltApplyTask.onDeviceMGPath)
@@ -229,18 +339,22 @@ struct MobileGestaltView: View {
         }
     }
 
+    // MARK: - Bindings
+
     func bindingForAppleIntelligence() -> Binding<Bool> {
-        guard let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary else { return State(initialValue: false).projectedValue }
+        guard let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary else { return .constant(false) }
         let key = MGKey.appIntell
         return Binding(
-            get: { if let value = cacheExtra[key] as? Int { return value == 1 }; return false },
+            get: { (cacheExtra[key] as? Int) == 1 },
             set: { enabled in
                 if enabled {
-                    eligibilityData = try! Data(contentsOf: Bundle.main.url(forResource: "eligibility", withExtension: "plist")!)
-                    featureFlagsData = try! Data(contentsOf: Bundle.main.url(forResource: "FeatureFlags_Global", withExtension: "plist")!)
+                    if let url = Bundle.main.url(forResource: "eligibility", withExtension: "plist"),
+                       let data = try? Data(contentsOf: url) { eligibilityData = data }
+                    if let url = Bundle.main.url(forResource: "FeatureFlags_Global", withExtension: "plist"),
+                       let data = try? Data(contentsOf: url) { featureFlagsData = data }
                     cacheExtra[key] = 1
                 } else {
-                    featureFlagsData = try! PropertyListSerialization.data(fromPropertyList: [:], format: .xml, options: 0)
+                    featureFlagsData = (try? PropertyListSerialization.data(fromPropertyList: [:], format: .xml, options: 0)) ?? Data()
                     eligibilityData = featureFlagsData
                     cacheExtra.removeObject(forKey: key)
                 }
@@ -249,9 +363,12 @@ struct MobileGestaltView: View {
     }
 
     func bindingForMGKeys<T: Equatable>(_ keys: [String], type: T.Type = Int.self, defaultValue: T? = 0, enableValue: T? = 1) -> Binding<Bool> {
-        guard let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary else { return State(initialValue: false).projectedValue }
+        guard let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary else { return .constant(false) }
         return Binding(
-            get: { if let value = cacheExtra[keys.first!] as? T, let ev = enableValue { return value == ev }; return false },
+            get: {
+                guard let value = cacheExtra[keys.first!] as? T, let ev = enableValue else { return false }
+                return value == ev
+            },
             set: { enabled in
                 for key in keys {
                     if enabled { cacheExtra[key] = enableValue } else { cacheExtra.removeObject(forKey: key) }
@@ -261,32 +378,36 @@ struct MobileGestaltView: View {
     }
 
     static func machineName() -> String {
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let machineMirror = Mirror(reflecting: systemInfo.machine)
-        return machineMirror.children.reduce("") { identifier, element in
-            guard let value = element.value as? Int8, value != 0 else { return identifier }
-            return identifier + String(UnicodeScalar(UInt8(value)))
+        var sys = utsname()
+        uname(&sys)
+        return Mirror(reflecting: sys.machine).children.reduce("") { id, el in
+            guard let v = el.value as? Int8, v != 0 else { return id }
+            return id + String(UnicodeScalar(UInt8(v)))
         }
     }
 
     func saveProductType() {
-        let cacheExtra = mobileGestalt["CacheExtra"] as! NSMutableDictionary
-        cacheExtra[MGKey.prodType] = productType
+        if let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary {
+            cacheExtra[MGKey.prodType] = productType
+        }
     }
 
     func applyModelName() {
         guard let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary else { return }
-        let currentDict = (cacheExtra[MGKey.artwork] as? NSMutableDictionary) ?? NSMutableDictionary()
-        currentDict["ArtworkDeviceProductDescription"] = modelName
-        cacheExtra[MGKey.artwork] = currentDict
-        store.cacheExtra[MGKey.artwork] = currentDict
+        let dict = (cacheExtra[MGKey.artwork] as? NSMutableDictionary) ?? NSMutableDictionary()
+        dict["ArtworkDeviceProductDescription"] = modelName
+        cacheExtra[MGKey.artwork] = dict
+        store.cacheExtra[MGKey.artwork] = dict
         store.objectWillChange.send()
     }
 
     func removeModelName() {
         guard let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary else { return }
-        if let gestaltDict = cacheExtra[MGKey.artwork] as? NSMutableDictionary { gestaltDict.removeObject(forKey: "ArtworkDeviceProductDescription") }
-        if let storeGestalt = store.cacheExtra[MGKey.artwork] as? NSMutableDictionary { storeGestalt.removeObject(forKey: "ArtworkDeviceProductDescription") }
+        if let g = cacheExtra[MGKey.artwork] as? NSMutableDictionary {
+            g.removeObject(forKey: "ArtworkDeviceProductDescription")
+        }
+        if let s = store.cacheExtra[MGKey.artwork] as? NSMutableDictionary {
+            s.removeObject(forKey: "ArtworkDeviceProductDescription")
+        }
     }
 }
