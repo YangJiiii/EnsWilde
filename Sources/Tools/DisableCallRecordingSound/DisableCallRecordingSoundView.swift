@@ -6,18 +6,19 @@ import SwiftUI
 struct DisableCallRecordingSoundView: View {
     @ObservedObject var toolStore: ToolStore
     @AppStorage("ShowApplyTab") private var showApplyTab: Bool = false
+    @Environment(\.dismiss) var dismiss
+    
+    @State private var showSavedAlert = false
 
     var body: some View {
         Form {
             Section {
                 Toggle("Enable Tweak", isOn: $toolStore.disableCallRecordingSoundEnabled)
-            } footer: {
-                Text("Thay thế âm thanh thông báo bắt đầu và kết thúc ghi âm cuộc gọi bằng âm thanh im lặng. File gốc sẽ bị ghi đè.")
-            }
+            } // Đã xoá caption
 
             Section {
                 Button {
-                    showApplyTab = true
+                    showSavedAlert = true
                 } label: {
                     HStack {
                         Image(systemName: "square.and.arrow.down")
@@ -31,5 +32,14 @@ struct DisableCallRecordingSoundView: View {
         }
         .navigationTitle("Disable Call Recording Sound")
         .navigationBarTitleDisplayMode(.inline)
+        // Popup thông báo
+        .alert("Saved", isPresented: $showSavedAlert) {
+            Button("OK") {
+                showApplyTab = true
+                dismiss()
+            }
+        } message: {
+            Text("Changes saved. Please go to the Apply tab to apply them.")
+        }
     }
 }
