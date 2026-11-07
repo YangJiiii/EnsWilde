@@ -2,27 +2,8 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 import ZIPFoundation
-
-private let _walletSyslogLock = NSLock()
-private var _walletSyslogActive = false
-
-private func startWalletSyslogOnce(handler: @escaping (String?) -> Void, onError: @escaping (Error?) -> Void) throws -> Bool {
-    _walletSyslogLock.lock()
-    let already = _walletSyslogActive
-    if !already { _walletSyslogActive = true }
-    _walletSyslogLock.unlock()
-    if already { return false }
-    try JITEnableContext.shared.startSyslogRelay(handler: handler, onError: onError)
-    return true
-}
-
-private func stopWalletSyslogIfActive() {
-    _walletSyslogLock.lock()
-    let was = _walletSyslogActive
-    _walletSyslogActive = false
-    _walletSyslogLock.unlock()
-    if was { JITEnableContext.shared.stopSyslogRelay() }
-}
+import AirliftFFI
+import Network
 
 struct AppleWalletView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
@@ -84,6 +65,8 @@ struct AppleWalletView: View {
     }
 }
 
+// MARK: - Scan Card Sheet
+
 struct ScanCardIDSheet: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var walletStore: AppleWalletStore
@@ -138,9 +121,16 @@ struct ScanCardIDSheet: View {
     private func startScanning() {
         guard !isScanning else { return }
         
-        // FIX CRASH: Bắt buộc phải có VPN
+        // 1. Kiểm tra VPN
         guard NetworkStatus.isVPNTunnelPresent() else {
-            scanStatus = "VPN chưa bật. Vui lòng bật VPN để quét."
+            scanStatus = "VPN chưa bật. Vui lòng bật LocalDevVPN để quét."
+            return
+        }
+        
+        // 2. Kiểm tra Pairing File (Airlift cần file này)
+        let pairingPath = URL.documentsDirectory.appendingPathComponent("pairingFile.plist").path
+        guard FileManager.default.fileExists(atPath: pairingPath) else {
+            scanStatus = "Không tìm thấy Pairing File."
             return
         }
         
@@ -194,63 +184,77 @@ struct ScanCardIDSheet: View {
         stopScanningTimerOnly()
         scanTask?.cancel()
         scanTask = nil
-        DispatchQueue.main.async { stopWalletSyslogIfActive() }
+        al_syslog_stream_stop()
     }
 }
 
-private final class ScanContinuationBox: @unchecked Sendable {
-    private var continuation: CheckedContinuation<String, Error>?
-    private let lock = NSLock()
-    private var isResumed = false
+// MARK: - Airlift Syslog Scanner
 
-    func set(_ c: CheckedContinuation<String, Error>) {
-        lock.lock(); continuation = c; lock.unlock()
-    }
-
-    func resume(_ result: Result<String, Error>) {
-        lock.lock()
-        guard !isResumed, let c = continuation else { lock.unlock(); return }
-        isResumed = true
-        continuation = nil
-        lock.unlock()
-        c.resume(with: result)
-    }
+/// Box giữ tham chiếu closure Swift để C callback không bị giải phóng
+private final class SyslogContextBox {
+    let onLine: (String) -> Void
+    init(onLine: @escaping (String) -> Void) { self.onLine = onLine }
 }
 
 func scanOneWalletCardIDSafe(timeout: TimeInterval = 60) async throws -> String {
-    let box = ScanContinuationBox()
+    let pairingPath = URL.documentsDirectory.appendingPathComponent("pairingFile.plist").path
+    
     return try await withTaskCancellationHandler {
         try await withCheckedThrowingContinuation { continuation in
-            box.set(continuation)
-
-            DispatchQueue.main.async {
-                do {
-                    let didStart = try startWalletSyslogOnce(handler: { line in
-                        guard let line = line else { return }
-                        guard line.localizedCaseInsensitiveContains("passd") else { return }
-                        if let cardID = extractWalletCardID(from: line) {
-                            box.resume(.success(cardID))
-                        }
-                    }, onError: { error in
-                        box.resume(.failure(error ?? NSError(domain: "Scan", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"])))
-                    })
-                    
-                    if !didStart {
-                        box.resume(.failure(NSError(domain: "Scan", code: -4, userInfo: [NSLocalizedDescriptionKey: "Syslog already running"])))
-                    }
-                } catch {
-                    box.resume(.failure(error))
-                }
+            var resumed = false
+            let lock = NSLock()
+            
+            // Helper đảm bảo continuation chỉ resume 1 lần duy nhất
+            func safeResume(_ result: Result<String, Error>) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(with: result)
+                al_syslog_stream_stop() // Tắt syslog sau khi lấy được ID hoặc timeout
             }
 
+            // Hẹn giờ timeout
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                box.resume(.failure(NSError(domain: "Scan", code: -2, userInfo: [NSLocalizedDescriptionKey: "Timeout"])))
+                safeResume(.failure(NSError(domain: "Scan", code: -2, userInfo: [NSLocalizedDescriptionKey: "Hết thời gian quét (60s)."])))
+            }
+
+            // Bắt đầu Syslog bằng Airlift (chạy dưới background)
+            DispatchQueue.global(qos: .userInitiated).async {
+                let box = SyslogContextBox { line in
+                    // Lọc log của passd
+                    if line.localizedCaseInsensitiveContains("passd") || line.localizedCaseInsensitiveContains("Cards") {
+                        if let cardID = extractWalletCardID(from: line) {
+                            safeResume(.success(cardID))
+                        }
+                    }
+                }
+                let opaque = Unmanaged.passRetained(box).toOpaque()
+                
+                // C-convention callback cho Airlift
+                let cb: ALSyslogLineCallback = { ctx, msgPtr in
+                    guard let ctx = ctx, let msgPtr = msgPtr else { return }
+                    let box = Unmanaged<SyslogContextBox>.fromOpaque(ctx).takeUnretainedValue()
+                    let line = String(cString: msgPtr)
+                    box.onLine(line)
+                }
+                
+                var errPtr: UnsafeMutablePointer<CChar>? = nil
+                // Hàm này sẽ block thread hiện tại cho đến khi al_syslog_stream_stop() được gọi
+                let res = al_syslog_stream_start(pairingPath, cb, opaque, &errPtr)
+                
+                if res != 0 {
+                    let msg = errPtr != nil ? String(cString: errPtr!) : "Không thể khởi động Syslog qua Airlift."
+                    if let e = errPtr { al_string_free(e) }
+                    safeResume(.failure(NSError(domain: "Scan", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg])))
+                }
+                
+                // Giải phóng box sau khi stream dừng
+                Unmanaged<SyslogContextBox>.fromOpaque(opaque).release()
             }
         }
     } onCancel: {
-        DispatchQueue.main.async {
-            stopWalletSyslogIfActive()
-            box.resume(.failure(CancellationError()))
-        }
+        // Nếu user bấm Cancel, dừng syslog
+        al_syslog_stream_stop()
     }
 }
