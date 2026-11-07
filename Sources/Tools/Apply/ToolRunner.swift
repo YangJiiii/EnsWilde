@@ -22,17 +22,12 @@ class ToolRunner: ObservableObject {
         onLogUpdate("Starting tweaks...")
 
         do {
-            // ── MobileGestalt ──────────────────────────────────────
             if store.replaceMobileGestaltEnabled {
                 onLogUpdate(">> Applying MobileGestalt...")
-                try await MobileGestaltApplyTask.applyGestalt(
-                    store: GestaltStore.shared,
-                    onLogUpdate: onLogUpdate
-                )
+                try await MobileGestaltApplyTask.applyGestalt(store: GestaltStore.shared, onLogUpdate: onLogUpdate)
                 onLogUpdate(">> MobileGestalt Done.")
             }
 
-            // ── Passcode Theme ─────────────────────────────────────
             if themeStore.passcodeThemeEnabled {
                 onLogUpdate(">> Applying Passcode Theme...")
                 let selectedTheme = themeStore.getSelectedTheme() ?? PasscodeTheme(name: "Default")
@@ -41,21 +36,18 @@ class ToolRunner: ObservableObject {
                 onLogUpdate(">> Passcode Theme Done.")
             }
 
-            // ── Apple Wallet ───────────────────────────────────────
             if walletStore.appleWalletEnabled {
                 onLogUpdate(">> Applying Apple Wallet...")
                 try await AppleWalletTask.run(store: store, walletStore: walletStore, onLogUpdate: onLogUpdate)
                 onLogUpdate(">> Wallet Done.")
             }
 
-            // ── Config Tweaks ──────────────────────────────────────
             if store.configTweaksEnabled {
                 onLogUpdate(">> Applying Config Tweaks...")
                 try await ConfigTweaksApplyTask.apply(store: store, onLogUpdate: onLogUpdate)
                 onLogUpdate(">> Config Tweaks Done.")
             }
 
-            // ── Disable Call Recording ─────────────────────────────
             if store.disableCallRecordingSoundEnabled {
                 onLogUpdate(">> Applying Disable Call Recording Sound...")
                 let vm = DisableCallRecordingSoundViewModel()
