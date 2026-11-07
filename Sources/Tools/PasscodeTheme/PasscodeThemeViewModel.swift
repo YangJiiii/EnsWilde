@@ -1,9 +1,5 @@
 //  PasscodeThemeViewModel.swift
 //  EnsWilde
-//
-//  - Thêm importDefaultPasscode(from:name:themeStore:) để khớp call site.
-//  - Bỏ LogBox riêng — dùng AirliftFFIBridge.makeLogCallback (đã có trong repo)
-//    để tránh conflict symbol "LogBox is ambiguous".
 
 import Foundation
 import SwiftUI
@@ -22,7 +18,7 @@ class PasscodeThemeViewModel: ObservableObject {
         self.store = store
     }
 
-    // MARK: - Import (public)
+    // MARK: - Import
 
     func importTheme(from sourceURL: URL, name: String) async throws {
         isProcessing = true
@@ -69,10 +65,7 @@ class PasscodeThemeViewModel: ObservableObject {
         self.store.addTheme(themeWithSize)
     }
 
-    /// API tương thích với call site cũ trong view.
-    /// `themeStore` param chỉ để khớp signature — nếu view truyền vào store khác
-    /// với `self.store` thì vẫn chỉ `self.store` được add; thường view truyền
-    /// cùng instance nên không khác biệt.
+    /// Hàm tương thích với View gọi tới
     func importDefaultPasscode(
         from sourceURL: URL,
         name: String,
@@ -81,7 +74,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try await importTheme(from: sourceURL, name: name)
     }
 
-    // MARK: - Xử lý ảnh (giữ nguyên)
+    // MARK: - Xử lý ảnh
 
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
@@ -200,26 +193,20 @@ class PasscodeThemeViewModel: ObservableObject {
 
         onLogUpdate("Preparing Passcode Theme...")
 
-        // 1. Xử lý ảnh (resize nặng → chạy background)
+        // 1. Xử lý ảnh
         let processedFiles = try processThemeFiles(theme: theme, globalPrefix: globalPrefix)
         guard !processedFiles.isEmpty else {
             throw PasscodeThemeError.noImagesProcessed
         }
 
-        // 2. VPN check — dùng NetworkStatus (đã có probe 49152/62078)
-        guard NetworkStatus.isVPNTunnelPresent() else {
-            throw NSError(domain: "AirLift", code: -10,
-                          userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật hoặc tunnel chưa có IP loopback."])
-        }
-
-        // 3. Pairing file
+        // 2. Pairing file
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         guard FileManager.default.fileExists(atPath: pairingURL.path) else {
             throw NSError(domain: "AirLift", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."])
         }
 
-        // 4. Thư mục tạm chứa ảnh đã xử lý
+        // 3. Thư mục tạm
         let tempFolderName = "AirLiftPayload_\(UUID().uuidString)"
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(tempFolderName)
@@ -230,13 +217,13 @@ class PasscodeThemeViewModel: ObservableObject {
             try imageData.write(to: tempDir.appendingPathComponent(targetFilename))
         }
 
-        // 5. Target path
+        // 4. Target path
         var targetPath = globalTelephony.cachePath
         if targetPath.hasSuffix("/") {
             targetPath = String(targetPath.dropLast())
         }
 
-        // 6. Xoá cache cũ bằng BadQuery
+        // 5. Xoá cache cũ
         onLogUpdate("Clearing old cache at \(targetPath)...")
         let bq = BadQuery()
         if bq.grantAccess(atPath: targetPath).0 {
@@ -253,21 +240,21 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
 
-        // 7. Resolve target host (RSD 49152 + Lockdown 62078 probe)
+        // 6. Resolve target host (RSD 49152 + Lockdown 62078 probe)
         onLogUpdate("Đang dò tunnel IP + probe RSD 49152 / Lockdown 62078...")
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
             throw NSError(domain: "AirLift", code: -3,
-                          userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel (49152 đóng và 62078 đóng)."])
+                          userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN. Hãy kiểm tra LocalDevVPN đã Connected chưa."])
         }
 
-        // 8. Gọi Airlift FFI trên background thread
+        // 7. Gọi Airlift FFI
         onLogUpdate("Đang ghi qua AirTraffic...")
         let pairingPath = pairingURL.path
         let srcDir      = tempDir.path
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
-                // Dùng AirliftFFIBridge — tránh tự khai báo LogBox gây conflict.
+                // Dùng AirliftFFIBridge để tránh khai báo trùng LogBox
                 let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
                 defer { AirliftFFIBridge.releaseLogCallback(ctx) }
 
