@@ -1,7 +1,6 @@
 import Foundation
 
 enum ConfigTweaksApplyTask {
-    // Path chuẩn iOS 16/17/18 (dùng trong Nugget, Geranium, Cowabunga Lite)
     static let footnotePath = "/var/mobile/Library/Preferences/com.apple.lockscreen.shared.plist"
     static let footnoteKey  = "SBLockScreenFootnoteText"
 
@@ -69,16 +68,34 @@ enum ConfigTweaksApplyTask {
         guard (try? PropertyListSerialization.propertyList(from: data, format: nil)) != nil else {
             throw cfgError(-21, "Verify in-memory thất bại, không ghi.")
         }
-        do {
-            try BadQueryWrapper.writeFile(at: path, data: data)
-        } catch {
-            let hint = (error as? BadQueryError)?.errorDescription ?? error.localizedDescription
-            throw cfgError(-22, "Ghi thất bại tại \(path): \(hint)")
+
+        let bq = BadQuery()
+        let dir = (path as NSString).deletingLastPathComponent
+
+        // FIX: Xin quyền cho thư mục cha trước (Preferences), nếu fail mới xin cho file
+        var granted = bq.grantAccess(atPath: dir).0
+        if !granted {
+            granted = bq.grantAccess(atPath: path).0
         }
+
+        if granted {
+            // Ghi trực tiếp bằng FileManager sau khi đã grant quyền
+            if !dict.write(toFile: path, atomically: true) {
+                throw cfgError(-22, "FileManager không ghi được file: \(path)")
+            }
+        } else {
+            // Fallback: Dùng BadQueryWrapper (đề phòng trường hợp BadQueryWrapper xử lý khác)
+            do {
+                try BadQueryWrapper.writeFile(at: path, data: data)
+            } catch {
+                throw cfgError(-23, "Ghi thất bại tại \(path) (BadQuery grant fail): \(error.localizedDescription)")
+            }
+        }
+
         // Verify từ đĩa
         if let written = try? Data(contentsOf: URL(fileURLWithPath: path)),
            (try? PropertyListSerialization.propertyList(from: written, format: nil)) == nil {
-            throw cfgError(-23, "File sau khi ghi không parse được: \(path)")
+            throw cfgError(-24, "File sau khi ghi không parse được: \(path)")
         }
     }
 
