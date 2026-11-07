@@ -38,9 +38,8 @@ struct SettingsView: View {
     @AppStorage("PairingFile") private var pairingFile: String?
     @State private var showPairingPicker = false
     
-    // --- Thêm state cho Pair On Device ---
+    // State cho Pair On Device
     @State private var showOnDevicePairing = false
-    // -------------------------------------
     
     @State private var vpnActive: Bool = false
     @State private var monitor: NWPathMonitor?
@@ -75,14 +74,13 @@ struct SettingsView: View {
                 } else {
                     Button { showPairingPicker = true } label: { Label("Import Pairing", systemImage: "doc.badge.plus") }
                     
-                    // --- Nút Pair On Device ---
+                    // Nút Pair On Device
                     if #available(iOS 27.0, *) {
                         Button { showOnDevicePairing = true } label: {
                             Label("Pair On Device (iOS 27+)", systemImage: "iphone.radiowaves.left.and.right")
                                 .foregroundStyle(.blue)
                         }
                     }
-                    // --------------------------
                 }
             }
 
@@ -157,7 +155,8 @@ struct SettingsView: View {
                 UTType(filenameExtension: "mobiledevicepairing") ?? .data
             ]) { url in handlePairingImport(url) }
         }
-        // --- Thêm Sheet Pair On Device ---
+        
+        // SHEET PAIR ON DEVICE
         .sheet(isPresented: $showOnDevicePairing) {
             NavigationStack {
                 OnDevicePairingView()
@@ -168,7 +167,7 @@ struct SettingsView: View {
                     }
             }
         }
-        // ----------------------------------
+        
         .sheet(isPresented: $showImportBackupPicker) {
             DocumentPickerView(allowedContentTypes: [.data, .item]) { url in handleBackupImport(url) }
         }
@@ -210,11 +209,9 @@ struct SettingsView: View {
         
         do {
             _ = try RPPairingParser.parse(url: url)
-            
             let data = try Data(contentsOf: url)
             let destURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
             try data.write(to: destURL)
-            
             pairingFile = url.lastPathComponent
         } catch {
             errorMessage = error.localizedDescription
@@ -277,7 +274,6 @@ struct SettingsView: View {
 }
 
 // MARK: - About View
-// (Giữ nguyên phần AboutView như file cũ của bạn...)
 struct AboutView: View {
     @ObservedObject private var languageManager = LanguageManager.shared
     var body: some View {
