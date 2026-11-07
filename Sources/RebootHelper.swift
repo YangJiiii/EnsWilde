@@ -1,44 +1,59 @@
 //  RebootHelper.swift
 //  EnsWilde
 //
-//  Dùng Private API để khởi động lại thiết bị (Reboot).
-//  Thay vì chỉ kill SpringBoard (Respring).
+//  Cố gắng reboot máy thật bằng syscall reboot().
+//  Nếu sandbox chặn (app sideload thường), fallback về NeoSpring respring
+//  để ít nhất SpringBoard/TelephonyUI reload lại cache.
 
 import Foundation
-import UIKit
+import Darwin
 
 enum RebootHelper {
-    
-    /// Khởi động lại thiết bị (Reboot)
+
+    /// Reboot máy nếu có quyền, fallback respring nếu không.
     static func rebootDevice() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            // 1. Thử dùng Private API của FrontBoardServices hoặc UIDevice
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-            task.arguments = ["-9", "backboardd"] // Kill backboardd sẽ khiến máy tự reboot
-            
-            do {
-                try task.run()
-            } catch {
-                print("[Reboot] Fallback to SpringBoard kill: \(error)")
-                // Fallback: Kill SpringBoard nếu không kill được backboardd
-                let fallback = Process()
-                fallback.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-                fallback.arguments = ["-9", "SpringBoard"]
-                try? fallback.run()
-            }
+        print("[Reboot] Attempting kernel reboot...")
+
+        // 1. Thử gọi syscall reboot() qua libSystem
+        if tryKernelReboot() {
+            return
+        }
+        print("[Reboot] Kernel reboot failed (sandbox). Trying launchd...")
+
+        // 2. Thử kill launchd — kernel sẽ trigger reboot userspace
+        if tryKillLaunchd() {
+            return
+        }
+        print("[Reboot] launchd kill failed (sandbox). Falling back to NeoSpring respring.")
+
+        // 3. Fallback: NeoSpring respring (đủ để reload cache passcode)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            RespringHelper.triggerNeoSpring()
         }
     }
-    
-    /// Cách 2 (Nếu cách trên không được): Gọi qua XPC hoặc Private Framework
-    static func forceReboot() {
-        // Gọi _reboot() từ libsystem_kernel
-        let handle = dlopen("/usr/lib/libSystem.B.dylib", RTLD_NOW)
-        if let sym = dlsym(handle, "reboot") {
-            typealias RebootFunc = @convention(c) (Int32) -> Int32
-            let reboot = unsafeBitCast(sym, to: RebootFunc.self)
-            _ = reboot(0x80000000 | 0x12345678) // Lệnh reboot kernel
+
+    // MARK: - Private
+
+    /// Gọi syscall `reboot(RB_AUTOBOOT)` qua dlopen. Trả true nếu không lỗi.
+    private static func tryKernelReboot() -> Bool {
+        guard let handle = dlopen("/usr/lib/libSystem.B.dylib", RTLD_NOW),
+              let sym = dlsym(handle, "reboot") else {
+            return false
         }
-        dlclose(handle)
+        defer { dlclose(handle) }
+
+        typealias RebootFunc = @convention(c) (Int32) -> Int32
+        let rebootFunc = unsafeBitCast(sym, to: RebootFunc.self)
+
+        // RB_AUTOBOOT = 0x01234567 theo <sys/reboot.h>
+        let RB_AUTOBOOT: Int32 = 0x01234567
+        let rc = rebootFunc(RB_AUTOBOOT)
+        return rc == 0
+    }
+
+    /// Kill launchd (PID 1) — kernel sẽ reboot userspace. Trả true nếu thành công.
+    private static func tryKillLaunchd() -> Bool {
+        let rc = kill(1, SIGTERM)
+        return rc == 0
     }
 }
