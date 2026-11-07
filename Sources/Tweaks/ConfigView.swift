@@ -10,16 +10,12 @@ struct ConfigView: View {
     var body: some View {
         Form {
             Section(header: Text("Config Tweaks")) {
-                IconToggle(
-                    title: "Enable Tweak",
-                    systemImage: "slider.horizontal.3",
-                    color: .gray,
-                    isOn: $toolStore.configTweaksEnabled
-                )
+                // Bỏ icon ở dòng Enable Tweak
+                Toggle("Enable Tweak", isOn: $toolStore.configTweaksEnabled)
             }
             Section(header: Text("Lock Screen Footnote")) {
                 HStack(spacing: 12) {
-                    TweakRowIcon("text.bubble.fill", color: .blue)
+                    TweakRowIcon("text.bubble.fill")
                     TextField("Footnote text", text: $footnoteText)
                         .autocorrectionDisabled()
                 }
@@ -27,7 +23,7 @@ struct ConfigView: View {
             Section(header: Text("Supervision")) {
                 Toggle(isOn: $supervised) {
                     HStack(spacing: 12) {
-                        TweakRowIcon("checkmark.shield.fill", color: .green)
+                        TweakRowIcon("checkmark.shield.fill")
                         Text("Enable Supervision")
                     }
                 }
