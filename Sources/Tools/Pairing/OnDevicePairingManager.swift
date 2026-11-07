@@ -17,7 +17,7 @@ class OnDevicePairingManager: NSObject, ObservableObject {
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var pairingTask: Task<Void, Never>?
     
-    // Khởi tạo NSObject
+    // Khởi tạo NSObject cho NetServiceDelegate
     override init() {
         super.init()
     }
@@ -87,19 +87,20 @@ class OnDevicePairingManager: NSObject, ObservableObject {
             }
         }
         
-        // Sử dụng withCString để bridge String an toàn sang C
         var result = ALPairResult()
-        let rc = "10.7.0.1".withCString { bindAddr in
+        
+        // SỬA LỖI 49: Dùng "0.0.0.0" thay vì "10.7.0.1" để bind vào tất cả interfaces
+        let rc = "0.0.0.0".withCString { bindAddr in
             "EnsWilde".withCString { name in
                 "iPhone".withCString { model in
                     outPath.withCString { outPathPtr in
                         al_pairing_run_host(
                             bindAddr,
-                            0,
+                            0,          // Port 0 = OS tự chọn
                             name,
                             model,
                             outPathPtr,
-                            nil,
+                            nil,        // host_alt_irk_hex
                             readyCb,
                             pinCb,
                             context,
