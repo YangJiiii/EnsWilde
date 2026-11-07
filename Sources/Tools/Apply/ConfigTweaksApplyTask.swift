@@ -1,12 +1,21 @@
 import Foundation
 
 enum ConfigTweaksApplyTask {
+    // Đường dẫn gốc không thể ghi trực tiếp bằng bad_query
     static let footnotePath = "/var/mobile/Library/Preferences/com.apple.lockscreen.shared.plist"
     static let footnoteKey  = "SBLockScreenFootnoteText"
 
     static let supervisionPath   = "/var/mobile/Library/Preferences/com.apple.mobileactivationd.plist"
     static let supervisionKey    = "IsSupervised"
     static let supervisorHostKey = "SupervisorHostName"
+
+    // Đường dẫn tạm nằm trong sandbox của app (được phép ghi)
+    static var tempFootnoteURL: URL {
+        URL.documentsDirectory.appendingPathComponent("com.apple.lockscreen.shared.plist")
+    }
+    static var tempSupervisionURL: URL {
+        URL.documentsDirectory.appendingPathComponent("com.apple.mobileactivationd.plist")
+    }
 
     static func apply(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         let footnoteText = UserDefaults.standard.string(forKey: "ConfigFootnoteText") ?? ""
@@ -20,28 +29,28 @@ enum ConfigTweaksApplyTask {
         // ── 1. FOOTNOTE ────────────────────────────────────────────
         if footnoteText.isEmpty {
             onLogUpdate("[Footnote] Không có text — xoá key nếu tồn tại.")
-            try setString(path: footnotePath, key: footnoteKey, value: nil)
+            try setString(path: footnotePath, tempURL: tempFootnoteURL, key: footnoteKey, value: nil)
         } else {
             onLogUpdate("[Footnote] Ghi \"\(footnoteText)\"...")
-            try setString(path: footnotePath, key: footnoteKey, value: footnoteText)
+            try setString(path: footnotePath, tempURL: tempFootnoteURL, key: footnoteKey, value: footnoteText)
             onLogUpdate("[Footnote] ✅ Xong.")
         }
 
         // ── 2. SUPERVISION ─────────────────────────────────────────
         if isSupervised {
             onLogUpdate("[Supervision] Bật supervision...")
-            let dict = loadPlist(at: supervisionPath)
+            var dict = loadPlist(at: tempSupervisionURL)
             dict[supervisionKey]    = true
             dict[supervisorHostKey] = "EnsWilde"
-            try writePlist(dict, to: supervisionPath)
+            try writePlist(dict, to: supervisionPath, tempURL: tempSupervisionURL)
             onLogUpdate("[Supervision] ✅ Bật xong.")
         } else {
             onLogUpdate("[Supervision] Tắt supervision.")
-            let dict = loadPlist(at: supervisionPath)
+            var dict = loadPlist(at: tempSupervisionURL)
             if dict[supervisionKey] != nil || dict[supervisorHostKey] != nil {
                 dict.removeObject(forKey: supervisionKey)
                 dict.removeObject(forKey: supervisorHostKey)
-                try writePlist(dict, to: supervisionPath)
+                try writePlist(dict, to: supervisionPath, tempURL: tempSupervisionURL)
             }
             onLogUpdate("[Supervision] ✅ Tắt xong.")
         }
@@ -49,66 +58,44 @@ enum ConfigTweaksApplyTask {
         onLogUpdate("[Config] ✅ Config Tweaks đã apply. Respring để thay đổi có hiệu lực.")
     }
 
-    // MARK: - Plist I/O
+    // MARK: - Helpers
 
-    private static func loadPlist(at path: String) -> NSMutableDictionary {
-        guard FileManager.default.fileExists(atPath: path) else {
+    private static func loadPlist(at tempURL: URL) -> NSMutableDictionary {
+        guard FileManager.default.fileExists(atPath: tempURL.path) else {
             return NSMutableDictionary()
         }
-        return NSMutableDictionary(contentsOfFile: path) ?? NSMutableDictionary()
+        return NSMutableDictionary(contentsOf: tempURL) ?? NSMutableDictionary()
     }
 
-    private static func writePlist(_ dict: NSMutableDictionary, to path: String) throws {
-        let data: Data
+    private static func writePlist(_ dict: NSMutableDictionary, to path: String, tempURL: URL) throws {
+        // 1. Ghi file tạm trong Documents
+        if !dict.write(to: tempURL, atomically: true) {
+            throw cfgError(-20, "Không thể tạo file tạm tại \(tempURL.path)")
+        }
+
+        // 2. Đọc dữ liệu từ file tạm
+        let data = try Data(contentsOf: tempURL)
+
+        // 3. Dùng BadQueryWrapper để ghi ra đường dẫn đích
         do {
-            data = try PropertyListSerialization.data(fromPropertyList: dict, format: .binary, options: 0)
+            try BadQueryWrapper.writeFile(at: path, data: data)
         } catch {
-            throw cfgError(-20, "Serialize plist thất bại: \(error.localizedDescription)")
-        }
-        guard (try? PropertyListSerialization.propertyList(from: data, format: nil)) != nil else {
-            throw cfgError(-21, "Verify in-memory thất bại, không ghi.")
+            throw cfgError(-21, "Ghi thất bại tại \(path) (BadQuery grant fail): \(error.localizedDescription)")
         }
 
-        let bq = BadQuery()
-        let dir = (path as NSString).deletingLastPathComponent
-
-        // FIX: Xin quyền cho thư mục cha trước (Preferences), nếu fail mới xin cho file
-        var granted = bq.grantAccess(atPath: dir).0
-        if !granted {
-            granted = bq.grantAccess(atPath: path).0
-        }
-
-        if granted {
-            // Ghi trực tiếp bằng FileManager sau khi đã grant quyền
-            if !dict.write(toFile: path, atomically: true) {
-                throw cfgError(-22, "FileManager không ghi được file: \(path)")
-            }
-        } else {
-            // Fallback: Dùng BadQueryWrapper (đề phòng trường hợp BadQueryWrapper xử lý khác)
-            do {
-                try BadQueryWrapper.writeFile(at: path, data: data)
-            } catch {
-                throw cfgError(-23, "Ghi thất bại tại \(path) (BadQuery grant fail): \(error.localizedDescription)")
-            }
-        }
-
-        // Verify từ đĩa
-        if let written = try? Data(contentsOf: URL(fileURLWithPath: path)),
-           (try? PropertyListSerialization.propertyList(from: written, format: nil)) == nil {
-            throw cfgError(-24, "File sau khi ghi không parse được: \(path)")
-        }
+        // 4. Dọn dẹp file tạm
+        try? FileManager.default.removeItem(at: tempURL)
     }
 
-    private static func setString(path: String, key: String, value: String?) throws {
-        if !FileManager.default.fileExists(atPath: path) && value == nil { return }
-        let dict = loadPlist(at: path)
+    private static func setString(path: String, tempURL: URL, key: String, value: String?) throws {
+        var dict = loadPlist(at: tempURL)
         if let value = value {
             dict[key] = value
         } else {
             guard dict[key] != nil else { return }
             dict.removeObject(forKey: key)
         }
-        try writePlist(dict, to: path)
+        try writePlist(dict, to: path, tempURL: tempURL)
     }
 
     private static func cfgError(_ code: Int, _ msg: String) -> NSError {
