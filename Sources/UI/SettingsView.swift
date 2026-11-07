@@ -37,6 +37,11 @@ struct SettingsView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
     @AppStorage("PairingFile") private var pairingFile: String?
     @State private var showPairingPicker = false
+    
+    // --- Thêm state cho Pair On Device ---
+    @State private var showOnDevicePairing = false
+    // -------------------------------------
+    
     @State private var vpnActive: Bool = false
     @State private var monitor: NWPathMonitor?
     @AppStorage("isAirLiftMode") private var isAirLiftMode: Bool = false
@@ -69,6 +74,15 @@ struct SettingsView: View {
                     } label: { Label(L("button_reset_pairing"), systemImage: "trash") }
                 } else {
                     Button { showPairingPicker = true } label: { Label("Import Pairing", systemImage: "doc.badge.plus") }
+                    
+                    // --- Nút Pair On Device ---
+                    if #available(iOS 27.0, *) {
+                        Button { showOnDevicePairing = true } label: {
+                            Label("Pair On Device (iOS 27+)", systemImage: "iphone.radiowaves.left.and.right")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                    // --------------------------
                 }
             }
 
@@ -143,6 +157,18 @@ struct SettingsView: View {
                 UTType(filenameExtension: "mobiledevicepairing") ?? .data
             ]) { url in handlePairingImport(url) }
         }
+        // --- Thêm Sheet Pair On Device ---
+        .sheet(isPresented: $showOnDevicePairing) {
+            NavigationStack {
+                OnDevicePairingView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Đóng") { showOnDevicePairing = false }
+                        }
+                    }
+            }
+        }
+        // ----------------------------------
         .sheet(isPresented: $showImportBackupPicker) {
             DocumentPickerView(allowedContentTypes: [.data, .item]) { url in handleBackupImport(url) }
         }
@@ -178,16 +204,13 @@ struct SettingsView: View {
         }
     }
 
-    // FIX: Import RPPairing chuẩn iOS 27 - 4 key XML là đủ
     private func handlePairingImport(_ url: URL) {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
         
         do {
-            // Validate bằng parser mới (chỉ cần 4 key: public_key, private_key, identifier, alt_irk)
             _ = try RPPairingParser.parse(url: url)
             
-            // Copy vào Documents
             let data = try Data(contentsOf: url)
             let destURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
             try data.write(to: destURL)
@@ -254,6 +277,7 @@ struct SettingsView: View {
 }
 
 // MARK: - About View
+// (Giữ nguyên phần AboutView như file cũ của bạn...)
 struct AboutView: View {
     @ObservedObject private var languageManager = LanguageManager.shared
     var body: some View {
