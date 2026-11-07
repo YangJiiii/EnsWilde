@@ -13,16 +13,18 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
 
     private struct ToneFile {
         let originalName: String
-        let silentBundleName: String
-        let fileExtension: String
+        let remoteName: String
     }
 
-    // Ánh xạ file gốc trên máy với file im lặng trong Bundle
+    // Ánh xạ file trên máy với file tải từ GitHub
     private let toneFiles = [
-        ToneFile(originalName: "StartDisclosureWithTone.m4a", silentBundleName: "AirBeepStartSilence", fileExtension: "m4a"),
-        ToneFile(originalName: "StartDisclosure.caf", silentBundleName: "AirBeepStartSilence", fileExtension: "caf"),
-        ToneFile(originalName: "StopDisclosure.caf", silentBundleName: "AirBeepStopSilence", fileExtension: "caf")
+        ToneFile(originalName: "StartDisclosureWithTone.m4a", remoteName: "AirBeepStartSilence.m4a"),
+        ToneFile(originalName: "StartDisclosure.caf", remoteName: "AirBeepStartSilence.caf"),
+        ToneFile(originalName: "StopDisclosure.caf", remoteName: "AirBeepStopSilence.caf")
     ]
+    
+    // Link raw Github của bạn
+    private let githubBaseURL = "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde/main/Resources/"
 
     func apply(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
@@ -42,8 +44,8 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy RSD tunnel."])
         }
 
-        onLogUpdate("Đang chuẩn bị file âm thanh im lặng...")
-        let stagingDir = try prepareSilentFiles()
+        onLogUpdate("Đang tải file âm thanh im lặng từ GitHub...")
+        let stagingDir = try await downloadSilentFiles()
         defer { try? FileManager.default.removeItem(at: stagingDir) }
 
         onLogUpdate("Đang ghi đè âm thanh qua Airlift...")
@@ -52,16 +54,22 @@ class DisableCallRecordingSoundViewModel: ObservableObject {
         onLogUpdate("✅ Đã tắt âm thanh thông báo ghi âm cuộc gọi.")
     }
 
-    private func prepareSilentFiles() throws -> URL {
+    private func downloadSilentFiles() async throws -> URL {
         let stagingDir = FileManager.default.temporaryDirectory.appendingPathComponent("AirliftTones_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
 
         for tone in toneFiles {
-            guard let bundleURL = Bundle.main.url(forResource: tone.silentBundleName, withExtension: tone.fileExtension) else {
-                throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "Thiếu file trong bundle: \(tone.silentBundleName).\(tone.fileExtension)"])
+            guard let url = URL(string: githubBaseURL + tone.remoteName) else {
+                throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "URL không hợp lệ cho \(tone.remoteName)"])
             }
+            
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                throw NSError(domain: "AirLift", code: -2, userInfo: [NSLocalizedDescriptionKey: "Không thể tải \(tone.remoteName) từ GitHub. Hãy kiểm tra lại repo."])
+            }
+            
             let destURL = stagingDir.appendingPathComponent(tone.originalName)
-            try FileManager.default.copyItem(at: bundleURL, to: destURL)
+            try data.write(to: destURL)
         }
 
         return stagingDir
