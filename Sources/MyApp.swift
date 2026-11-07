@@ -44,7 +44,6 @@ struct MyApp: App {
             "24A5355q", // 27.0 beta 1
             "24A5370h", // 27.0 beta 2
             "24A5380h", // 27.0 beta 3
-            "24A5390f"  // 27.0 beta 4
         ]
         
         if supportedBuilds.contains(build) {
