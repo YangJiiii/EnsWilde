@@ -12,18 +12,17 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
     @Published private(set) var isProcessing: Bool = false
     @Published private(set) var currentStatus: String = "Checking..."
 
-    /// Toggle "tweak đang bật" — suy ra từ backup existence (user đã từng Apply chưa).
-    /// - Nếu backup tồn tại → true (toggle ON)
-    /// - Sau Restore: VẪN GIỮ giá trị cũ (không bị reset về false)
-    /// - Chỉ khi mất backup mới bị set = false
+    /// Toggle "tweak đang bật". CHỈ false khi:
+    ///   - Chưa Apply lần nào (không có backup)
+    ///   - User xoá backup / mất backup
+    /// KHÔNG bị tắt sau Restore → vẫn cho phép Apply lại.
     @Published private(set) var isTweakActive: Bool = false
 
     @Published private(set) var isChecking: Bool = false
 
-    /// Trạng thái THỰC TẾ của 3 file tone trên thiết bị (được app track theo hành động).
-    /// - `Apply`    → true  (đã ghi đè file im lặng)
-    /// - `Restore`  → false (đã khôi phục file gốc)
-    /// Dùng giá trị này để hiển thị `toneStatus` — không dùng `isTweakActive` nữa.
+    /// Trạng thái THỰC TẾ của 3 file tone trên máy (detect bằng cách đọc file qua Airlift).
+    /// true  = file hiện tại KHÁC backup → đã bị ghi silent
+    /// false = file hiện tại GIỐNG backup → đang là bản gốc
     @Published private(set) var isToneSilenced: Bool = false
 
     @Published private(set) var toneStatus: String = "Unknown"
@@ -34,12 +33,10 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
     private let targetDirectory = "/var/mobile/Library/CallServices/Greetings/default"
     private let githubBaseURL = "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde/main/Resources/"
 
-    // MARK: - Đường dẫn backup
     var backupDirectory: URL {
         URL.documentsDirectory.appendingPathComponent("AirBeepBackups", isDirectory: true)
     }
 
-    // MARK: - Model
     private struct ToneFile {
         let originalName: String
         let silentName: String
@@ -54,22 +51,20 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
     // MARK: - Init
     init() {
         refreshBackupState()
-        // Nếu đã có backup → user đã từng Apply → coi như file đang silenced.
-        // Đây là giả định mặc định; user có thể bấm Restore để đưa về Original.
+        // Fallback ban đầu: nếu có backup → coi như đã từng Apply (Silenced).
+        // checkToneStatus() sẽ detect lại chính xác từ file thực tế khi user mở tab.
         if isBackupReady {
-            isTweakActive  = true
+            isTweakActive = true
             isToneSilenced = true
-            toneStatus     = "Silenced (tweak active)"
+            toneStatus = "Silenced (tweak active)"
         } else {
-            isTweakActive  = false
+            isTweakActive = false
             isToneSilenced = false
-            toneStatus     = "Original"
+            toneStatus = "Original"
         }
     }
 
     // MARK: - Backup state
-    /// Đọc trạng thái backup từ đĩa.
-    /// KHÔNG set `isTweakActive = false` khi backup tồn tại → giữ toggle ON sau Restore.
     private func refreshBackupState() {
         let fm = FileManager.default
         let backupCount: Int
@@ -84,18 +79,16 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
         backupStatus  = currentStatus
         isBackupReady = ready
 
-        // Nếu KHÔNG có backup → chắc chắn tweak không thể active
+        // Chỉ tắt toggle khi mất backup. Có backup → giữ nguyên isTweakActive (không reset).
         if !ready {
             isTweakActive = false
         }
-        // Nếu CÓ backup → giữ nguyên isTweakActive (đừng reset về false sau Restore).
     }
 
-    /// Public API cho View.
     func checkStatus()       { refreshBackupState() }
     func checkBackupStatus() { refreshBackupState() }
 
-    // MARK: - Tone status
+    // MARK: - Tone status — DETECT thực tế bằng đọc file qua Airlift
     func checkToneStatus() async {
         isChecking = true
         defer { isChecking = false }
@@ -111,9 +104,82 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
         }
 
         refreshBackupState()
-        // FIX: dùng isToneSilenced (trạng thái file thực tế) — KHÔNG dùng isTweakActive.
-        // Nhờ vậy sau Restore, toneStatus sẽ hiện "Original" đúng.
+
+        // Đọc 3 file trên máy qua Airlift → so sánh với backup → detect chính xác.
+        if let detected = await detectToneSilenceState(pairingPath: pairingURL.path) {
+            isToneSilenced = detected
+            // Có file backup → user đã từng Apply → toggle phải ON.
+            if isBackupReady {
+                isTweakActive = true
+            }
+        }
+
         toneStatus = isToneSilenced ? "Silenced (tweak active)" : "Original"
+    }
+
+    // MARK: - Detect state bằng cách đọc file thực tế
+    /// Trả về:
+    ///   true  = tất cả 3 file hiện tại KHÁC backup → đang silenced
+    ///   false = tất cả 3 file hiện tại GIỐNG backup → đang original
+    ///   nil   = không đọc được / lẫn lộn → giữ state cũ
+    private func detectToneSilenceState(pairingPath: String) async -> Bool? {
+        let fm = FileManager.default
+        var silencedCount = 0
+        var originalCount = 0
+
+        for tone in toneFiles {
+            let backupURL = backupDirectory.appendingPathComponent(tone.originalName)
+            guard fm.fileExists(atPath: backupURL.path),
+                  let backupData = try? Data(contentsOf: backupURL) else {
+                continue
+            }
+
+            let remotePath = "\(targetDirectory)/\(tone.originalName)"
+            guard let currentData = await readRemoteFile(pairingPath: pairingPath,
+                                                         remotePath: remotePath) else {
+                continue
+            }
+
+            if currentData == backupData {
+                originalCount += 1
+            } else {
+                silencedCount += 1
+            }
+        }
+
+        if silencedCount > 0 && originalCount == 0 { return true }
+        if originalCount > 0 && silencedCount == 0 { return false }
+        return nil
+    }
+
+    /// Đọc 1 file remote qua AirliftFFI.
+    private func readRemoteFile(pairingPath: String, remotePath: String) async -> Data? {
+        await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .utility).async {
+                var outData: UnsafeMutablePointer<UInt8>? = nil
+                var outLen: Int = 0
+                var outErr: UnsafeMutablePointer<CChar>? = nil
+
+                let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: { _ in })
+                defer { AirliftFFIBridge.releaseLogCallback(ctx) }
+                defer {
+                    if let ptr = outData, outLen > 0 { al_bytes_free(ptr, outLen) }
+                    if let e = outErr { al_string_free(e) }
+                }
+
+                let res: Int32 = pairingPath.withCString { p in
+                    remotePath.withCString { r in
+                        al_exploit_read_file(p, r, cb, ctx, &outData, &outLen, &outErr)
+                    }
+                }
+
+                if res == 0, let ptr = outData, outLen > 0 {
+                    cont.resume(returning: Data(bytes: ptr, count: outLen))
+                } else {
+                    cont.resume(returning: nil)
+                }
+            }
+        }
     }
 
     // MARK: - Import backup thủ công (nếu cần)
@@ -167,29 +233,32 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
                                  sourceDir: stagingDir.path,
                                  onLogUpdate: onLogUpdate)
 
-        let action = isRestore ? "khôi phục" : "tắt tiếng"
-        onLogUpdate("✅ Đã \(action) âm thanh thành công.")
-
-        // ────────────────────────────────────────────────────────────────
-        // FIX STATE sau khi action thành công:
-        // ────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────
+        // Cập nhật state sau khi ghi thành công
+        // ─────────────────────────────────────────────────────────────
         if isRestore {
-            // Restore: file trên máy giờ là bản gốc.
             isToneSilenced = false
             toneStatus     = "Original"
-            // KHÔNG đổi isTweakActive. Toggle vẫn ON (nếu có backup)
-            // → user qua trang Apply bấm Apply là silence lại ngay.
+            isTweakActive  = true   // ← giữ toggle ON (nếu có backup)
         } else {
-            // Apply: file trên máy giờ là bản im lặng.
             isToneSilenced = true
             toneStatus     = "Silenced (tweak active)"
             isTweakActive  = true
         }
 
+        onLogUpdate("✅ Đã \(isRestore ? "khôi phục" : "tắt tiếng") âm thanh thành công.")
         refreshBackupState()
+
+        // Verify lại bằng cách đọc file thực tế (best-effort, không throw nếu fail)
+        if let detected = await detectToneSilenceState(pairingPath: pairingURL.path) {
+            isToneSilenced = detected
+            toneStatus = detected ? "Silenced (tweak active)" : "Original"
+        }
+        if isBackupReady {
+            isTweakActive = true
+        }
     }
 
-    // MARK: - Stage bước Restore
     private func stageRestore(into stagingDir: URL,
                               onLogUpdate: @escaping (String) -> Void) async throws {
         onLogUpdate("Đang lấy file gốc từ bộ nhớ Backup của App...")
@@ -208,7 +277,6 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Stage bước Apply (tải file silent từ GitHub)
     private func stageSilentFiles(into stagingDir: URL,
                                   onLogUpdate: @escaping (String) -> Void) async throws {
         onLogUpdate("Đang tải file âm thanh im lặng từ GitHub...")
@@ -224,7 +292,6 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Auto backup 3 file gốc lần đầu Apply
     private func autoBackupIfNeeded(pairingPath: String,
                                     onLogUpdate: @escaping (String) -> Void) async throws {
         let fm = FileManager.default
@@ -237,41 +304,17 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
             if fm.fileExists(atPath: backupURL.path) { continue }
 
             let remotePath = "\(targetDirectory)/\(tone.originalName)"
-            var outData: UnsafeMutablePointer<UInt8>? = nil
-            var outLen: Int = 0
-            var outErr: UnsafeMutablePointer<CChar>? = nil
-
             onLogUpdate("[Backup] Đang trích xuất \(tone.originalName)...")
 
-            let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
-            defer { AirliftFFIBridge.releaseLogCallback(ctx) }
-
-            defer {
-                if let ptr = outData, outLen > 0 {
-                    al_bytes_free(ptr, outLen)
-                }
-                if let e = outErr { al_string_free(e) }
-            }
-
-            let res: Int32 = pairingPath.withCString { p in
-                remotePath.withCString { r in
-                    al_exploit_read_file(p, r, cb, ctx, &outData, &outLen, &outErr)
-                }
-            }
-
-            if res == 0, let ptr = outData, outLen > 0 {
-                let data = Data(bytes: ptr, count: outLen)
+            if let data = await readRemoteFile(pairingPath: pairingPath, remotePath: remotePath) {
                 try data.write(to: backupURL)
-                onLogUpdate("[Backup] ✅ Đã sao lưu \(tone.originalName) (\(outLen) bytes)")
-            } else if let e = outErr {
-                onLogUpdate("⚠️ Không thể đọc \(tone.originalName): \(String(cString: e))")
+                onLogUpdate("[Backup] ✅ Đã sao lưu \(tone.originalName) (\(data.count) bytes)")
             } else {
-                onLogUpdate("⚠️ Không thể đọc \(tone.originalName) (Mã: \(res))")
+                onLogUpdate("⚠️ Không thể đọc \(tone.originalName) để backup")
             }
         }
     }
 
-    // MARK: - Ghi file qua Airlift
     private func writeDirectory(pairingPath: String,
                                 sourceDir: String,
                                 onLogUpdate: @escaping (String) -> Void) async throws {
@@ -297,9 +340,6 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Helper
-    // `nonisolated`: hàm thuần, không đụng state của actor → an toàn gọi từ mọi luồng.
-    // Đây là chỗ fix warning Swift 6 concurrency.
     private nonisolated static func makeError(code: Int, msg: String) -> NSError {
         NSError(domain: "AirLift", code: code, userInfo: [NSLocalizedDescriptionKey: msg])
     }
