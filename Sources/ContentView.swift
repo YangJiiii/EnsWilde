@@ -42,27 +42,60 @@ struct ContentView: View {
 
     @ViewBuilder
     private var statusSection: some View {
-        Section(header: Text("System Status").font(.headline)) {
+        Section(header: Text(L("system_status")).font(.headline)) {
             HStack(spacing: 12) {
-                Image(systemName: "checkmark.seal.fill").font(.system(size: 22)).foregroundStyle(.green)
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(.green)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("System Status").font(.body)
-                    Text("Ready")
+                    Text(L("system_status")).font(.body)
+                    Text(L("status_ready"))
                         .font(.footnote)
                         .foregroundStyle(.green)
                 }
-            }.padding(.vertical, 4)
+            }
+            .padding(.vertical, 4)
         }
     }
 
     @ViewBuilder
     private var tweaksSection: some View {
-        Section(header: Text("Tweaks").font(.headline)) {
-            toolNavigationLink(value: "MobileGestalt", title: "MobileGestalt", subtitle: "Modify MobileGestalt file", icon: "cpu", isEnabled: toolStore.replaceMobileGestaltEnabled)
-            toolNavigationLink(value: "ConfigTweaks", title: "Config Tweaks", subtitle: "Custom Lock Screen Footnote", icon: "textformat", isEnabled: toolStore.configTweaksEnabled)
-            toolNavigationLink(value: "PasscodeTheme", title: "Passcode Theme", subtitle: "Customize passcode screen", icon: "lock.rectangle", isEnabled: themeStore.passcodeThemeEnabled)
-            toolNavigationLink(value: "AppleWallet", title: "Apple Wallet", subtitle: "Manage wallet cards", icon: "wallet.pass", isEnabled: walletStore.appleWalletEnabled)
-            toolNavigationLink(value: "DisableCallRecordingSound", title: "Disable Call Recording Sound", subtitle: "Disable call recording sound", icon: "speaker.slash", isEnabled: toolStore.disableCallRecordingSoundEnabled)
+        Section(header: Text(L("section_tweaks")).font(.headline)) {
+            toolNavigationLink(
+                value: "MobileGestalt",
+                title: L("tool_mobile_gestalt"),
+                subtitle: L("tool_mobile_gestalt_desc"),
+                icon: "cpu",
+                isEnabled: toolStore.replaceMobileGestaltEnabled
+            )
+            toolNavigationLink(
+                value: "ConfigTweaks",
+                title: L("tool_config_tweaks"),
+                subtitle: L("tool_config_tweaks_desc"),
+                icon: "textformat",
+                isEnabled: toolStore.configTweaksEnabled
+            )
+            toolNavigationLink(
+                value: "PasscodeTheme",
+                title: L("tool_passcode_theme"),
+                subtitle: L("tool_passcode_theme_desc"),
+                icon: "lock.rectangle",
+                isEnabled: themeStore.passcodeThemeEnabled
+            )
+            toolNavigationLink(
+                value: "AppleWallet",
+                title: L("tool_apple_wallet"),
+                subtitle: L("tool_apple_wallet_desc"),
+                icon: "wallet.pass",
+                isEnabled: walletStore.appleWalletEnabled
+            )
+            toolNavigationLink(
+                value: "DisableCallRecordingSound",
+                title: L("tool_disable_sound"),
+                subtitle: L("tool_disable_sound_desc"),
+                icon: "speaker.slash",
+                isEnabled: toolStore.disableCallRecordingSoundEnabled
+            )
         }
     }
 
@@ -86,7 +119,11 @@ struct ContentView: View {
                     }
                 } icon: { Image(systemName: icon) }
                 Spacer()
-                if isEnabled { Image(systemName: "checkmark.seal.fill").foregroundStyle(.green).font(.caption) }
+                if isEnabled {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                        .font(.caption)
+                }
             }
         }
     }
