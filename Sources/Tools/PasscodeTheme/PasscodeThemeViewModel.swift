@@ -26,9 +26,10 @@ class PasscodeThemeViewModel: ObservableObject {
     private var activeTaskID: UUID?
     private let store: PasscodeThemeStore
 
-    /// Set từ UI: `true` = iOS supported (BadQuery + FileManager native),
-    /// `false` = unsupported (Airlift FFI qua tunnel).
-    var isIOSSupported: Bool = false
+    /// 🎯 Auto-detect từ `IOSSupportChecker`. Chỉ override khi cần test.
+    /// - `true`  → Native path (BadQuery + FileManager), nhanh ~3–5s
+    /// - `false` → Airlift FFI qua tunnel (máy bị block → user đã bấm "Continue with Airlift")
+    var isIOSSupported: Bool = IOSSupportChecker.isCurrentIOSSupported
 
     init(store: PasscodeThemeStore) { self.store = store }
 
@@ -353,7 +354,6 @@ class PasscodeThemeViewModel: ObservableObject {
         let n = processedFiles.count
         guard n > 0 else { return 0 }
 
-        // _big tạo trước để FFI thấy ngay
         fm.createFile(atPath: stageDir.appendingPathComponent("_big").path, contents: nil)
 
         var primaryIndices: [Int] = []
@@ -373,7 +373,6 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
 
-        // Pass 1: ghi primary
         DispatchQueue.concurrentPerform(iterations: primaryIndices.count) { idx in
             autoreleasepool {
                 let p = processedFiles[primaryIndices[idx]]
@@ -383,7 +382,6 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
 
-        // Pass 2: hardlink biến thể (cùng volume /tmp → instant)
         DispatchQueue.concurrentPerform(iterations: nonPrimaryIndices.count) { idx in
             autoreleasepool {
                 let p = processedFiles[nonPrimaryIndices[idx]]
@@ -399,8 +397,6 @@ class PasscodeThemeViewModel: ObservableObject {
     }
 
     // MARK: - writeOneVersionNative ⚡ NATIVE PATH (iOS supported)
-    /// BadQuery grant + FileManager native. Hardlink trước (O(1) nếu cùng volume), fallback copy.
-    /// Output y hệt Airlift: cùng tên file, cùng byte, cùng cấu trúc.
     nonisolated private func writeOneVersionNative(
         versionName: String,
         targetPath: String,
@@ -412,7 +408,6 @@ class PasscodeThemeViewModel: ObservableObject {
     ) throws {
         let fm = FileManager.default
 
-        // Pre-grant 1 lần, dùng cho cả version
         _ = bq.grantAccess(atPath: targetPath)
         try? fm.removeItem(atPath: targetPath)
         try fm.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
@@ -432,12 +427,11 @@ class PasscodeThemeViewModel: ObservableObject {
             let src = (stagePath as NSString).appendingPathComponent(name)
             let dst = (targetPath as NSString).appendingPathComponent(name)
 
-            // 🚀 Hardlink = O(1) khi cùng APFS volume. Khác volume → fallback copy.
+            // Hardlink O(1) nếu cùng volume (thường vậy: /tmp → /var/mobile đều APFS)
             if (try? fm.linkItem(atPath: src, toPath: dst)) == nil {
                 do {
                     try fm.copyItem(atPath: src, toPath: dst)
                 } catch {
-                    // Retry 1 lần sau khi xin lại access (đề phòng mất quyền giữa chừng)
                     if !grantedRetry {
                         _ = bq.grantAccess(atPath: targetPath)
                         grantedRetry = true
@@ -452,7 +446,6 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
 
-        // Native verify — instant, không qua FFI
         let verifyPath = (targetPath as NSString).appendingPathComponent(sampleFile)
         guard fm.fileExists(atPath: verifyPath) else {
             throw NSError(domain: "AirLift", code: -43,
@@ -514,7 +507,7 @@ class PasscodeThemeViewModel: ObservableObject {
         )
     }
 
-    // MARK: - Apply Theme ⚡ Chọn nhánh transport + tunnel detect song song
+    // MARK: - Apply Theme ⚡ Transport tự chọn + tunnel detect song song
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
@@ -533,7 +526,7 @@ class PasscodeThemeViewModel: ObservableObject {
         let language = self.store.globalCustomPrefix
         let boldMode = self.store.globalBoldMode
         let telephony = self.store.globalTelephonyVersion
-        let useNative = isIOSSupported
+        let useNative = isIOSSupported   // ← auto từ IOSSupportChecker
 
         var seenVersions = Set<String>()
         let rawVersions = telephony.targetFolders
@@ -561,7 +554,7 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
 
-        // 🚀 TUNNEL DETECT SONG SONG với process + stage (chỉ airlift mode)
+        // 🚀 Tunnel detect SONG SONG với process + stage (chỉ airlift mode)
         var tunnelTask: Task<Bool, Never>? = nil
         if !useNative {
             onLogUpdate("[3/6] Dò tunnel (song song với process)...")
@@ -572,13 +565,11 @@ class PasscodeThemeViewModel: ObservableObject {
         }
         defer { tunnelTask?.cancel() }
 
-        // Process
         let tProcess = Date()
         let processedFiles = try processThemeFiles(theme: theme, language: language, boldMode: boldMode)
         let processMs = Int(Date().timeIntervalSince(tProcess) * 1000)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
 
-        // Stage
         let stageDir = FileManager.default.temporaryDirectory.appendingPathComponent("airlift_passthm_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: stageDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stageDir) }
@@ -589,7 +580,6 @@ class PasscodeThemeViewModel: ObservableObject {
 
         onLogUpdate("[2/6] Matrix: \(totalPerVersion) file/version × \(totalVersions) = \(totalPerVersion * totalVersions) file (process \(processMs)ms, stage \(stageMs)ms)")
 
-        // Await tunnel (nếu airlift)
         if let tunnelTask {
             let tTunnel = Date()
             let tunnelOK = await tunnelTask.value
@@ -607,7 +597,6 @@ class PasscodeThemeViewModel: ObservableObject {
         var perVersionTimes: [(String, Int)] = []
         let tWrite = Date()
 
-        // Loop versions
         for (idx, versionName) in versions.enumerated() {
             let targetPath = "/var/mobile/Library/Caches/\(versionName)"
             let tVer = Date()
