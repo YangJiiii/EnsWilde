@@ -295,8 +295,6 @@ class PasscodeThemeViewModel: ObservableObject {
         processedFiles: [(filename: String, imageData: Data)],
         stageDir: URL
     ) throws -> Int {
-        let fm = FileManager.default
-
         // Pass 1 song song: mỗi digit chỉ ghi 1 file thật
         let primaryLock = NSLock()
         var primaryURLs: [String: URL] = [:]
@@ -329,15 +327,16 @@ class PasscodeThemeViewModel: ObservableObject {
                 guard let src = primaryURLs[key] else { return }
                 let dest = stageDir.appendingPathComponent(filename)
                 if dest.lastPathComponent == src.lastPathComponent { return }
-                try? fm.copyItem(at: src, to: dest)
+                // Dùng FileManager.default trực tiếp, không capture `fm`
+                try? FileManager.default.copyItem(at: src, to: dest)
             }
         }
 
-        // Marker _big (zero byte, tạo nhanh hơn Data().write)
-        fm.createFile(atPath: stageDir.appendingPathComponent("_big").path, contents: nil)
+        // Marker _big (zero byte)
+        FileManager.default.createFile(atPath: stageDir.appendingPathComponent("_big").path, contents: nil)
 
         // Đếm động số file thực tế trên đĩa
-        return (try? fm.contentsOfDirectory(atPath: stageDir.path).count) ?? (processedFiles.count + 1)
+        return (try? FileManager.default.contentsOfDirectory(atPath: stageDir.path).count) ?? (processedFiles.count + 1)
     }
 
     // MARK: - Write 1 version + verify + retry
@@ -541,7 +540,8 @@ class PasscodeThemeViewModel: ObservableObject {
         }
 
         // 🎯 Chỉ xoá folder của version đã chọn (không đụng version khác)
-        let telephony = store.globalTelephonyVersion
+        // LƯU Ý: globalTelephonyVersion nằm trên PasscodeThemeStore (self.store), không phải ToolStore
+        let telephony = self.store.globalTelephonyVersion
         let versions = telephony.targetFolders
         let cacheDirs = versions.map { "/var/mobile/Library/Caches/\($0)" }
 
