@@ -37,8 +37,8 @@ struct MobileGestaltView: View {
             saveResetSection
         }
         .headerProminence(.increased)
-        .alert("Message", isPresented: $showErrorAlert) {
-            Button("OK") {}
+        .alert(L("alert_system_message"), isPresented: $showErrorAlert) {
+            Button(L("alert_ok")) {}
         } message: {
             Text(lastError ?? "???")
         }
@@ -137,7 +137,7 @@ struct MobileGestaltView: View {
             Toggle(isOn: store.mgTrollPadBinding()) {
                 HStack(spacing: 12) {
                     TweakRowIcon(systemImage: "ipad.and.iphone")
-                    Text("Become iPadOS")
+                    Text(L("mg_become_ipados"))
                 }
             }
         }
@@ -197,7 +197,7 @@ struct MobileGestaltView: View {
                 Label(L("mg_save_settings"), systemImage: "square.and.arrow.down")
             }
             Button(role: .destructive, action: resetOriginal) {
-                Label("Reset Original", systemImage: "arrow.counterclockwise")
+                Label(L("mg_reset_original"), systemImage: "arrow.counterclockwise")
             }
         }
     }
@@ -219,10 +219,10 @@ struct MobileGestaltView: View {
             try mobileGestalt.write(to: modMGURL)
             store.loadFromPlist(url: modMGURL)
             showApplyTab = true
-            lastError = "Đã lưu. Tab Apply đã mở."
+            lastError = L("mg_saved_message")
             showErrorAlert = true
         } catch {
-            lastError = "Save failed: \(error)"
+            lastError = L("mg_save_failed").replacingOccurrences(of: "{error}", with: "\(error)")
             showErrorAlert = true
         }
     }
@@ -235,10 +235,10 @@ struct MobileGestaltView: View {
             store.loadFromPlist(url: modMGURL)
             toolStore.replaceMobileGestaltEnabled = true
             showApplyTab = true
-            lastError = "Đã reset về pristine backup. Bấm Apply để ghi lại."
+            lastError = L("mg_reset_message")
             showErrorAlert = true
         } catch {
-            lastError = "Reset failed: \(error)"
+            lastError = L("mg_reset_failed").replacingOccurrences(of: "{error}", with: "\(error)")
             showErrorAlert = true
         }
     }
@@ -263,7 +263,7 @@ struct MobileGestaltView: View {
             _mobileGestalt = State(initialValue: try NSMutableDictionary(contentsOf: modMGURL, error: ()))
         } catch {
             _mobileGestalt = State(initialValue: [:])
-            _initError = State(initialValue: "Failed to copy MobileGestalt: \(error)")
+            _initError = State(initialValue: L("mg_init_failed").replacingOccurrences(of: "{error}", with: "\(error)"))
             taskRunning = true
         }
     }
