@@ -5,8 +5,6 @@ import ZIPFoundation
 import AirliftFFI
 import Network
 
-// ⚡ FFI al_exploit_write_dir KHÔNG thread-safe → không chạy song song.
-
 // MARK: - Counter an toàn luồng cho callback FFI
 private final class WriteCounter: @unchecked Sendable {
     private var value = 0
@@ -26,16 +24,15 @@ class PasscodeThemeViewModel: ObservableObject {
     private let store: PasscodeThemeStore
 
     /// `true` = verify sample file sau khi write version cuối.
-    /// `false` = tin FFI success, không verify (nhanh hơn ~400ms, rủi ro silent fail).
-    /// Khuyến nghị giữ `true` cho production.
+    /// `false` = tin FFI success (nhanh hơn ~400ms, rủi ro silent fail).
     var verifyAfterWrite: Bool = true
 
-    /// Số ms chờ trước khi reboot. Mặc định 500ms (bản gốc 800ms).
-    var rebootDelayMs: Int = 500
+    /// Số ms chờ trước khi reboot. Bản gốc 800ms, mặc định mới 400ms.
+    var rebootDelayMs: Int = 400
 
     init(store: PasscodeThemeStore) { self.store = store }
 
-    // MARK: - Nhận dạng loại file passcode theme
+    // MARK: - Loại file
     nonisolated static func isSupportedPasscodeThemeFile(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         return ["zip", "passthm", "3105pass"].contains(ext)
@@ -50,7 +47,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Import ⚡ copyItem trực tiếp
+    // MARK: - Import
     func importTheme(from sourceURL: URL, name: String) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
@@ -100,7 +97,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try await importTheme(from: sourceURL, name: name)
     }
 
-    // MARK: - detectSizeFromZIP (Y NGUYÊN)
+    // MARK: - detectSizeFromZIP
     nonisolated static private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
@@ -113,7 +110,7 @@ class PasscodeThemeViewModel: ObservableObject {
         } catch { return .unknown }
     }
 
-    // MARK: - extractImagesRecursively ⚡ MOVE thay COPY
+    // MARK: - extractImagesRecursively
     nonisolated static private func extractImagesRecursively(themeFolder: URL) throws {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(atPath: themeFolder.path) else { return }
@@ -153,12 +150,11 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // 🚀 STATIC REGEX
+    // MARK: - Regex static
     nonisolated private static let digitRegex: NSRegularExpression? = {
         try? NSRegularExpression(pattern: #"(?:^[a-zA-Z]+-)?([0-9*#])"#, options: .caseInsensitive)
     }()
 
-    // MARK: - extractDigitStatic (Y NGUYÊN)
     nonisolated static func extractDigitStatic(from filename: String) -> String? {
         let stem = (filename as NSString).deletingPathExtension
             .replacingOccurrences(of: "--white", with: "", options: .caseInsensitive)
@@ -185,12 +181,14 @@ class PasscodeThemeViewModel: ObservableObject {
         return 0
     }
 
-    // MARK: - processThemeFiles ⚡ FAST PATH: bỏ decode+encode khi PNG đã đúng size
+    // MARK: - processThemeFiles ⚡ TRẢ VỀ sourceURL, KHÔNG đọc Data vào RAM
+    /// Trả về danh sách (filename, sourceURL, digit, needsResize).
+    /// Stage sẽ hardlink từ sourceURL nếu không cần resize, hoặc decode+resize+write nếu cần.
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
         language: PasscodeTheme.PrefixLanguage,
         boldMode: PasscodeTheme.BoldMode
-    ) throws -> [(filename: String, imageData: Data, digit: String)] {
+    ) throws -> [(filename: String, sourceURL: URL, digit: String, needsResize: Bool)] {
 
         let imageFiles = theme.getImageFiles()
         guard !imageFiles.isEmpty else { throw PasscodeThemeError.noImagesFound }
@@ -222,58 +220,46 @@ class PasscodeThemeViewModel: ObservableObject {
 
         let needsResize = (theme.detectedSize == .small && theme.keySize == .big) ||
                           (theme.detectedSize == .big && theme.keySize == .small)
+        let folderURL = theme.themeFolderURL
 
-        var processedFiles: [(String, Data, String)] = []
+        var processedFiles: [(String, URL, String, Bool)] = []
         var seenNames = Set<String>()
         let lock = NSLock()
 
         DispatchQueue.concurrentPerform(iterations: imageFiles.count) { i in
             autoreleasepool {
                 let filename = imageFiles[i]
-                let sourceURL = theme.themeFolderURL.appendingPathComponent(filename)
+                let sourceURL = folderURL.appendingPathComponent(filename)
                 guard let digit = PasscodeThemeViewModel.extractDigitStatic(from: filename) else { return }
-
-                let srcExt = (filename as NSString).pathExtension.lowercased()
-                let imageData: Data
-
-                // 🚀 FAST PATH: PNG + không cần resize → dùng bytes gốc
-                if !needsResize && srcExt == "png" {
-                    guard let raw = try? Data(contentsOf: sourceURL) else { return }
-                    imageData = raw
-                } else {
-                    guard let image = UIImage(contentsOfFile: sourceURL.path) else { return }
-                    let processedImage = resizeImage(image, for: theme.keySize, detectedSize: theme.detectedSize)
-                    guard let encoded = processedImage.pngData() else { return }
-                    imageData = encoded
-                }
 
                 let stdSub = subtexts[digit] ?? ""
                 let ruSub = ruSubtexts[digit]
                 let ukSub = ukSubtexts[digit]
 
-                var localFiles: [(String, Data)] = []
+                var localNames: [String] = []
+                localNames.reserveCapacity(locales.count * boldSuffixes.count * 5)
                 for lang in locales {
                     for bld in boldSuffixes {
-                        localFiles.append(("\(lang)-\(digit)---white\(bld).png", imageData))
+                        localNames.append("\(lang)-\(digit)---white\(bld).png")
                         if !stdSub.isEmpty {
-                            localFiles.append(("\(lang)-\(digit)-\(stdSub)--white\(bld).png", imageData))
+                            localNames.append("\(lang)-\(digit)-\(stdSub)--white\(bld).png")
                             let noSpace = stdSub.replacingOccurrences(of: " ", with: "")
                             if noSpace != stdSub {
-                                localFiles.append(("\(lang)-\(digit)-\(noSpace)--white\(bld).png", imageData))
+                                localNames.append("\(lang)-\(digit)-\(noSpace)--white\(bld).png")
                             }
                         }
                         if lang == "ru" || language == .universal, let sub = ruSub {
-                            localFiles.append(("\(lang)-\(digit)-\(sub)--white\(bld).png", imageData))
+                            localNames.append("\(lang)-\(digit)-\(sub)--white\(bld).png")
                         }
                         if lang == "uk" || language == .universal, let sub = ukSub {
-                            localFiles.append(("\(lang)-\(digit)-\(sub)--white\(bld).png", imageData))
+                            localNames.append("\(lang)-\(digit)-\(sub)--white\(bld).png")
                         }
                     }
                 }
                 lock.lock()
-                for item in localFiles where !seenNames.contains(item.0) {
-                    seenNames.insert(item.0)
-                    processedFiles.append((item.0, item.1, digit))
+                for name in localNames where !seenNames.contains(name) {
+                    seenNames.insert(name)
+                    processedFiles.append((name, sourceURL, digit, needsResize))
                 }
                 lock.unlock()
             }
@@ -281,22 +267,29 @@ class PasscodeThemeViewModel: ObservableObject {
         return processedFiles
     }
 
-    // MARK: - resizeImage (Y NGUYÊN)
-    nonisolated private func resizeImage(_ image: UIImage, for keySize: PasscodeTheme.KeySize, detectedSize: PasscodeTheme.DetectedSize) -> UIImage {
+    // MARK: - resizeImage (static — gọi từ background thread)
+    nonisolated static private func resizeImage(
+        _ image: UIImage,
+        for keySize: PasscodeTheme.KeySize,
+        detectedSize: PasscodeTheme.DetectedSize
+    ) -> UIImage {
         var sizeMultiplier: CGFloat = 1.0
         if detectedSize == .small && keySize == .big { sizeMultiplier = 287.0 / 202.0 }
         else if detectedSize == .big && keySize == .small { sizeMultiplier = 202.0 / 287.0 }
         else { return image }
         let currentSize = image.size
         guard currentSize.width > 0 && currentSize.height > 0 else { return image }
-        let targetPixelSize = CGSize(width: currentSize.width * sizeMultiplier * image.scale, height: currentSize.height * sizeMultiplier * image.scale)
+        let targetPixelSize = CGSize(
+            width: currentSize.width * sizeMultiplier * image.scale,
+            height: currentSize.height * sizeMultiplier * image.scale
+        )
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         let renderer = UIGraphicsImageRenderer(size: targetPixelSize, format: format)
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetPixelSize)) }
     }
 
-    // MARK: - writeDir FFI (Y NGUYÊN)
+    // MARK: - writeDir FFI
     nonisolated private func writeDir(
         pairingPath: String,
         srcDir: String,
@@ -327,7 +320,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - verifyFileExists FFI (Y NGUYÊN)
+    // MARK: - verifyFileExists FFI
     nonisolated private func verifyFileExists(pairingPath: String, remotePath: String) async -> Bool {
         await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
             DispatchQueue.global(qos: .utility).async {
@@ -346,9 +339,10 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - fastStage ⚡ digit truyền sẵn, không lock, pre-create _big
+    // MARK: - fastStage ⚡ HARDLINK từ source, không đọc Data vào RAM
     nonisolated private func fastStage(
-        processedFiles: [(filename: String, imageData: Data, digit: String)],
+        processedFiles: [(filename: String, sourceURL: URL, digit: String, needsResize: Bool)],
+        theme: PasscodeTheme,
         stageDir: URL
     ) throws -> Int {
         let fm = FileManager.default
@@ -374,15 +368,29 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
 
+        // Pass 1: primary — hardlink từ source (không resize) hoặc decode+resize (có resize)
         DispatchQueue.concurrentPerform(iterations: primaryIndices.count) { idx in
             autoreleasepool {
                 let p = processedFiles[primaryIndices[idx]]
-                if let url = primaryURLByDigit[p.digit] {
-                    try? p.imageData.write(to: url)
+                guard let dest = primaryURLByDigit[p.digit] else { return }
+                if p.needsResize {
+                    guard let image = UIImage(contentsOfFile: p.sourceURL.path) else { return }
+                    let processed = PasscodeThemeViewModel.resizeImage(
+                        image,
+                        for: theme.keySize,
+                        detectedSize: theme.detectedSize
+                    )
+                    guard let data = processed.pngData() else { return }
+                    try? data.write(to: dest)
+                } else {
+                    if (try? fm.linkItem(at: p.sourceURL, to: dest)) == nil {
+                        try? fm.copyItem(at: p.sourceURL, to: dest)
+                    }
                 }
             }
         }
 
+        // Pass 2: biến thể — hardlink từ primary (instant, cùng inode)
         DispatchQueue.concurrentPerform(iterations: nonPrimaryIndices.count) { idx in
             autoreleasepool {
                 let p = processedFiles[nonPrimaryIndices[idx]]
@@ -397,7 +405,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return n + 1
     }
 
-    // MARK: - writeOneVersion ⚡ verify CHỈ version cuối, batch log
+    // MARK: - writeOneVersion — verify CHỈ version cuối, batch log 200
     nonisolated private func writeOneVersion(
         versionName: String,
         targetPath: String,
@@ -424,8 +432,7 @@ class PasscodeThemeViewModel: ObservableObject {
                     targetDir: targetPath,
                     onLogUpdate: { line in
                         let current = counter.increment()
-                        // ⚡ Batch log: chỉ log mỗi 100 file + file cuối
-                        guard current % 100 == 0 || current == totalPerVersion else { return }
+                        guard current % 200 == 0 || current == totalPerVersion else { return }
                         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmed.isEmpty else { return }
                         let body = trimmed.lowercased().hasPrefix("write") ? trimmed : "write file \(trimmed)"
@@ -434,7 +441,6 @@ class PasscodeThemeViewModel: ObservableObject {
                     }
                 )
 
-                // ⚡ Chỉ verify nếu được yêu cầu (version cuối)
                 guard shouldVerify else { return }
 
                 let ok = await verifyFileExists(pairingPath: pairPath, remotePath: "\(targetPath)/\(sampleFile)")
@@ -457,7 +463,7 @@ class PasscodeThemeViewModel: ObservableObject {
         )
     }
 
-    // MARK: - Apply Theme ⚡ Airlift-only + tunnel song song + verify cuối
+    // MARK: - Apply Theme
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
@@ -497,7 +503,7 @@ class PasscodeThemeViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
         }
 
-        // 🚀 Tunnel detect SONG SONG với process + stage
+        // Tunnel detect song song với process + stage
         onLogUpdate("[3/6] Dò tunnel (song song với process)...")
         let logCb = onLogUpdate
         let tunnelTask = Task.detached(priority: .userInitiated) {
@@ -515,7 +521,7 @@ class PasscodeThemeViewModel: ObservableObject {
         defer { try? FileManager.default.removeItem(at: stageDir) }
 
         let tStage = Date()
-        let totalPerVersion = try fastStage(processedFiles: processedFiles, stageDir: stageDir)
+        let totalPerVersion = try fastStage(processedFiles: processedFiles, theme: theme, stageDir: stageDir)
         let stageMs = Int(Date().timeIntervalSince(tStage) * 1000)
 
         onLogUpdate("[2/6] Matrix: \(totalPerVersion) file/version × \(totalVersions) = \(totalPerVersion * totalVersions) file (process \(processMs)ms, stage \(stageMs)ms)")
@@ -540,7 +546,7 @@ class PasscodeThemeViewModel: ObservableObject {
             let targetPath = "/var/mobile/Library/Caches/\(versionName)"
             let tVer = Date()
             let isLastVersion = (idx == totalVersions - 1)
-            onLogUpdate("[4/6] Version \(idx+1)/\(totalVersions): \(versionName)\(isLastVersion ? " (verify)" : "")")
+            onLogUpdate("[4/6] Version \(idx+1)/\(totalVersions): \(versionName)\(isLastVersion && verifyAfterWrite ? " (verify)" : "")")
 
             try await writeOneVersion(
                 versionName: versionName,
@@ -559,7 +565,7 @@ class PasscodeThemeViewModel: ObservableObject {
             let runningTotal = Int(Date().timeIntervalSince(startTime) * 1000)
             onLogUpdate(String(format: "  ✅ %@: %@ (%dms) — tổng %.2fs",
                                versionName,
-                               isLastVersion ? "verified" : "done",
+                               isLastVersion && verifyAfterWrite ? "verified" : "done",
                                ms,
                                Double(runningTotal) / 1000))
         }
@@ -577,7 +583,7 @@ class PasscodeThemeViewModel: ObservableObject {
         onLogUpdate("[6/6] Reset Theme & Reboot để áp dụng")
     }
 
-    // MARK: - Reset ⚡ giảm sleep
+    // MARK: - Reset
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
@@ -602,7 +608,6 @@ class PasscodeThemeViewModel: ObservableObject {
         }
         onLogUpdate("Đã xoá Passcode Theme (\(versions.count) folder: \(versions.joined(separator: ", ")))")
         onLogUpdate("Đang khởi động lại...")
-        // ⚡ 500ms thay vì 800ms — vẫn đủ thời gian iOS flush log trước reboot
         try await Task.sleep(nanoseconds: UInt64(rebootDelayMs) * 1_000_000)
         RebootHelper.rebootDevice()
     }
