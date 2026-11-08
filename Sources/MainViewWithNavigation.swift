@@ -27,7 +27,7 @@ struct MainViewWithNavigation: View {
                 .tabItem { Label(L("nav_settings"), systemImage: "gearshape.fill") }.tag(NavigationTab.settings)
             
             NavigationStack { AboutView() }
-                .tabItem { Label("About", systemImage: "info.circle.fill") }.tag(NavigationTab.about)
+                .tabItem { Label(L("nav_about"), systemImage: "info.circle.fill") }.tag(NavigationTab.about)
             
             if showApplyTab {
                 ApplyTabView(toolStore: toolStore, toolRunner: toolRunner, walletStore: walletStore, themeStore: themeStore, featureFlagsStore: featureFlagsStore)
@@ -64,7 +64,7 @@ struct ApplyTabView: View {
 
     @State private var showErrorAlert = false
     @State private var lastError: String?
-    @State private var statusLogs: [String] = ["Ready to apply."]
+    @State private var statusLogs: [String] = [L("msg_apply_status_ready")]
     
     private var isApplying: Bool {
         if case .running = toolRunner.state { return true }
@@ -74,7 +74,7 @@ struct ApplyTabView: View {
     private var enabledTweaks: [(String, String)] {
         var list: [(String, String)] = []
         
-        if toolStore.disableCallRecordingSoundEnabled { list.append(("Disable Call Recording Sound", "speaker.slash")) }
+        if toolStore.disableCallRecordingSoundEnabled { list.append((L("tool_disable_sound"), "speaker.slash")) }
         if themeStore.passcodeThemeEnabled { list.append((L("tool_passcode_theme"), "lock.rectangle")) }
         if walletStore.appleWalletEnabled { list.append((L("tool_apple_wallet"), "wallet.pass")) }
         if toolStore.replaceMobileGestaltEnabled { list.append((L("tool_mobile_gestalt"), "cpu")) }
@@ -85,9 +85,9 @@ struct ApplyTabView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section(header: Text("Tweaks").font(.headline).textCase(nil)) {
+                Section(header: Text(L("section_tweaks")).font(.headline).textCase(nil)) {
                     if enabledTweaks.isEmpty {
-                        Text("No tweaks enabled.").foregroundStyle(.secondary)
+                        Text(L("apply_no_tweaks")).foregroundStyle(.secondary)
                     } else {
                         ForEach(enabledTweaks, id: \.0) { tweak in
                             Label { Text(tweak.0) } icon: { Image(systemName: tweak.1).foregroundStyle(.tint) }
@@ -98,13 +98,13 @@ struct ApplyTabView: View {
 
                 Section {
                     Toggle(isOn: $toolStore.soundRespringEnabled) {
-                        Text("Respring after apply")
+                        Text(L("respring_after_apply"))
                     }
-                    Text("Using Neospring to Respring device").font(.caption).foregroundStyle(.secondary)
+                    Text(L("using_neospring")).font(.caption).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Color(.secondarySystemGroupedBackground))
 
-                Section(header: Text("Status").font(.headline).textCase(nil)) {
+                Section(header: Text(L("section_status")).font(.headline).textCase(nil)) {
                     ScrollViewReader { proxy in
                         ScrollView {
                             VStack(alignment: .leading, spacing: 4) {
@@ -127,7 +127,7 @@ struct ApplyTabView: View {
 
                 Section {
                     WalletStyleButton(
-                        title: isApplying ? "Applying..." : L("apply_enabled_tweaks"),
+                        title: isApplying ? L("applying") : L("apply_enabled_tweaks"),
                         isLoading: isApplying,
                         disabled: isApplying,
                         action: performApply
@@ -144,7 +144,7 @@ struct ApplyTabView: View {
     }
 
     private func performApply() {
-        statusLogs = ["Starting Apply sequence..."]
+        statusLogs = [L("apply_starting")]
         
         Task.detached(priority: .userInitiated) {
             await toolRunner.applyAll(
@@ -163,10 +163,10 @@ struct ApplyTabView: View {
             await MainActor.run {
                 if case .failed(let msg) = toolRunner.state {
                     lastError = msg
-                    statusLogs.append("❌ Lỗi: \(msg)")
+                    statusLogs.append("❌ \(L("alert_error")): \(msg)")
                     showErrorAlert = true
                 } else if toolRunner.state == .success {
-                    statusLogs.append("✅ Applied successfully.")
+                    statusLogs.append("✅ \(L("apply_done"))")
                 }
             }
             
