@@ -493,6 +493,8 @@ class PasscodeThemeViewModel: ObservableObject {
     }
 
     // MARK: - writeOneVersion ⚡ (WorseQuery)
+    // ✅ FIX: nhận logLevel & retryAttempts qua tham số để tránh truy cập
+    //         MainActor-isolated property từ nonisolated context.
     nonisolated private func writeOneVersion(
         versionName: String,
         targetPath: String,
@@ -501,7 +503,9 @@ class PasscodeThemeViewModel: ObservableObject {
         sampleFile: String,
         totalPerVersion: Int,
         shouldVerify: Bool,
-        bq: WorseQuery,                         // ← Đã đổi từ BadQuery → WorseQuery
+        bq: WorseQuery,
+        logLevel: LogLevel,
+        retryAttempts: Int,
         onLogUpdate: @escaping (String) -> Void
     ) async throws {
         if bq.grantAccess(atPath: targetPath).0 {
@@ -542,14 +546,19 @@ class PasscodeThemeViewModel: ObservableObject {
                 let ok = await verifyFileExists(pairingPath: pairPath, remotePath: "\(targetPath)/\(sampleFile)")
                 if ok { return }
 
-                onLogUpdate("  ⚠️ Attempt \(attempt)/\(maxAttempts) verify FAIL, retry...")
+                // ✅ FIX: log phải bọc main.async vì writeOneVersion chạy off-main
+                DispatchQueue.main.async {
+                    onLogUpdate("  ⚠️ Attempt \(attempt)/\(maxAttempts) verify FAIL, retry...")
+                }
                 if bq.grantAccess(atPath: targetPath).0 {
                     try? FileManager.default.removeItem(atPath: targetPath)
                 }
                 try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
             } catch {
                 lastError = error
-                onLogUpdate("  ⚠️ Attempt \(attempt)/\(maxAttempts) error: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    onLogUpdate("  ⚠️ Attempt \(attempt)/\(maxAttempts) error: \(error.localizedDescription)")
+                }
                 if attempt < maxAttempts {
                     try? await Task.sleep(nanoseconds: 300_000_000)
                 }
@@ -651,6 +660,7 @@ class PasscodeThemeViewModel: ObservableObject {
             let shouldVerify = verifyAfterWrite && (verifyAllVersions || isLastVersion)
             onLogUpdate("[4/6] Version \(idx+1)/\(totalVersions): \(versionName)\(shouldVerify ? " (verify)" : "")")
 
+            // ✅ FIX: truyền logLevel & retryAttempts vào writeOneVersion
             try await writeOneVersion(
                 versionName: versionName,
                 targetPath: targetPath,
@@ -660,6 +670,8 @@ class PasscodeThemeViewModel: ObservableObject {
                 totalPerVersion: totalPerVersion,
                 shouldVerify: shouldVerify,
                 bq: bq,
+                logLevel: logLevel,
+                retryAttempts: retryAttempts,
                 onLogUpdate: onLogUpdate
             )
 
