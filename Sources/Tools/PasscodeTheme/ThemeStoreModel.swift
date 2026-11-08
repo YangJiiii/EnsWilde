@@ -1,18 +1,18 @@
 import Foundation
 import ZIPFoundation
 
-// MARK: - Top-level repo (lưu trong UserDefaults)
+// MARK: - Models
+
 struct ThemeRepository: Codable, Identifiable {
     let url: String
     var name: String
-    var iconURL: String?   // full URL đã resolve
-    var isIndex: Bool      // true = index nhiều sub-repo, false = direct themes
+    var iconURL: String?
+    var isIndex: Bool
     
     var id: String { url }
     var jsonURL: URL? { URL(string: url) }
 }
 
-// MARK: - Sub-repo (chỉ tồn tại khi là index)
 struct IndexedRepository: Codable, Identifiable {
     let name: String
     let baseURL: String
@@ -22,7 +22,6 @@ struct IndexedRepository: Codable, Identifiable {
     var themesJSONURL: URL? { URL(string: themesURL) }
 }
 
-// MARK: - Theme model
 struct RemoteTheme: Identifiable {
     let name: String
     let description: String
@@ -41,55 +40,6 @@ struct RemoteTheme: Identifiable {
     }
 }
 
-// MARK: - Decode models (hỗ trợ nhiều format JSON)
-
-struct RemoteThemeCodable: Codable {
-    let name: String
-    let description: String?
-    let url: String
-    let preview: String
-    let authors: String?
-    
-    enum CodingKeys: String, CodingKey {
-        case name, description, url, preview, authors
-        // alias decode-only (không có stored property trùng tên):
-        case summary, author, download, icon
-    }
-    
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Unknown Theme"
-        description = try c.decodeIfPresent(String.self, forKey: .description)
-            ?? c.decodeIfPresent(String.self, forKey: .summary)
-        url = try c.decodeIfPresent(String.self, forKey: .url)
-            ?? c.decodeIfPresent(String.self, forKey: .download) ?? ""
-        preview = try c.decodeIfPresent(String.self, forKey: .preview)
-            ?? c.decodeIfPresent(String.self, forKey: .icon) ?? ""
-        authors = try c.decodeIfPresent(String.self, forKey: .authors)
-            ?? c.decodeIfPresent(String.self, forKey: .author) ?? "Unknown Author"
-    }
-    
-    // FIX: CodingKeys có các alias decode-only (summary/author/download/icon)
-    // mà không có stored property tương ứng → auto-synthesize encode(to:) fail.
-    // Viết encode(to:) thủ công chỉ encode các property thật.
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(name, forKey: .name)
-        try c.encodeIfPresent(description, forKey: .description)
-        try c.encode(url, forKey: .url)
-        try c.encode(preview, forKey: .preview)
-        try c.encodeIfPresent(authors, forKey: .authors)
-    }
-}
-
-struct RepoJSONCodable: Codable {
-    let name: String?
-    let description: String?
-    let icon: String?
-    let themes: [RemoteThemeCodable]?
-    let packages: [RemoteThemeCodable]?
-}
-
 // MARK: - Manager
 
 @MainActor
@@ -103,7 +53,6 @@ class ThemeStoreManager: ObservableObject {
     @Published var selectedRepository: ThemeRepository?
     @Published var selectedIndexedRepo: IndexedRepository?
     
-    // Default repo khi chưa có gì
     private static let defaultRepo = ThemeRepository(
         url: "https://raw.githubusercontent.com/YangJiiii/EnsWilde/refs/heads/main/themes-store/index.json",
         name: "YangJiii - Passcode",
@@ -136,8 +85,6 @@ class ThemeStoreManager: ObservableObject {
         }
     }
     
-    // MARK: - Add / Remove
-    
     func addRepo(urlString: String) async throws {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), url.scheme?.hasPrefix("http") == true else {
@@ -147,7 +94,7 @@ class ThemeStoreManager: ObservableObject {
             throw ThemeStoreError.duplicateRepo
         }
         
-        let repo = try await fetchRepoMetadata(url: url)
+        let repo = try await parseRepoMetadata(url: url)
         repositories.append(repo)
         saveRepos()
     }
@@ -157,182 +104,149 @@ class ThemeStoreManager: ObservableObject {
         saveRepos()
     }
     
-    // MARK: - Fetch metadata cho 1 URL (detect format)
+    // MARK: - DYNAMIC JSON PARSER (Hỗ trợ mọi format)
     
-    private func fetchRepoMetadata(url: URL) async throws -> ThemeRepository {
+    private func parseRepoMetadata(url: URL) async throws -> ThemeRepository {
         let (data, _) = try await URLSession.shared.data(from: url)
-        
-        // Format 1: [IndexedRepository] (index.json của YangJiiii / tương tự)
-        if let _ = try? JSONDecoder().decode([IndexedRepository].self, from: data) {
-            let name = Self.deriveNameFromURL(url)
-            return ThemeRepository(url: url.absoluteString, name: name, iconURL: nil, isIndex: true)
+        guard let json = try? JSONSerialization.jsonObject(with: data) else {
+            throw ThemeStoreError.invalidJSON
         }
         
-        // Format 2: RepoJSONCodable { name, icon, themes/packages }
-        if let repoJSON = try? JSONDecoder().decode(RepoJSONCodable.self, from: data) {
-            let name = repoJSON.name ?? Self.deriveNameFromURL(url)
-            let baseURL = url.deletingLastPathComponent().absoluteString
-            // FIX: dùng flatMap thay vì map để tránh String?? (double optional).
-            // resolveIcon trả về String? nên flatMap trả String? khớp với iconURL.
-            let icon = repoJSON.icon.flatMap { resolveIcon($0, baseURL: baseURL) }
-            return ThemeRepository(url: url.absoluteString, name: name, iconURL: icon, isIndex: false)
+        let baseURLString = url.deletingLastPathComponent().absoluteString
+        let defaultName = Self.deriveNameFromURL(url)
+        
+        // 1. Check if it's an Index (Array of objects with baseURL/themesURL)
+        if let array = json as? [[String: Any]], array.contains(where: { $0["baseURL"] != nil && $0["themesURL"] != nil }) {
+            return ThemeRepository(url: url.absoluteString, name: defaultName, iconURL: nil, isIndex: true)
         }
         
-        // Format 3: [RemoteThemeCodable] (array themes trực tiếp)
-        if let _ = try? JSONDecoder().decode([RemoteThemeCodable].self, from: data) {
-            let name = Self.deriveNameFromURL(url)
-            return ThemeRepository(url: url.absoluteString, name: name, iconURL: nil, isIndex: false)
+        // 2. Check if it's a dictionary (Object)
+        if let dict = json as? [String: Any] {
+            let name = dict["name"] as? String ?? defaultName
+            var icon: String? = nil
+            
+            if let iconStr = dict["icon"] as? String {
+                icon = iconStr.hasPrefix("http") ? iconStr : baseURLString + iconStr
+            }
+            
+            // If it has "themes" or "packages", it's a direct repo
+            if dict["themes"] != nil || dict["packages"] != nil {
+                return ThemeRepository(url: url.absoluteString, name: name, iconURL: icon, isIndex: false)
+            }
+        }
+        
+        // 3. Check if it's an array of themes (direct)
+        if let array = json as? [[String: Any]], array.contains(where: { $0["url"] != nil || $0["download"] != nil }) {
+            return ThemeRepository(url: url.absoluteString, name: defaultName, iconURL: nil, isIndex: false)
         }
         
         throw ThemeStoreError.invalidJSON
     }
     
-    private func resolveIcon(_ icon: String, baseURL: String) -> String? {
-        if icon.hasPrefix("http") { return icon }
-        return baseURL + icon
-    }
-    
     private static func deriveNameFromURL(_ url: URL) -> String {
         let comps = url.pathComponents.filter { $0 != "/" }
-        if comps.count >= 2 {
-            return comps[1].replacingOccurrences(of: "-", with: " ")
-        }
+        if comps.count >= 2 { return comps[1].replacingOccurrences(of: "-", with: " ") }
         return url.deletingPathExtension().lastPathComponent
     }
     
-    // MARK: - Fetch index (list sub-repos)
+    // MARK: - Fetching Data
     
     func fetchIndexedRepos(from repo: ThemeRepository) async {
-        isLoading = true
-        errorMessage = nil
-        indexedRepositories = []
-        selectedRepository = repo
+        isLoading = true; errorMessage = nil; indexedRepositories = []; selectedRepository = repo
         
-        guard let url = repo.jsonURL else {
-            errorMessage = "Invalid URL"
-            isLoading = false
-            return
-        }
+        guard let url = repo.jsonURL else { isLoading = false; return }
         
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
-            let repos = try JSONDecoder().decode([IndexedRepository].self, from: data)
-            indexedRepositories = repos
+            // Parse index format
+            if let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                indexedRepositories = array.compactMap { dict in
+                    guard let name = dict["name"] as? String,
+                          let base = dict["baseURL"] as? String,
+                          let themes = dict["themesURL"] as? String else { return nil }
+                    return IndexedRepository(name: name, baseURL: base, themesURL: themes)
+                }
+            }
         } catch {
-            errorMessage = "Failed to load repos: \(error.localizedDescription)"
+            errorMessage = "Failed to load index: \(error.localizedDescription)"
         }
         isLoading = false
     }
     
-    // MARK: - Fetch themes từ top-level direct repo
-    
     func fetchThemes(from repo: ThemeRepository) async {
-        isLoading = true
-        errorMessage = nil
-        remoteThemes = []
-        selectedRepository = repo
-        selectedIndexedRepo = nil
+        isLoading = true; errorMessage = nil; remoteThemes = []; selectedRepository = repo; selectedIndexedRepo = nil
         
-        guard let url = repo.jsonURL else {
-            errorMessage = "Invalid URL"
-            isLoading = false
-            return
-        }
+        guard let url = repo.jsonURL else { isLoading = false; return }
         
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             let baseURL = url.deletingLastPathComponent().absoluteString
-            
-            if let repoJSON = try? JSONDecoder().decode(RepoJSONCodable.self, from: data) {
-                let themes = repoJSON.themes ?? repoJSON.packages ?? []
-                remoteThemes = themes.map { t in
-                    RemoteTheme(name: t.name, description: t.description ?? "",
-                                url: t.url, preview: t.preview,
-                                authors: t.authors ?? "Unknown", baseURL: baseURL)
-                }
-            } else if let themes = try? JSONDecoder().decode([RemoteThemeCodable].self, from: data) {
-                remoteThemes = themes.map { t in
-                    RemoteTheme(name: t.name, description: t.description ?? "",
-                                url: t.url, preview: t.preview,
-                                authors: t.authors ?? "Unknown", baseURL: baseURL)
-                }
-            } else {
-                errorMessage = "Invalid themes JSON"
-            }
+            remoteThemes = try parseThemes(from: data, baseURL: baseURL)
         } catch {
             errorMessage = "Failed to load themes: \(error.localizedDescription)"
         }
         isLoading = false
     }
     
-    // MARK: - Fetch themes từ indexed sub-repo
-    
     func fetchThemes(from indexed: IndexedRepository) async {
-        isLoading = true
-        errorMessage = nil
-        remoteThemes = []
-        selectedIndexedRepo = indexed
+        isLoading = true; errorMessage = nil; remoteThemes = []; selectedIndexedRepo = indexed
         
-        guard let url = indexed.themesJSONURL else {
-            errorMessage = "Invalid URL"
-            isLoading = false
-            return
-        }
+        guard let url = indexed.themesJSONURL else { isLoading = false; return }
         
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
-            let baseURL = indexed.cleanBaseURL
-            
-            if let repoJSON = try? JSONDecoder().decode(RepoJSONCodable.self, from: data) {
-                let themes = repoJSON.themes ?? repoJSON.packages ?? []
-                remoteThemes = themes.map { t in
-                    RemoteTheme(name: t.name, description: t.description ?? "",
-                                url: t.url, preview: t.preview,
-                                authors: t.authors ?? "Unknown", baseURL: baseURL)
-                }
-            } else if let themes = try? JSONDecoder().decode([RemoteThemeCodable].self, from: data) {
-                remoteThemes = themes.map { t in
-                    RemoteTheme(name: t.name, description: t.description ?? "",
-                                url: t.url, preview: t.preview,
-                                authors: t.authors ?? "Unknown", baseURL: baseURL)
-                }
-            } else {
-                errorMessage = "Invalid themes JSON"
-            }
+            remoteThemes = try parseThemes(from: data, baseURL: indexed.cleanBaseURL)
         } catch {
             errorMessage = "Failed to load themes: \(error.localizedDescription)"
         }
         isLoading = false
     }
     
-    // MARK: - Back navigation
+    private func parseThemes(from data: Data, baseURL: String) throws -> [RemoteTheme] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return [] }
+        
+        var rawArray: [[String: Any]] = []
+        
+        // Extract array of themes
+        if let arr = json as? [[String: Any]] {
+            rawArray = arr
+        } else if let dict = json as? [String: Any] {
+            if let themes = dict["themes"] as? [[String: Any]] { rawArray = themes }
+            else if let packages = dict["packages"] as? [[String: Any]] { rawArray = packages }
+        }
+        
+        return rawArray.compactMap { dict in
+            let name = dict["name"] as? String ?? "Unknown"
+            let desc = (dict["description"] as? String) ?? (dict["summary"] as? String) ?? ""
+            let url = (dict["url"] as? String) ?? (dict["download"] as? String) ?? ""
+            let preview = (dict["preview"] as? String) ?? (dict["icon"] as? String) ?? ""
+            let authors = (dict["authors"] as? String) ?? (dict["author"] as? String) ?? "Unknown"
+            
+            guard !url.isEmpty else { return nil }
+            return RemoteTheme(name: name, description: desc, url: url, preview: preview, authors: authors, baseURL: baseURL)
+        }
+    }
     
+    // MARK: - Navigation
     func backToRepositories() {
-        selectedRepository = nil
-        selectedIndexedRepo = nil
-        indexedRepositories = []
-        remoteThemes = []
-        errorMessage = nil
+        selectedRepository = nil; selectedIndexedRepo = nil
+        indexedRepositories = []; remoteThemes = []; errorMessage = nil
     }
     
     func backToIndexedRepos() {
-        selectedIndexedRepo = nil
-        remoteThemes = []
-        errorMessage = nil
+        selectedIndexedRepo = nil; remoteThemes = []; errorMessage = nil
     }
     
     // MARK: - Download & Import
-    
     func downloadAndImportTheme(_ theme: RemoteTheme, themeStore: PasscodeThemeStore) async throws {
         guard let downloadURL = theme.fullURL else { throw ThemeStoreError.invalidURL }
         downloadingThemes.insert(theme.id)
         defer { downloadingThemes.remove(theme.id) }
         
         let (tempURL, _) = try await URLSession.shared.download(from: downloadURL)
-        let permanentURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("passthm")
+        let permanentURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("passthm")
         try FileManager.default.copyItem(at: tempURL, to: permanentURL)
+        
         try await importThemeDirectly(from: permanentURL, name: theme.name, store: themeStore)
         try? FileManager.default.removeItem(at: permanentURL)
     }
@@ -343,14 +257,13 @@ class ThemeStoreManager: ObservableObject {
         if !FileManager.default.fileExists(atPath: themeFolder.path) {
             try FileManager.default.createDirectory(at: themeFolder, withIntermediateDirectories: true)
         }
+        
         let detectedSize = detectSizeFromZIP(at: sourceURL)
-        do {
-            try FileManager.default.unzipItem(at: sourceURL, to: themeFolder)
-        } catch {
-            try? FileManager.default.removeItem(at: themeFolder)
-            throw ThemeStoreError.unzipFailed
-        }
+        do { try FileManager.default.unzipItem(at: sourceURL, to: themeFolder) }
+        catch { try? FileManager.default.removeItem(at: themeFolder); throw ThemeStoreError.unzipFailed }
+        
         try extractImagesFromTelephonySubfolder(themeFolder: themeFolder)
+        
         var themeWithSize = newTheme
         themeWithSize.detectedSize = detectedSize
         store.addTheme(themeWithSize)
@@ -374,27 +287,20 @@ class ThemeStoreManager: ObservableObject {
         for filename in images {
             let ext = (filename as NSString).pathExtension.lowercased()
             guard ext == "png" || ext == "jpg" || ext == "jpeg" else { continue }
-            try? fm.moveItem(at: teleURL.appendingPathComponent(filename),
-                             to: themeFolder.appendingPathComponent(filename))
+            try? fm.moveItem(at: teleURL.appendingPathComponent(filename), to: themeFolder.appendingPathComponent(filename))
         }
         try? fm.removeItem(at: teleURL)
     }
 }
 
-// MARK: - Errors
-
 enum ThemeStoreError: LocalizedError {
-    case invalidURL
-    case unzipFailed
-    case invalidJSON
-    case duplicateRepo
-    
+    case invalidURL, unzipFailed, invalidJSON, duplicateRepo
     var errorDescription: String? {
         switch self {
-        case .invalidURL:    return "URL không hợp lệ"
-        case .unzipFailed:   return "Không giải nén được theme"
-        case .invalidJSON:   return "File JSON không đúng định dạng (không nhận diện được repo)"
-        case .duplicateRepo: return "Repo này đã có trong danh sách"
+        case .invalidURL:    return "Invalid URL"
+        case .unzipFailed:   return "Failed to extract theme"
+        case .invalidJSON:   return "Unsupported JSON format"
+        case .duplicateRepo: return "Repo already exists"
         }
     }
 }
