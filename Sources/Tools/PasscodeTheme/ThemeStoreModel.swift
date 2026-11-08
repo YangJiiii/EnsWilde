@@ -37,7 +37,7 @@ class ThemeStoreManager: ObservableObject {
     @Published var downloadingThemes: Set<String> = []
     @Published var selectedRepository: ThemeRepository?
     
-    private static let defaultIndexURL = "https://raw.githubusercontent.com/YangJiiii/EnsWilde/refs/heads/main/themes-store/index.json"
+    private static let defaultIndexURL = "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde/refs/heads/main/themes-store/index.json"
     private let savedReposKey = "enswilde.themeStoreRepos.v2"
     
     init() {
