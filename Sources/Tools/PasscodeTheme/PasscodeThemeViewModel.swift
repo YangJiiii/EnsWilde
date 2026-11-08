@@ -50,28 +50,23 @@ class PasscodeThemeViewModel: ObservableObject {
         try await importTheme(from: sourceURL, name: name)
     }
 
-    // MARK: - Xử lý ảnh (Ma trận AirCard 109+ file)
+    // MARK: - Ma trận tạo file (Chuẩn AirCard)
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
         boldMode: PasscodeTheme.BoldMode
-    ) throws -> [(targetPath: String, imageData: Data)] {
+    ) throws -> [(filename: String, imageData: Data)] {
 
         var processedFiles: [(String, Data)] = []
         let imageFiles = theme.getImageFiles()
         guard !imageFiles.isEmpty else { throw PasscodeThemeError.noImagesFound }
 
-        // 1. Danh sách 17 ngôn ngữ chuẩn AirCard
         let locales = [
             "en", "other", "ru", "uk", "es", "fr", "de", "it", "pt", "tr", "pl", "nl", "ja", "ko", "zh", "ar", "he"
         ]
-        
-        // 2. Subtext chuẩn
         let subtexts: [String: String] = [
             "0": "+", "1": "", "2": "A B C", "3": "D E F", "4": "G H I", "5": "J K L",
             "6": "M N O", "7": "P Q R S", "8": "T U V", "9": "W X Y Z"
         ]
-        
-        // 3. Subtext tiếng Nga & Ukraina
         let ruSubtexts: [String: String] = [
             "2": "А Б В Г", "3": "Д Е Ж З", "4": "И Й К Л", "5": "М Н О П",
             "6": "Р С Т У", "7": "Ф Х Ц Ч", "8": "Ш Щ Ъ Ы", "9": "Ь Э Ю Я"
@@ -81,7 +76,6 @@ class PasscodeThemeViewModel: ObservableObject {
             "6": "П Р С Т", "7": "У Ф Х Ц", "8": "Ч Ш Щ Ь", "9": "Ю Я"
         ]
 
-        // 4. Hậu tố Bold
         let boldSuffixes: [String]
         switch boldMode {
         case .regular: boldSuffixes = [""]
@@ -89,14 +83,9 @@ class PasscodeThemeViewModel: ObservableObject {
         case .both: boldSuffixes = ["", "-bold"]
         }
 
-        // 5. Các phiên bản TelephonyUI (AirCard tạo cả 3)
-        let versions = ["TelephonyUI-10", "TelephonyUI-9", "TelephonyUI-8"]
-
         for filename in imageFiles {
             let sourceURL = theme.themeFolderURL.appendingPathComponent(filename)
             guard let digit = extractDigit(from: filename) else { continue }
-            
-            // Resize ảnh nếu cần
             guard let image = UIImage(contentsOfFile: sourceURL.path) else { continue }
             let processedImage = resizeImage(image, for: theme.keySize, detectedSize: theme.detectedSize)
             guard let imageData = processedImage.pngData() else { continue }
@@ -105,35 +94,21 @@ class PasscodeThemeViewModel: ObservableObject {
             let ruSub = ruSubtexts[digit]
             let ukSub = ukSubtexts[digit]
 
-            for ver in versions {
-                // Tạo marker _big nếu chọn Big Keys
-                if theme.keySize == .big {
-                    processedFiles.append(("\(ver)/_big", Data()))
-                }
-
-                for lang in locales {
-                    for bld in boldSuffixes {
-                        // 1. File không có subtext
-                        processedFiles.append(("\(ver)/\(lang)-\(digit)---white\(bld).png", imageData))
-
-                        // 2. File có subtext Latin
-                        if !stdSub.isEmpty {
-                            processedFiles.append(("\(ver)/\(lang)-\(digit)-\(stdSub)--white\(bld).png", imageData))
-                            let noSpace = stdSub.replacingOccurrences(of: " ", with: "")
-                            if noSpace != stdSub {
-                                processedFiles.append(("\(ver)/\(lang)-\(digit)-\(noSpace)--white\(bld).png", imageData))
-                            }
+            for lang in locales {
+                for bld in boldSuffixes {
+                    processedFiles.append(("\(lang)-\(digit)---white\(bld).png", imageData))
+                    if !stdSub.isEmpty {
+                        processedFiles.append(("\(lang)-\(digit)-\(stdSub)--white\(bld).png", imageData))
+                        let noSpace = stdSub.replacingOccurrences(of: " ", with: "")
+                        if noSpace != stdSub {
+                            processedFiles.append(("\(lang)-\(digit)-\(noSpace)--white\(bld).png", imageData))
                         }
-
-                        // 3. File có subtext Nga
-                        if (lang == "ru" || lang == "other" || lang == "en"), let sub = ruSub {
-                            processedFiles.append(("\(ver)/\(lang)-\(digit)-\(sub)--white\(bld).png", imageData))
-                        }
-                        
-                        // 4. File có subtext Ukraina
-                        if (lang == "uk" || lang == "other" || lang == "en"), let sub = ukSub {
-                            processedFiles.append(("\(ver)/\(lang)-\(digit)-\(sub)--white\(bld).png", imageData))
-                        }
+                    }
+                    if (lang == "ru" || lang == "other" || lang == "en"), let sub = ruSub {
+                        processedFiles.append(("\(lang)-\(digit)-\(sub)--white\(bld).png", imageData))
+                    }
+                    if (lang == "uk" || lang == "other" || lang == "en"), let sub = ukSub {
+                        processedFiles.append(("\(lang)-\(digit)-\(sub)--white\(bld).png", imageData))
                     }
                 }
             }
@@ -196,7 +171,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try? fm.removeItem(at: telephonyFolderURL)
     }
 
-    // MARK: - Apply Theme (Xoá sạch & Ghi ma trận file)
+    // MARK: - Apply Theme (Dùng inject_folder chuẩn Airlift)
     func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
         defer { isProcessing = false }
@@ -204,7 +179,6 @@ class PasscodeThemeViewModel: ObservableObject {
         let globalBoldMode = self.store.globalBoldMode
         onLogUpdate("Preparing Passcode Theme (Mode: \(globalBoldMode.rawValue), Size: \(theme.keySize.rawValue))...")
 
-        // 1. Tạo ma trận file
         let processedFiles = try processThemeFiles(theme: theme, boldMode: globalBoldMode)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
         onLogUpdate("Đã tạo ma trận \(processedFiles.count) file.")
@@ -217,64 +191,74 @@ class PasscodeThemeViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
         }
 
-        // 2. Xoá sạch thư mục đích
-        let cacheDirs = [
-            "/var/mobile/Library/Caches/TelephonyUI-10",
-            "/var/mobile/Library/Caches/TelephonyUI-9",
-            "/var/mobile/Library/Caches/TelephonyUI-8"
-        ]
-        let bq = BadQuery()
-        for dir in cacheDirs {
-            if bq.grantAccess(atPath: dir).0 {
-                if let files = try? FileManager.default.contentsOfDirectory(atPath: dir) {
-                    for file in files {
-                        try? FileManager.default.removeItem(atPath: (dir as NSString).appendingPathComponent(file))
-                    }
-                }
-            }
-        }
-        onLogUpdate("Đã xoá sạch cache cũ.")
-
-        // 3. Ghi file vào thư mục tạm
+        // 1. Tạo thư mục tạm và ghi TẤT CẢ file
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("AirLiftPayload_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        for (path, data) in processedFiles {
-            let fullURL = tempDir.appendingPathComponent(path)
-            let parentDir = fullURL.deletingLastPathComponent()
-            if !FileManager.default.fileExists(atPath: parentDir.path) {
-                try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
-            }
-            try data.write(to: fullURL)
+        for (filename, data) in processedFiles {
+            try data.write(to: tempDir.appendingPathComponent(filename))
+        }
+        
+        // Tạo marker _big nếu là Big Keys (dùng Data() rỗng)
+        if theme.keySize == .big {
+            FileManager.default.createFile(atPath: tempDir.appendingPathComponent("_big").path, contents: Data())
+            onLogUpdate("Đã tạo marker _big.")
         }
 
-        // 4. Ghi qua Airlift
+        // 2. Dò tunnel IP
         onLogUpdate("Đang dò tunnel IP...")
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN."])
         }
 
-        onLogUpdate("Đang ghi \(processedFiles.count) file qua Airlift...")
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
-                defer { AirliftFFIBridge.releaseLogCallback(ctx) }
+        // 3. Ghi qua Airlift (Dùng inject_folder để tự tạo thư mục đích)
+        let targetParentDir = "/var/mobile/Library/Caches"
+        let versions = ["TelephonyUI-10", "TelephonyUI-9", "TelephonyUI-8"]
+        let bq = BadQuery()
 
-                var errPtr: UnsafeMutablePointer<CChar>? = nil
-                // Ghi vào thư mục cha Caches, Airlift sẽ tự tạo thư mục con
-                let res = al_exploit_write_dir(pairingURL.path, tempDir.path, "/var/mobile/Library/Caches", cb, ctx, &errPtr)
-
-                if res != 0 {
-                    let msg = errPtr != nil ? String(cString: errPtr!) : "Mã lỗi FFI: \(res)"
-                    if let e = errPtr { al_string_free(e) }
-                    continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
-                } else {
-                    if let e = errPtr { al_string_free(e) }
-                    continuation.resume()
+        for version in versions {
+            let targetPath = "\(targetParentDir)/\(version)"
+            onLogUpdate("Đang ghi vào \(version)...")
+            
+            // Xoá file cũ trước khi ghi đè (nếu xin được quyền)
+            if bq.grantAccess(atPath: targetPath).0 {
+                if let files = try? FileManager.default.contentsOfDirectory(atPath: targetPath) {
+                    for file in files {
+                        try? FileManager.default.removeItem(atPath: (targetPath as NSString).appendingPathComponent(file))
+                    }
+                }
+            }
+            
+            // Dùng inject_folder thay vì write_dir
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
+                    defer { AirliftFFIBridge.releaseLogCallback(ctx) }
+                    var errPtr: UnsafeMutablePointer<CChar>? = nil
+                    
+                    let res = al_exploit_inject_folder(
+                        pairingURL.path,
+                        tempDir.path,
+                        targetParentDir,
+                        version,
+                        cb,
+                        ctx,
+                        &errPtr
+                    )
+                    
+                    if res != 0 {
+                        let msg = errPtr != nil ? String(cString: errPtr!) : "Mã lỗi FFI: \(res)"
+                        if let e = errPtr { al_string_free(e) }
+                        continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
+                    } else {
+                        if let e = errPtr { al_string_free(e) }
+                        continuation.resume()
+                    }
                 }
             }
         }
+
         onLogUpdate("✅ Đã ghi file thành công. Bấm 'Reset Theme & Reboot' để khởi động lại máy và áp dụng theme.")
     }
 
