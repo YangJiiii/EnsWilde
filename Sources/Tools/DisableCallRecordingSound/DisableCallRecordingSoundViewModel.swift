@@ -10,8 +10,7 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
 
     // MARK: - Published state
     @Published private(set) var isProcessing: Bool = false
-    @Published private(set) var currentStatus: String = "Checking..."
-
+    
     /// Toggle "tweak đang bật". CHỈ false khi:
     ///   - Chưa Apply lần nào (không có backup)
     ///   - User xoá backup / mất backup
@@ -20,13 +19,12 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
 
     @Published private(set) var isChecking: Bool = false
 
-    /// Trạng thái THỰC TẾ của 3 file tone trên máy (detect bằng cách đọc file qua Airlift).
-    /// true  = file hiện tại KHÁC backup → đã bị ghi silent
-    /// false = file hiện tại GIỐNG backup → đang là bản gốc
+    /// Trạng thái THỰC TẾ của 3 file tone trên máy
     @Published private(set) var isToneSilenced: Bool = false
 
-    @Published private(set) var toneStatus: String = "Unknown"
-    @Published private(set) var backupStatus: String = "Checking..."
+    // 🎯 Trả KEY để View tự dịch qua L()
+    @Published private(set) var toneStatusKey: String = "unknown"
+    @Published private(set) var backupStatusKey: String = "checking"
     @Published private(set) var isBackupReady: Bool = false
 
     // MARK: - Hằng số
@@ -51,16 +49,14 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
     // MARK: - Init
     init() {
         refreshBackupState()
-        // Fallback ban đầu: nếu có backup → coi như đã từng Apply (Silenced).
-        // checkToneStatus() sẽ detect lại chính xác từ file thực tế khi user mở tab.
         if isBackupReady {
             isTweakActive = true
             isToneSilenced = true
-            toneStatus = "Silenced (tweak active)"
+            toneStatusKey = "silenced_tweak_active"
         } else {
             isTweakActive = false
             isToneSilenced = false
-            toneStatus = "Original"
+            toneStatusKey = "original"
         }
     }
 
@@ -75,11 +71,9 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
         }
 
         let ready = backupCount >= toneFiles.count
-        currentStatus = ready ? "Backup Ready (Có thể Restore)" : "No Backup Found"
-        backupStatus  = currentStatus
+        backupStatusKey = ready ? "backup_ready" : "no_backup_found"
         isBackupReady = ready
 
-        // Chỉ tắt toggle khi mất backup. Có backup → giữ nguyên isTweakActive (không reset).
         if !ready {
             isTweakActive = false
         }
@@ -95,33 +89,27 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         guard FileManager.default.fileExists(atPath: pairingURL.path) else {
-            toneStatus = "Pairing file not found"
+            toneStatusKey = "pairing_not_found"
             return
         }
         guard NetworkStatus.isVPNTunnelPresent() else {
-            toneStatus = "VPN required"
+            toneStatusKey = "vpn_required"
             return
         }
 
         refreshBackupState()
 
-        // Đọc 3 file trên máy qua Airlift → so sánh với backup → detect chính xác.
         if let detected = await detectToneSilenceState(pairingPath: pairingURL.path) {
             isToneSilenced = detected
-            // Có file backup → user đã từng Apply → toggle phải ON.
             if isBackupReady {
                 isTweakActive = true
             }
         }
 
-        toneStatus = isToneSilenced ? "Silenced (tweak active)" : "Original"
+        toneStatusKey = isToneSilenced ? "silenced_tweak_active" : "original"
     }
 
     // MARK: - Detect state bằng cách đọc file thực tế
-    /// Trả về:
-    ///   true  = tất cả 3 file hiện tại KHÁC backup → đang silenced
-    ///   false = tất cả 3 file hiện tại GIỐNG backup → đang original
-    ///   nil   = không đọc được / lẫn lộn → giữ state cũ
     private func detectToneSilenceState(pairingPath: String) async -> Bool? {
         let fm = FileManager.default
         var silencedCount = 0
@@ -182,7 +170,7 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Import backup thủ công (nếu cần)
+    // MARK: - Import backup thủ công
     func importBackupFile(url: URL, fileName: String) throws {
         let fm = FileManager.default
         if !fm.fileExists(atPath: backupDirectory.path) {
@@ -233,26 +221,22 @@ final class DisableCallRecordingSoundViewModel: ObservableObject {
                                  sourceDir: stagingDir.path,
                                  onLogUpdate: onLogUpdate)
 
-        // ─────────────────────────────────────────────────────────────
-        // Cập nhật state sau khi ghi thành công
-        // ─────────────────────────────────────────────────────────────
         if isRestore {
             isToneSilenced = false
-            toneStatus     = "Original"
-            isTweakActive  = true   // ← giữ toggle ON (nếu có backup)
+            toneStatusKey     = "original"
+            isTweakActive  = true
         } else {
             isToneSilenced = true
-            toneStatus     = "Silenced (tweak active)"
+            toneStatusKey     = "silenced_tweak_active"
             isTweakActive  = true
         }
 
         onLogUpdate("✅ Đã \(isRestore ? "khôi phục" : "tắt tiếng") âm thanh thành công.")
         refreshBackupState()
 
-        // Verify lại bằng cách đọc file thực tế (best-effort, không throw nếu fail)
         if let detected = await detectToneSilenceState(pairingPath: pairingURL.path) {
             isToneSilenced = detected
-            toneStatus = detected ? "Silenced (tweak active)" : "Original"
+            toneStatusKey = detected ? "silenced_tweak_active" : "original"
         }
         if isBackupReady {
             isTweakActive = true
