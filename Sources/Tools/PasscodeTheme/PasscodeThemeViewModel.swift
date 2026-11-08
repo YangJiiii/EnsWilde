@@ -15,7 +15,7 @@ class PasscodeThemeViewModel: ObservableObject {
 
     init(store: PasscodeThemeStore) { self.store = store }
 
-    // MARK: - Import
+    // MARK: - Import (logic cũ EnsWilde)
     func importTheme(from sourceURL: URL, name: String) async throws {
         isProcessing = true
         defer { isProcessing = false }
@@ -25,18 +25,19 @@ class PasscodeThemeViewModel: ObservableObject {
             defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
             let temp = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).zip")
             defer { try? FileManager.default.removeItem(at: temp) }
-            let data = try Data(contentsOf: sourceURL); try data.write(to: temp)
+            let data = try Data(contentsOf: sourceURL)
+            try data.write(to: temp)
             let newTheme = PasscodeTheme(name: name)
             try? FileManager.default.createDirectory(at: newTheme.themeFolderURL, withIntermediateDirectories: true)
             let detectedSize = PasscodeThemeViewModel.detectSizeFromZIP(at: temp)
             do { try FileManager.default.unzipItem(at: temp, to: newTheme.themeFolderURL) }
             catch { try? FileManager.default.removeItem(at: newTheme.themeFolderURL); throw PasscodeThemeError.invalidFormat }
-            try PasscodeThemeViewModel.extractImagesRecursively(themeFolder: newTheme.themeFolderURL)
+            try PasscodeThemeViewModel.extractImagesFromTelephonySubfolder(themeFolder: newTheme.themeFolderURL)
             return (newTheme, detectedSize)
         }.value
         var t = result.0
         t.detectedSize = result.1
-        // KHÔNG auto-set keySize — user tự chọn trong Theme Detail
+        // KHÔNG auto-set keySize — user tự chọn trong ThemeDetailView
         self.store.addTheme(t)
     }
 
@@ -44,57 +45,42 @@ class PasscodeThemeViewModel: ObservableObject {
         try await importTheme(from: sourceURL, name: name)
     }
 
-    // MARK: - Helpers
+    // MARK: - Extract (logic cũ EnsWilde)
+
     nonisolated static private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
-            for e in archive {
-                let l = e.path.lowercased()
-                if l.hasSuffix("_big") || l.contains("_big/") { return .big }
-                if l.hasSuffix("_small") || l.contains("_small/") { return .small }
+            for entry in archive {
+                if entry.path.hasSuffix("_small") { return .small }
+            }
+            for entry in archive {
+                if entry.path.hasSuffix("_big") { return .big }
             }
             return .unknown
         } catch { return .unknown }
     }
 
-    nonisolated static private func extractImagesRecursively(themeFolder: URL) throws {
+    /// Extract ảnh từ folder Telephony* ra root (giữ nguyên logic cũ)
+    nonisolated static private func extractImagesFromTelephonySubfolder(themeFolder: URL) throws {
         let fm = FileManager.default
-        guard let e = fm.enumerator(atPath: themeFolder.path) else { return }
-        var moved = Set<String>()
-        var list: [(URL, String)] = []
-        while let rel = e.nextObject() as? String {
-            if rel.hasPrefix(".") || rel.contains("__MACOSX") { continue }
-            let url = themeFolder.appendingPathComponent(rel)
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
-            let ext = (rel as NSString).pathExtension.lowercased()
+        guard let contents = try? fm.contentsOfDirectory(atPath: themeFolder.path) else { return }
+        guard let telephonyFolder = contents.first(where: { $0.hasPrefix("Telephony") || $0.hasPrefix("TelephonyUI") }) else { return }
+        let telephonyFolderURL = themeFolder.appendingPathComponent(telephonyFolder)
+        guard let imageFiles = try? fm.contentsOfDirectory(atPath: telephonyFolderURL.path) else { return }
+        for filename in imageFiles {
+            let ext = (filename as NSString).pathExtension.lowercased()
             guard ext == "png" || ext == "jpg" || ext == "jpeg" else { continue }
-            let filename = (rel as NSString).lastPathComponent
-            guard let d = extractDigitStatic(from: filename), !moved.contains(d) else { continue }
-            moved.insert(d)
-            list.append((url, "\(d).png"))
+            try? fm.moveItem(at: telephonyFolderURL.appendingPathComponent(filename), to: themeFolder.appendingPathComponent(filename))
         }
-        for (src, name) in list {
-            let dst = themeFolder.appendingPathComponent(name)
-            try? fm.removeItem(at: dst)
-            try? fm.copyItem(at: src, to: dst)
-        }
-        if let c = try? fm.contentsOfDirectory(atPath: themeFolder.path) {
-            for i in c {
-                let u = themeFolder.appendingPathComponent(i)
-                var d: ObjCBool = false
-                if fm.fileExists(atPath: u.path, isDirectory: &d), d.boolValue {
-                    try? fm.removeItem(at: u)
-                }
-            }
-        }
+        try? fm.removeItem(at: telephonyFolderURL)
     }
 
     nonisolated static func extractDigitStatic(from filename: String) -> String? {
         let stem = (filename as NSString).deletingPathExtension
             .replacingOccurrences(of: "--white", with: "", options: .caseInsensitive)
             .replacingOccurrences(of: "-white", with: "", options: .caseInsensitive)
-            .replacingOccurrences(of: "@2x", with: "").replacingOccurrences(of: "@3x", with: "")
+            .replacingOccurrences(of: "@2x", with: "")
+            .replacingOccurrences(of: "@3x", with: "")
         if let re = try? NSRegularExpression(pattern: #"(?:^[a-zA-Z]+-)?([0-9*#])"#, options: .caseInsensitive) {
             let ns = stem as NSString
             if let m = re.firstMatch(in: stem, range: NSRange(location: 0, length: ns.length)), m.numberOfRanges > 1 {
@@ -109,40 +95,28 @@ class PasscodeThemeViewModel: ObservableObject {
         return nil
     }
 
-    private func resolvedVersions(_ t: PasscodeTheme.TelephonyVersion) -> [String] {
-        if t == .universal {
-            let major = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-            return major >= 18 ? ["TelephonyUI-10"] : (major >= 16 ? ["TelephonyUI-9"] : ["TelephonyUI-8"])
-        }
-        return t.targetFolders
-    }
+    // MARK: - Resize (logic EnsWilde cũ: 202↔287)
 
-    // MARK: - Encode (ImageIO + resize theo EnsWilde cũ)
-
-    /// Resize theo logic EnsWilde cũ:
-    /// - detected == unknown → giữ nguyên
-    /// - detected == target → giữ nguyên
-    /// - detected ≠ target → resize (202↔287)
-    nonisolated private func fastEncode(at url: URL, detected: PasscodeTheme.DetectedSize, target: PasscodeTheme.KeySize) -> Data? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    /// - detected == .small && keySize == .big → x1.42
+    /// - detected == .big && keySize == .small → x0.70
+    /// - Cùng size hoặc unknown → không resize
+    nonisolated private func resizeImageData(at url: URL, detected: PasscodeTheme.DetectedSize, target: PasscodeTheme.KeySize) -> Data? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         
-        // Case 1: Unknown detected size → không resize
+        // Không cần resize
         if detected == .unknown { return try? Data(contentsOf: url) }
+        if detected == .small && target == .small { return try? Data(contentsOf: url) }
+        if detected == .big && target == .big { return try? Data(contentsOf: url) }
         
-        // Case 2: Detected == target → không resize
-        if (detected == .big && target == .big) || (detected == .small && target == .small) {
-            return try? Data(contentsOf: url)
-        }
-        
-        // Case 3: Detected ≠ target → resize
-        let px: CGFloat = (target == .big) ? 287 : 202
+        // Cần resize
+        let maxPx: CGFloat = (target == .big) ? 287.0 : 202.0
         let opts = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: px
+            kCGImageSourceThumbnailMaxPixelSize: maxPx
         ] as CFDictionary
-        guard let thumb = CGImageSourceCreateThumbnailAtIndex(src, 0, opts) else {
+        guard let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, opts) else {
             return try? Data(contentsOf: url)
         }
         let md = NSMutableData()
@@ -152,20 +126,20 @@ class PasscodeThemeViewModel: ObservableObject {
         return md as Data
     }
 
-    // MARK: - Stage (ghi thực, không hard link)
+    // MARK: - Stage (matrix AirCard + write thực)
+
     nonisolated private func stageFiles(theme: PasscodeTheme, language: PasscodeTheme.PrefixLanguage, boldMode: PasscodeTheme.BoldMode, into dir: URL) throws -> Int {
         let images = theme.getImageFiles()
         guard !images.isEmpty else { throw PasscodeThemeError.noImagesFound }
-        
+
         let allLocales = ["en", "other", "ru", "uk", "es", "fr", "de", "it", "pt", "tr", "pl", "nl", "ja", "ko", "zh", "ar", "he"]
         let locales: [String] = (language == .universal) ? allLocales : (language == .other ? ["other"] : [language.rawValue, "other"])
         
         let subs: [String: String] = ["0": "+", "1": "", "2": "A B C", "3": "D E F", "4": "G H I", "5": "J K L", "6": "M N O", "7": "P Q R S", "8": "T U V", "9": "W X Y Z"]
         let ruSubs: [String: String] = ["2": "А Б В Г", "3": "Д Е Ж З", "4": "И Й К Л", "5": "М Н О П", "6": "Р С Т У", "7": "Ф Х Ц Ч", "8": "Ш Щ Ъ Ы", "9": "Ь Э Ю Я"]
         let ukSubs: [String: String] = ["2": "А Б В Г", "3": "Д Е Ж З", "4": "І Ї Й К", "5": "Л М Н О", "6": "П Р С Т", "7": "У Ф Х Ц", "8": "Ч Ш Щ Ь", "9": "Ю Я"]
-        let bold: [String] = (boldMode == .both) ? ["", "-bold"] : (boldMode == .bold ? ["-bold"] : [""])
-        
-        // Encode song song (ImageIO thread-safe)
+        let boldSuffixes: [String] = (boldMode == .both) ? ["", "-bold"] : (boldMode == .bold ? ["-bold"] : [""])
+
         struct Encoded { let digit: String; let data: Data }
         var encoded: [Encoded] = []
         let lock = NSLock()
@@ -173,11 +147,10 @@ class PasscodeThemeViewModel: ObservableObject {
             let f = images[i]
             let u = theme.themeFolderURL.appendingPathComponent(f)
             guard let d = PasscodeThemeViewModel.extractDigitStatic(from: f),
-                  let data = fastEncode(at: u, detected: theme.detectedSize, target: theme.keySize) else { return }
+                  let data = resizeImageData(at: u, detected: theme.detectedSize, target: theme.keySize) else { return }
             lock.lock(); encoded.append(Encoded(digit: d, data: data)); lock.unlock()
         }
-        
-        // Ghi từng file thực
+
         var count = 0
         for item in encoded {
             let d = item.digit
@@ -185,44 +158,32 @@ class PasscodeThemeViewModel: ObservableObject {
             let stdSub = subs[d] ?? ""
             let ruSub = ruSubs[d]
             let ukSub = ukSubs[d]
-            
+
             for l in locales {
-                for b in bold {
-                    // 1. Không subtext
-                    try? data.write(to: dir.appendingPathComponent("\(l)-\(d)---white\(b).png"), options: .atomic)
-                    count += 1
-                    
-                    // 2. Subtext Latin
+                for b in boldSuffixes {
+                    try? data.write(to: dir.appendingPathComponent("\(l)-\(d)---white\(b).png"), options: .atomic); count += 1
                     if !stdSub.isEmpty {
-                        try? data.write(to: dir.appendingPathComponent("\(l)-\(d)-\(stdSub)--white\(b).png"), options: .atomic)
-                        count += 1
-                        let noSpace = stdSub.replacingOccurrences(of: " ", with: "")
-                        if noSpace != stdSub {
-                            try? data.write(to: dir.appendingPathComponent("\(l)-\(d)-\(noSpace)--white\(b).png"), options: .atomic)
-                            count += 1
+                        try? data.write(to: dir.appendingPathComponent("\(l)-\(d)-\(stdSub)--white\(b).png"), options: .atomic); count += 1
+                        let ns = stdSub.replacingOccurrences(of: " ", with: "")
+                        if ns != stdSub {
+                            try? data.write(to: dir.appendingPathComponent("\(l)-\(d)-\(ns)--white\(b).png"), options: .atomic); count += 1
                         }
                     }
-                    // 3. Nga
                     if l == "ru" || language == .universal, let s = ruSub {
-                        try? data.write(to: dir.appendingPathComponent("\(l)-\(d)-\(s)--white\(b).png"), options: .atomic)
-                        count += 1
+                        try? data.write(to: dir.appendingPathComponent("\(l)-\(d)-\(s)--white\(b).png"), options: .atomic); count += 1
                     }
-                    // 4. Ukraina
                     if l == "uk" || language == .universal, let s = ukSub {
-                        try? data.write(to: dir.appendingPathComponent("\(l)-\(d)-\(s)--white\(b).png"), options: .atomic)
-                        count += 1
+                        try? data.write(to: dir.appendingPathComponent("\(l)-\(d)-\(s)--white\(b).png"), options: .atomic); count += 1
                     }
                 }
             }
         }
-        
-        // Marker _big: CHỈ tạo khi keySize == .big
-        // Cách này giúp iOS dùng layout big (phím sát nhau → liền mạch)
+
+        // Big Key → tạo marker _big để iOS dùng layout big
         if theme.keySize == .big {
             try? Data().write(to: dir.appendingPathComponent("_big"))
             count += 1
         }
-        
         return count
     }
 
@@ -285,31 +246,35 @@ class PasscodeThemeViewModel: ObservableObject {
         defer { isProcessing = false }
         let start = Date()
 
-        let lang = self.store.globalCustomPrefix
+        let language = self.store.globalCustomPrefix
         let boldMode = self.store.globalBoldMode
-        let telephony = self.store.globalTelephonyVersion
-        let versions = resolvedVersions(telephony)
+        // Chỉ dùng 1 version user chọn trong theme (không universal)
+        let version = theme.telephonyVersion
+        let targetFolder = version.rawValue
 
-        onLogUpdate("Preparing (Lang: \(lang.displayName), Bold: \(boldMode.rawValue), Ver: \(versions.joined(separator: ",")))...")
-        onLogUpdate("📐 Key Size: \(theme.keySize.rawValue) | Detected: \(theme.detectedSize)")
-        
+        onLogUpdate("Preparing (Lang: \(language.displayName), Bold: \(boldMode.rawValue), Ver: \(version.displayName))...")
+        onLogUpdate("📐 Key Size: \(theme.keySize.rawValue) | Detected: \(detectedName(theme.detectedSize))")
+
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
-        guard FileManager.default.fileExists(atPath: pairingURL.path) else { throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing pairing."]) }
-        guard NetworkStatus.isVPNTunnelPresent() else { throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN not active."]) }
+        guard FileManager.default.fileExists(atPath: pairingURL.path) else {
+            throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing pairing."])
+        }
+        guard NetworkStatus.isVPNTunnelPresent() else {
+            throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN not active."])
+        }
 
         let stage = FileManager.default.temporaryDirectory.appendingPathComponent("passthm_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stage) }
 
         let tStage = Date()
-        let count = try stageFiles(theme: theme, language: lang, boldMode: boldMode, into: stage)
+        let count = try stageFiles(theme: theme, language: language, boldMode: boldMode, into: stage)
         guard count > 0 else { throw PasscodeThemeError.noImagesProcessed }
-        
-        let actualStaged = (try? FileManager.default.contentsOfDirectory(atPath: stage.path))?.count ?? 0
-        onLogUpdate("📊 Staged \(actualStaged) files in \(Int(Date().timeIntervalSince(tStage)))s (expected: \(count)).")
-        
-        if actualStaged < count / 2 {
-            throw NSError(domain: "AirLift", code: -30, userInfo: [NSLocalizedDescriptionKey: "Staged mismatch: \(actualStaged) < \(count)"])
+
+        let actual = (try? FileManager.default.contentsOfDirectory(atPath: stage.path))?.count ?? 0
+        onLogUpdate("📊 Staged \(actual) files in \(Int(Date().timeIntervalSince(tStage)))s.")
+        if actual < count / 2 {
+            throw NSError(domain: "AirLift", code: -30, userInfo: [NSLocalizedDescriptionKey: "Staged mismatch: \(actual) < \(count)"])
         }
 
         onLogUpdate("Đang dò tunnel...")
@@ -318,45 +283,47 @@ class PasscodeThemeViewModel: ObservableObject {
         }
 
         let parent = "/var/mobile/Library/Caches"
+        let target = "\(parent)/\(targetFolder)"
         let bq = BadQuery()
 
-        for (idx, v) in versions.enumerated() {
-            let target = "\(parent)/\(v)"
-            let tVer = Date()
-            onLogUpdate("[\(idx+1)/\(versions.count)] \(v)...")
-
-            if bq.grantAccess(atPath: target).0 {
-                try? FileManager.default.removeItem(atPath: target)
-            }
-
-            var mode = "inject_folder"
-            var done = false
-            do {
-                try await injectFolder(pairingPath: pairingURL.path, srcDir: stage.path, parentDir: parent, name: v, onLogUpdate: onLogUpdate)
-                onLogUpdate("  ✅ inject_folder: \(Int(Date().timeIntervalSince(tVer)))s")
-                done = true
-            } catch {
-                onLogUpdate("  ⚠️ inject_folder fail: \(error.localizedDescription)")
-            }
-
-            if !done {
-                mode = "write_dir"
-                try? FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: true)
-                try await writeDir(pairingPath: pairingURL.path, srcDir: stage.path, targetDir: target, onLogUpdate: onLogUpdate)
-                onLogUpdate("  ✅ write_dir: \(Int(Date().timeIntervalSince(tVer)))s")
-            }
-
-            // Verify
-            let sample = (try? FileManager.default.contentsOfDirectory(atPath: stage.path))?.first ?? "en-1---white.png"
-            let verifyPath = "\(target)/\(sample)"
-            let ok = await verifyFile(pairingPath: pairingURL.path, iosPath: verifyPath)
-            if ok {
-                onLogUpdate("  🔍 Verify OK: \(sample) (\(mode))")
-            } else {
-                throw NSError(domain: "AirLift", code: -31, userInfo: [NSLocalizedDescriptionKey: "Verify failed: \(sample) not found on device."])
-            }
+        if bq.grantAccess(atPath: target).0 {
+            try? FileManager.default.removeItem(atPath: target)
         }
+
+        let tWrite = Date()
+        onLogUpdate("Ghi \(actual) file vào \(targetFolder)...")
+        var done = false
+        do {
+            try await injectFolder(pairingPath: pairingURL.path, srcDir: stage.path, parentDir: parent, name: targetFolder, onLogUpdate: onLogUpdate)
+            onLogUpdate("  ✅ inject_folder: \(Int(Date().timeIntervalSince(tWrite)))s")
+            done = true
+        } catch {
+            onLogUpdate("  ⚠️ inject_folder fail: \(error.localizedDescription)")
+        }
+        if !done {
+            try? FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: true)
+            try await writeDir(pairingPath: pairingURL.path, srcDir: stage.path, targetDir: target, onLogUpdate: onLogUpdate)
+            onLogUpdate("  ✅ write_dir: \(Int(Date().timeIntervalSince(tWrite)))s")
+        }
+
+        // Verify
+        let sample = (try? FileManager.default.contentsOfDirectory(atPath: stage.path))?.first ?? "en-1---white.png"
+        let verifyPath = "\(target)/\(sample)"
+        if await verifyFile(pairingPath: pairingURL.path, iosPath: verifyPath) {
+            onLogUpdate("  🔍 Verify OK: \(sample)")
+        } else {
+            throw NSError(domain: "AirLift", code: -31, userInfo: [NSLocalizedDescriptionKey: "Verify failed: \(sample) not found on device."])
+        }
+
         onLogUpdate("🎉 Done in \(Int(Date().timeIntervalSince(start)))s. Tap 'Reset Theme & Reboot' to apply.")
+    }
+
+    private func detectedName(_ d: PasscodeTheme.DetectedSize) -> String {
+        switch d {
+        case .unknown: return "Unknown"
+        case .small: return "Small (202px)"
+        case .big: return "Big (287px)"
+        }
     }
 
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
