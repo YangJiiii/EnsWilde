@@ -1,7 +1,7 @@
 [
   {
-    "name": "SerStars - Nugget Passcode",
-    "baseURL": "https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/refs/heads/main/",
-    "themesURL": "https://raw.githubusercontent.com/SerStars/Nugget-Wallpapers/refs/heads/main/wallpapers-passthemes.json"
+    "name": "EnsWilde Repository",
+    "baseURL": "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde-Repository/main/",
+    "themesURL": "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde-Repository/main/themes.json"
   }
 ]
