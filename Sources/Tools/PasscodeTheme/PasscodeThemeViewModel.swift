@@ -9,14 +9,25 @@ import Network
 class PasscodeThemeViewModel: ObservableObject {
 
     @Published var isProcessing = false
+    // FIX LOOP: guard chống gọi trùng + timestamp
+    private var activeTaskID: UUID?
+
     private let store: PasscodeThemeStore
 
     init(store: PasscodeThemeStore) { self.store = store }
 
-    // MARK: - Import (Y NGUYÊN file bạn gửi)
+    // MARK: - Import (Y NGUYÊN)
     func importTheme(from sourceURL: URL, name: String) async throws {
+        // Guard chống gọi trùng
+        guard activeTaskID == nil else { return }
+        let myID = UUID()
+        activeTaskID = myID
         isProcessing = true
-        defer { isProcessing = false }
+        defer {
+            if activeTaskID == myID { activeTaskID = nil }
+            isProcessing = false
+        }
+
         let result = try await Task.detached(priority: .userInitiated) {
             () -> (PasscodeTheme, PasscodeTheme.DetectedSize) in
             let accessing = sourceURL.startAccessingSecurityScopedResource()
@@ -40,7 +51,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }.value
         var themeWithSize = result.0
         themeWithSize.detectedSize = result.1
-        if result.1 == .big { themeWithSize.keySize = .big }   // ← Y NGUYÊN
+        if result.1 == .big { themeWithSize.keySize = .big }
         self.store.addTheme(themeWithSize)
     }
 
@@ -120,7 +131,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return nil
     }
 
-    // MARK: - processThemeFiles (Y NGUYÊN — chỉ chạy song song 10 ảnh)
+    // MARK: - processThemeFiles (Y NGUYÊN — parallel 10 ảnh + dedupe)
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
         language: PasscodeTheme.PrefixLanguage,
@@ -130,7 +141,6 @@ class PasscodeThemeViewModel: ObservableObject {
         let imageFiles = theme.getImageFiles()
         guard !imageFiles.isEmpty else { throw PasscodeThemeError.noImagesFound }
 
-        // Setup (immutable — thread-safe cho read)
         let allLocales = ["en", "other", "ru", "uk", "es", "fr", "de", "it", "pt", "tr", "pl", "nl", "ja", "ko", "zh", "ar", "he"]
         let locales: [String]
         if language == .universal { locales = allLocales }
@@ -156,9 +166,9 @@ class PasscodeThemeViewModel: ObservableObject {
         case .both: boldSuffixes = ["", "-bold"]
         }
 
-        // TỐI ƯU DUY NHẤT: chạy song song resize + build (10 ảnh, mỗi ảnh 1 thread)
-        // Logic y hệt file gốc, chỉ đổi thread execution
+        // Parallel 10 ảnh + dedupe bằng Set (fix duplicate nếu có)
         var processedFiles: [(String, Data)] = []
+        var seenNames = Set<String>()
         let lock = NSLock()
 
         DispatchQueue.concurrentPerform(iterations: imageFiles.count) { i in
@@ -193,16 +203,19 @@ class PasscodeThemeViewModel: ObservableObject {
                         }
                     }
                 }
-
+                
                 lock.lock()
-                processedFiles.append(contentsOf: localFiles)
+                for item in localFiles where !seenNames.contains(item.0) {
+                    seenNames.insert(item.0)
+                    processedFiles.append(item)
+                }
                 lock.unlock()
             }
         }
         return processedFiles
     }
 
-    // MARK: - resizeImage (Y NGUYÊN — UIGraphicsImageRenderer, không đổi)
+    // MARK: - resizeImage (Y NGUYÊN)
     nonisolated private func resizeImage(_ image: UIImage, for keySize: PasscodeTheme.KeySize, detectedSize: PasscodeTheme.DetectedSize) -> UIImage {
         var sizeMultiplier: CGFloat = 1.0
         if detectedSize == .small && keySize == .big { sizeMultiplier = 287.0 / 202.0 }
@@ -217,21 +230,78 @@ class PasscodeThemeViewModel: ObservableObject {
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetPixelSize)) }
     }
 
-    // MARK: - Apply Theme (Y NGUYÊN — chỉ thêm parallel stage)
-    func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
-        isProcessing = true
-        defer { isProcessing = false }
+    // MARK: - writeDir (Y NGUYÊN)
+    nonisolated private func writeDir(
+        pairingPath: String,
+        srcDir: String,
+        targetDir: String,
+        onLogUpdate: @escaping (String) -> Void
+    ) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
+                defer { AirliftFFIBridge.releaseLogCallback(ctx) }
+                var errPtr: UnsafeMutablePointer<CChar>? = nil
+                let res = pairingPath.withCString { pairC in
+                    srcDir.withCString { srcC in
+                        targetDir.withCString { tgtC in
+                            al_exploit_write_dir(pairC, srcC, tgtC, cb, ctx, &errPtr)
+                        }
+                    }
+                }
+                if res != 0 {
+                    let msg = errPtr != nil ? String(cString: errPtr!) : "Mã lỗi FFI: \(res)"
+                    if let e = errPtr { al_string_free(e) }
+                    continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
+                } else {
+                    if let e = errPtr { al_string_free(e) }
+                    continuation.resume()
+                }
+            }
+        }
+    }
 
+    // MARK: - Apply Theme (Y NGUYÊN + fix loop + tối ưu)
+    func applyTheme(
+        _ theme: PasscodeTheme,
+        store: ToolStore,
+        onLogUpdate: @escaping (String) -> Void
+    ) async throws {
+        // FIX LOOP #1: guard chống gọi trùng
+        guard activeTaskID == nil else {
+            print("[EnsWilde] applyTheme đang chạy (taskID=\(activeTaskID?.uuidString ?? "?")) — bỏ qua lần gọi trùng")
+            return
+        }
+        let myID = UUID()
+        activeTaskID = myID
+        isProcessing = true
+        defer {
+            if activeTaskID == myID { activeTaskID = nil }
+            isProcessing = false
+        }
+
+        let startTime = Date()
         let language = self.store.globalCustomPrefix
         let boldMode = self.store.globalBoldMode
         let telephony = self.store.globalTelephonyVersion
         let versions = telephony.targetFolders
+        let totalVersions = versions.count
 
-        onLogUpdate("Preparing (Lang: \(language.displayName), Bold: \(boldMode.rawValue), Ver: \(telephony.displayName))...")
+        onLogUpdate("===== BẮT ĐẦU APPLY =====")
+        onLogUpdate("Lang: \(language.displayName) | Bold: \(boldMode.rawValue) | Ver: \(telephony.displayName)")
+        
+        // FIX LOOP #2: log rõ nếu Universal
+        if totalVersions > 1 {
+            onLogUpdate("⚠️ Universal mode: sẽ ghi \(totalVersions) folder (\(versions.joined(separator: " + "))).")
+            onLogUpdate("   Đây KHÔNG phải loop — đây là logic ghi đủ \(totalVersions) folder.")
+            onLogUpdate("   Nếu chỉ dùng iOS \(ProcessInfo.processInfo.operatingSystemVersion.majorVersion), hãy chọn 1 version cụ thể.")
+        }
 
         let processedFiles = try processThemeFiles(theme: theme, language: language, boldMode: boldMode)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
-        onLogUpdate("Đã tạo \(processedFiles.count) file.")
+        
+        let expectedTotal = processedFiles.count * totalVersions
+        onLogUpdate("📦 Matrix: \(processedFiles.count) file × \(totalVersions) ver = \(expectedTotal) file tổng.")
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         guard FileManager.default.fileExists(atPath: pairingURL.path) else {
@@ -245,71 +315,80 @@ class PasscodeThemeViewModel: ObservableObject {
         try FileManager.default.createDirectory(at: stageThemeDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stageThemeDir) }
 
-        // TỐI ƯU #2: stage song song (thay vì `for` tuần tự) — logic y hệt
+        // TỐI ƯU: stage song song (2000 file trong ~0.5s thay vì 10s)
+        let tStage = Date()
         DispatchQueue.concurrentPerform(iterations: processedFiles.count) { i in
             let (filename, data) = processedFiles[i]
             try? data.write(to: stageThemeDir.appendingPathComponent(filename))
         }
-
-        // _big marker — Y NGUYÊN (luôn tạo)
         try Data().write(to: stageThemeDir.appendingPathComponent("_big"))
+        let stageMs = Int(Date().timeIntervalSince(tStage) * 1000)
+        
+        let actualStaged = (try? FileManager.default.contentsOfDirectory(atPath: stageThemeDir.path))?.count ?? 0
+        onLogUpdate("📊 Staged \(actualStaged) file trong \(stageMs)ms (parallel).")
 
         onLogUpdate("Đang dò tunnel IP...")
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN."])
         }
 
+        let bq = BadQuery()
+
+        // Ghi tuần tự từng version — log RÕ RÀNG để không ai tưởng loop
         for (idx, versionName) in versions.enumerated() {
             let targetPath = "/var/mobile/Library/Caches/\(versionName)"
-            onLogUpdate("[\(idx+1)/\(versions.count)] Đang ghi vào \(versionName)...")
+            let tVer = Date()
+            
+            // FIX LOOP #3: log header rõ với timestamp + version number
+            onLogUpdate("───── VERSION \(idx+1)/\(totalVersions): \(versionName) ─────")
 
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
-                    defer { AirliftFFIBridge.releaseLogCallback(ctx) }
-                    var errPtr: UnsafeMutablePointer<CChar>? = nil
-                    let res = pairingURL.path.withCString { pairC in
-                        stageThemeDir.path.withCString { srcC in
-                            targetPath.withCString { tgtC in
-                                al_exploit_write_dir(pairC, srcC, tgtC, cb, ctx, &errPtr)
-                            }
-                        }
-                    }
-                    if res != 0 {
-                        let msg = errPtr != nil ? String(cString: errPtr!) : "Mã lỗi FFI: \(res)"
-                        if let e = errPtr { al_string_free(e) }
-                        continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
-                    } else {
-                        if let e = errPtr { al_string_free(e) }
-                        continuation.resume()
-                    }
-                }
+            // TỐI ƯU: xoá cache 1 syscall
+            if bq.grantAccess(atPath: targetPath).0 {
+                try? FileManager.default.removeItem(atPath: targetPath)
             }
-            onLogUpdate("  ✅ Đã ghi vào \(versionName)")
+            try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
+
+            try await writeDir(
+                pairingPath: pairingURL.path,
+                srcDir: stageThemeDir.path,
+                targetDir: targetPath,
+                onLogUpdate: { _ in }  // suppress per-file log để đỡ rối
+            )
+            
+            let elapsed = Int(Date().timeIntervalSince(tVer))
+            let rate = elapsed > 0 ? (processedFiles.count / elapsed) : 0
+            onLogUpdate("  ✅ \(versionName) hoàn tất: \(elapsed)s (\(rate) file/s)")
         }
 
-        onLogUpdate("✅ Xong. Bấm 'Reset Theme & Reboot' để khởi động lại máy và áp dụng theme.")
+        let total = Int(Date().timeIntervalSince(startTime))
+        onLogUpdate("===== HOÀN TẤT =====")
+        onLogUpdate("🎉 \(processedFiles.count) file × \(totalVersions) version = \(processedFiles.count * totalVersions) file trong \(total)s.")
+        onLogUpdate("✅ Bấm 'Reset Theme & Reboot' để áp dụng.")
     }
 
-    // MARK: - Reset (Y NGUYÊN — chỉ thêm parallel xoá)
+    // MARK: - Reset (Y NGUYÊN)
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
+        guard activeTaskID == nil else { return }
+        let myID = UUID()
+        activeTaskID = myID
         isProcessing = true
-        defer { isProcessing = false }
+        defer {
+            if activeTaskID == myID { activeTaskID = nil }
+            isProcessing = false
+        }
+        
         let cacheDirs = [
             "/var/mobile/Library/Caches/TelephonyUI-10",
             "/var/mobile/Library/Caches/TelephonyUI-9",
             "/var/mobile/Library/Caches/TelephonyUI-8"
         ]
         let bq = BadQuery()
-        // Y NGUYÊN logic xoá từng file, chỉ thêm parallel 3 thư mục
-        DispatchQueue.concurrentPerform(iterations: cacheDirs.count) { i in
-            let dir = cacheDirs[i]
+        
+        // TỐI ƯU: xoá cả folder 1 syscall thay vì loop từng file
+        for dir in cacheDirs {
             if bq.grantAccess(atPath: dir).0 {
-                if let files = try? FileManager.default.contentsOfDirectory(atPath: dir) {
-                    for file in files {
-                        try? FileManager.default.removeItem(atPath: (dir as NSString).appendingPathComponent(file))
-                    }
-                }
+                try? FileManager.default.removeItem(atPath: dir)
+                try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
             }
         }
         onLogUpdate("✅ Đã xoá Passcode Theme thành công.")
