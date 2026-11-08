@@ -16,9 +16,9 @@ struct DisableCallRecordingSoundView: View {
             // PHẦN 1: TONE STATUS
             Section {
                 HStack {
-                    Text("Current Tone")
+                    Text(L("current_tone"))
                     Spacer()
-                    Text(vm.toneStatus)
+                    Text(L(vm.toneStatusKey))
                         .foregroundStyle(vm.isToneSilenced ? .orange : .green)
                         .fontWeight(.semibold)
                 }
@@ -29,36 +29,36 @@ struct DisableCallRecordingSoundView: View {
                 } label: {
                     HStack {
                         Image(systemName: "waveform")
-                        Text(vm.isChecking ? "Checking..." : "Check Tone Status")
+                        Text(vm.isChecking ? L("checking") : L("check_tone_status"))
                     }
                 }
                 .disabled(vm.isChecking)
             } header: {
-                Text("Tone Status")
+                Text(L("tone_status"))
             } footer: {
-                Text("Kiểm tra xem file âm thanh trên máy đang là file gốc của Apple hay đã bị ghi đè bằng file im lặng.")
+                Text(L("tone_status_footer"))
             }
 
             // PHẦN 2: BACKUP STATUS
             Section {
                 HStack {
-                    Text("Backup Status")
+                    Text(L("backup_status"))
                     Spacer()
-                    Text(vm.backupStatus)
+                    Text(L(vm.backupStatusKey))
                         .foregroundStyle(vm.isBackupReady ? .green : .secondary)
                         .fontWeight(.semibold)
                 }
-                Button("Refresh Backup Status") {
+                Button(L("refresh_backup_status")) {
                     vm.checkBackupStatus()
                 }
             } header: {
-                Text("Backup System")
+                Text(L("backup_system"))
             } footer: {
-                Text("Ở lần Apply đầu tiên, App sẽ tự động trích xuất file gốc vào bộ nhớ máy.")
+                Text(L("backup_system_footer"))
             }
 
             Section {
-                Toggle("Enable Tweak", isOn: $toolStore.disableCallRecordingSoundEnabled)
+                Toggle(L("enable_tweak"), isOn: $toolStore.disableCallRecordingSoundEnabled)
             }
 
             Section {
@@ -67,7 +67,7 @@ struct DisableCallRecordingSoundView: View {
                 } label: {
                     HStack {
                         Image(systemName: "square.and.arrow.down")
-                        Text("Save Changes").font(.headline)
+                        Text(L("save_changes")).font(.headline)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
@@ -82,17 +82,17 @@ struct DisableCallRecordingSoundView: View {
                 } label: {
                     HStack {
                         Image(systemName: "arrow.counterclockwise")
-                        Text(isRestoring ? "Restoring..." : "Restore Default Sounds").font(.headline)
+                        Text(isRestoring ? L("restoring") : L("restore_default_sounds")).font(.headline)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
                 }
                 .disabled(isRestoring || !vm.isBackupReady)
             } footer: {
-                Text("Khôi phục lại âm thanh gốc từ bản Backup đã được tạo tự động.")
+                Text(L("restore_footer"))
             }
         }
-        .navigationTitle("Disable Call Recording Sound")
+        .navigationTitle(L("recording_sound_title"))
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             vm.checkBackupStatus()
@@ -100,16 +100,16 @@ struct DisableCallRecordingSoundView: View {
                 await vm.checkToneStatus()
             }
         }
-        .alert("Saved", isPresented: $showSavedAlert) {
-            Button("OK") {
+        .alert(L("saved_title"), isPresented: $showSavedAlert) {
+            Button(L("alert_ok")) {
                 showApplyTab = true
                 dismiss()
             }
         } message: {
-            Text("Changes saved. Please go to the Apply tab to apply them.")
+            Text(L("saved_message"))
         }
-        .alert("Lỗi Restore", isPresented: .init(get: { restoreError != nil }, set: { if !$0 { restoreError = nil } })) {
-            Button("OK", role: .cancel) { restoreError = nil }
+        .alert(L("restore_error_title"), isPresented: .init(get: { restoreError != nil }, set: { if !$0 { restoreError = nil } })) {
+            Button(L("alert_ok"), role: .cancel) { restoreError = nil }
         } message: {
             Text(restoreError ?? "")
         }
