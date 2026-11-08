@@ -1,28 +1,62 @@
 import SwiftUI
 
 struct ConfigView: View {
-    @ObservedObject private var localizationManager = LocalizationManager.shared
     @ObservedObject var toolStore: ToolStore
     @AppStorage("ShowApplyTab") private var showApplyTab: Bool = false
     @AppStorage("ConfigFootnoteText") private var footnoteText: String = ""
     @AppStorage("ConfigSupervised") private var supervised: Bool = false
     @AppStorage("ConfigOrgName") private var orgName: String = ""
-    
+    @AppStorage("isAirLiftMode") private var isAirLiftMode: Bool = false   // ← NEW
+
     @State private var showSavedAlert = false
 
     var body: some View {
+        Group {
+            if isAirLiftMode {
+                airliftUnavailable
+            } else {
+                formContent
+            }
+        }
+        .navigationTitle("Config Tweaks")
+        .alert("Saved", isPresented: $showSavedAlert) {
+            Button("OK") {}
+        } message: {
+            Text("Đã lưu. Chuyển sang tab Apply để áp dụng.")
+        }
+    }
+
+    @ViewBuilder
+    private var airliftUnavailable: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(.orange)
+            Text("Not Available in Airlift Mode")
+                .font(.headline)
+            Text("Config Tweaks requires native iOS access. You chose Airlift-only mode.\n\nOnly Passcode Theme is available.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var formContent: some View {
         Form {
-            Section(header: Text(L("config_tweaks_title"))) {
-                Toggle(L("enable_tweak"), isOn: $toolStore.configTweaksEnabled)
+            Section(header: Text("Config Tweaks")) {
+                Toggle("Enable Tweak", isOn: $toolStore.configTweaksEnabled)
             }
 
-            Section(header: Text(L("lock_screen_footnote"))) {
-                TextField(L("custom_footnote_placeholder"), text: $footnoteText)
+            Section(header: Text("Lock Screen Footnote")) {
+                TextField("Nhập chữ cho màn hình khoá...", text: $footnoteText)
                     .autocorrectionDisabled()
-                
+
                 if !footnoteText.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(L("preview_label")).font(.caption).foregroundStyle(.secondary)
+                        Text("Preview:").font(.caption).foregroundStyle(.secondary)
                         Text(footnoteText)
                             .font(.body)
                             .padding(8)
@@ -33,16 +67,16 @@ struct ConfigView: View {
                 }
             }
 
-            Section(header: Text(L("supervision_title"))) {
-                Toggle(L("enable_supervision"), isOn: $supervised)
-                
+            Section(header: Text("Supervision")) {
+                Toggle("Enable Supervision", isOn: $supervised)
+
                 if supervised {
-                    TextField(L("org_name_placeholder"), text: $orgName)
+                    TextField("Nhập tên tổ chức (Organization Name)...", text: $orgName)
                         .autocorrectionDisabled()
-                    
+
                     if !orgName.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(L("preview_label")).font(.caption).foregroundStyle(.secondary)
+                            Text("Preview:").font(.caption).foregroundStyle(.secondary)
                             Text(orgName)
                                 .font(.body)
                                 .padding(8)
@@ -61,7 +95,7 @@ struct ConfigView: View {
                 } label: {
                     HStack {
                         Image(systemName: "square.and.arrow.down")
-                        Text(L("apply_save_changes")).font(.headline)
+                        Text("Apply Save Changes").font(.headline)
                     }.frame(maxWidth: .infinity)
                 }
 
@@ -70,23 +104,17 @@ struct ConfigView: View {
                     footnoteText = ""
                     supervised = false
                     orgName = ""
-                    
+
                     UserDefaults.standard.removeObject(forKey: "ConfigFootnoteText")
                     UserDefaults.standard.removeObject(forKey: "ConfigSupervised")
                     UserDefaults.standard.removeObject(forKey: "ConfigOrgName")
                 } label: {
                     HStack {
                         Image(systemName: "arrow.counterclockwise")
-                        Text(L("restore_save_changes")).font(.headline)
+                        Text("Restore Save Changes").font(.headline)
                     }.frame(maxWidth: .infinity)
                 }
             }
-        }
-        .navigationTitle(L("config_tweaks_title"))
-        .alert(L("saved_title"), isPresented: $showSavedAlert) {
-            Button(L("alert_ok")) {}
-        } message: {
-            Text(L("saved_message"))
         }
     }
 }
