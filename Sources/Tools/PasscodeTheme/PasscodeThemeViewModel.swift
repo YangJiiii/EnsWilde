@@ -303,7 +303,9 @@ class PasscodeThemeViewModel: ObservableObject {
         let verifyFile = processedFiles[0].filename
         let verifyPath = "/var/mobile/Library/Caches/\(versions[0])/\(verifyFile)"
 
-        let verifyData = await withCheckedContinuation { cont in
+        // FIX: khai báo kiểu tường minh CheckedContinuation<Data?, Never>
+        // để resume(returning: nil) hợp lệ và khớp với if let verifyData phía dưới.
+        let verifyData = await withCheckedContinuation { (cont: CheckedContinuation<Data?, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 var outData: UnsafeMutablePointer<UInt8>? = nil
                 var outLen: Int = 0
