@@ -27,10 +27,7 @@ LSApplicationWorkspace *LSApplicationWorkspaceDefaultWorkspace(void);
 + (BOOL)_hasHomeButton;
 @end
 
-#pragma mark - bad_query
-#include <stdint.h>
-#include <stdbool.h>
-
-int64_t bad_query(char* path, bool create, char *group_identifier, bool is_group);
-char *bad_query_list(char *path, int64_t max_inode);
-void bad_query_release(int64_t handle);
+#pragma mark - worse_query
+#include "worse_query.h"   // int64_t worse_query(NSString *path, NSString *group, bool alt_flags, bool create_dir);
+                            // void worse_query_release(int64_t handle);
+#include "pathleak.h"       // NSArray *pathleak(NSString *filter, uint64_t max_inode);
