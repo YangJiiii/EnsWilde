@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ConfigView: View {
+    @ObservedObject private var localizationManager = LocalizationManager.shared
     @ObservedObject var toolStore: ToolStore
     @AppStorage("ShowApplyTab") private var showApplyTab: Bool = false
     @AppStorage("ConfigFootnoteText") private var footnoteText: String = ""
@@ -11,17 +12,17 @@ struct ConfigView: View {
 
     var body: some View {
         Form {
-            Section(header: Text("Config Tweaks")) {
-                Toggle("Enable Tweak", isOn: $toolStore.configTweaksEnabled)
+            Section(header: Text(L("config_tweaks_title"))) {
+                Toggle(L("enable_tweak"), isOn: $toolStore.configTweaksEnabled)
             }
 
-            Section(header: Text("Lock Screen Footnote")) {
-                TextField("Nhập chữ cho màn hình khoá...", text: $footnoteText)
+            Section(header: Text(L("lock_screen_footnote"))) {
+                TextField(L("custom_footnote_placeholder"), text: $footnoteText)
                     .autocorrectionDisabled()
                 
                 if !footnoteText.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Preview:").font(.caption).foregroundStyle(.secondary)
+                        Text(L("preview_label")).font(.caption).foregroundStyle(.secondary)
                         Text(footnoteText)
                             .font(.body)
                             .padding(8)
@@ -32,16 +33,16 @@ struct ConfigView: View {
                 }
             }
 
-            Section(header: Text("Supervision")) {
-                Toggle("Enable Supervision", isOn: $supervised)
+            Section(header: Text(L("supervision_title"))) {
+                Toggle(L("enable_supervision"), isOn: $supervised)
                 
                 if supervised {
-                    TextField("Nhập tên tổ chức (Organization Name)...", text: $orgName)
+                    TextField(L("org_name_placeholder"), text: $orgName)
                         .autocorrectionDisabled()
                     
                     if !orgName.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Preview:").font(.caption).foregroundStyle(.secondary)
+                            Text(L("preview_label")).font(.caption).foregroundStyle(.secondary)
                             Text(orgName)
                                 .font(.body)
                                 .padding(8)
@@ -60,7 +61,7 @@ struct ConfigView: View {
                 } label: {
                     HStack {
                         Image(systemName: "square.and.arrow.down")
-                        Text("Apply Save Changes").font(.headline)
+                        Text(L("apply_save_changes")).font(.headline)
                     }.frame(maxWidth: .infinity)
                 }
 
@@ -76,16 +77,16 @@ struct ConfigView: View {
                 } label: {
                     HStack {
                         Image(systemName: "arrow.counterclockwise")
-                        Text("Restore Save Changes").font(.headline)
+                        Text(L("restore_save_changes")).font(.headline)
                     }.frame(maxWidth: .infinity)
                 }
             }
         }
-        .navigationTitle("Config Tweaks")
-        .alert("Saved", isPresented: $showSavedAlert) {
-            Button("OK") {}
+        .navigationTitle(L("config_tweaks_title"))
+        .alert(L("saved_title"), isPresented: $showSavedAlert) {
+            Button(L("alert_ok")) {}
         } message: {
-            Text("Đã lưu. Chuyển sang tab Apply để áp dụng.")
+            Text(L("saved_message"))
         }
     }
 }
