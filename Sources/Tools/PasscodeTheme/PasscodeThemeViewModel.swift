@@ -29,13 +29,11 @@ class PasscodeThemeViewModel: ObservableObject {
     init(store: PasscodeThemeStore) { self.store = store }
 
     // MARK: - Nhận dạng loại file passcode theme
-    /// Hỗ trợ: .zip, .passthm, .3105pass (tất cả đều là ZIP container)
     nonisolated static func isSupportedPasscodeThemeFile(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         return ["zip", "passthm", "3105pass"].contains(ext)
     }
 
-    /// Trả về tên loại file để log
     nonisolated static func describeFileType(_ url: URL) -> String {
         switch url.pathExtension.lowercased() {
         case "passthm": return "Passcode Theme (.passthm)"
@@ -45,7 +43,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Import (nhận dạng 3 loại)
+    // MARK: - Import ⚡ TỐI ƯU: copyItem thay vì Data(contentsOf:)+write
     func importTheme(from sourceURL: URL, name: String) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
@@ -56,7 +54,6 @@ class PasscodeThemeViewModel: ObservableObject {
             isProcessing = false
         }
 
-        // 🎯 Validate loại file
         guard PasscodeThemeViewModel.isSupportedPasscodeThemeFile(sourceURL) else {
             throw PasscodeThemeError.invalidFormat
         }
@@ -65,13 +62,18 @@ class PasscodeThemeViewModel: ObservableObject {
             () -> (PasscodeTheme, PasscodeTheme.DetectedSize) in
             let accessing = sourceURL.startAccessingSecurityScopedResource()
             defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
+
             let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).zip")
             defer { try? FileManager.default.removeItem(at: tempFileURL) }
-            let data = try Data(contentsOf: sourceURL)
-            try data.write(to: tempFileURL)
+
+            // ⚡ COPY trực tiếp — không load vào RAM
+            try? FileManager.default.removeItem(at: tempFileURL)
+            try FileManager.default.copyItem(at: sourceURL, to: tempFileURL)
+
             let newTheme = PasscodeTheme(name: name)
             let themeFolder = newTheme.themeFolderURL
             try? FileManager.default.createDirectory(at: themeFolder, withIntermediateDirectories: true)
+
             let detectedSize = PasscodeThemeViewModel.detectSizeFromZIP(at: tempFileURL)
             do {
                 try FileManager.default.unzipItem(at: tempFileURL, to: themeFolder)
@@ -92,7 +94,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try await importTheme(from: sourceURL, name: name)
     }
 
-    // MARK: - detectSizeFromZIP (Y NGUYÊN)
+    // MARK: - detectSizeFromZIP (Y NGUYÊN — đã tối ưu sẵn 1 pass)
     nonisolated static private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
@@ -105,7 +107,8 @@ class PasscodeThemeViewModel: ObservableObject {
         } catch { return .unknown }
     }
 
-    // MARK: - extractImagesRecursively (Y NGUYÊN)
+    // MARK: - extractImagesRecursively ⚡ TỐI ƯU: MOVE thay vì COPY
+    // src luôn bị xoá cùng thư mục con ở bước cuối → move ≡ copy + delete. Output y hệt.
     nonisolated static private func extractImagesRecursively(themeFolder: URL) throws {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(atPath: themeFolder.path) else { return }
@@ -129,8 +132,13 @@ class PasscodeThemeViewModel: ObservableObject {
         for item in filesToMove {
             let destURL = themeFolder.appendingPathComponent(item.destName)
             try? fm.removeItem(at: destURL)
-            try? fm.copyItem(at: item.src, to: destURL)
+            // ⚡ MOVE = rename O(1) thay vì copy O(N)
+            if (try? fm.moveItem(at: item.src, to: destURL)) == nil {
+                try? fm.copyItem(at: item.src, to: destURL)
+            }
         }
+
+        // Xoá thư mục con (logic y nguyên)
         if let contents = try? fm.contentsOfDirectory(atPath: themeFolder.path) {
             for item in contents {
                 let fullURL = themeFolder.appendingPathComponent(item)
@@ -147,7 +155,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try? NSRegularExpression(pattern: #"(?:^[a-zA-Z]+-)?([0-9*#])"#, options: .caseInsensitive)
     }()
 
-    // MARK: - extractDigitStatic
+    // MARK: - extractDigitStatic (Y NGUYÊN)
     nonisolated static func extractDigitStatic(from filename: String) -> String? {
         let stem = (filename as NSString).deletingPathExtension
             .replacingOccurrences(of: "--white", with: "", options: .caseInsensitive)
@@ -169,7 +177,6 @@ class PasscodeThemeViewModel: ObservableObject {
         return nil
     }
 
-    // MARK: - extractVersionNumber (sort 8 → 9 → 10)
     nonisolated private static func extractVersionNumber(_ name: String) -> Int {
         if let last = name.split(separator: "-").last, let n = Int(last) { return n }
         return 0
@@ -322,45 +329,55 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Stage siêu nhanh (HARDLINK thay clone)
+    // MARK: - fastStage ⚡ TỐI ƯU: bỏ lock, pre-compute key 1 lần
     nonisolated private func fastStage(
         processedFiles: [(filename: String, imageData: Data)],
         stageDir: URL
     ) throws -> Int {
         let fm = FileManager.default
+        let n = processedFiles.count
+        guard n > 0 else { return 0 }
 
-        // Pass 1: mỗi digit ghi 1 file thật
-        let primaryLock = NSLock()
-        var primaryURLs: [String: URL] = [:]
-        var claimed = Set<String>()
+        // Pass 0: pre-compute key + xác định primary (KHÔNG lock)
+        var keys = [String](repeating: "", count: n)
+        var seen = Set<String>()
+        var primaryIndices: [Int] = []
+        primaryIndices.reserveCapacity(16)
+        for i in 0..<n {
+            let key = PasscodeThemeViewModel.extractDigitStatic(from: processedFiles[i].filename) ?? processedFiles[i].filename
+            keys[i] = key
+            if seen.insert(key).inserted {
+                primaryIndices.append(i)
+            }
+        }
+        var primaryURLByKey: [String: URL] = [:]
+        primaryURLByKey.reserveCapacity(primaryIndices.count)
+        for i in primaryIndices {
+            primaryURLByKey[keys[i]] = stageDir.appendingPathComponent(processedFiles[i].filename)
+        }
+        let primarySet = Set(primaryIndices)
+        var nonPrimaryIndices: [Int] = []
+        nonPrimaryIndices.reserveCapacity(n - primaryIndices.count)
+        for i in 0..<n where !primarySet.contains(i) {
+            nonPrimaryIndices.append(i)
+        }
 
-        DispatchQueue.concurrentPerform(iterations: processedFiles.count) { i in
+        // Pass 1: ghi primary (song song, không lock)
+        DispatchQueue.concurrentPerform(iterations: primaryIndices.count) { idx in
             autoreleasepool {
-                let (filename, data) = processedFiles[i]
-                let key = PasscodeThemeViewModel.extractDigitStatic(from: filename) ?? filename
-
-                primaryLock.lock()
-                let isPrimary = !claimed.contains(key)
-                if isPrimary {
-                    claimed.insert(key)
-                    primaryURLs[key] = stageDir.appendingPathComponent(filename)
-                }
-                primaryLock.unlock()
-
-                if isPrimary {
-                    try? data.write(to: stageDir.appendingPathComponent(filename))
+                let i = primaryIndices[idx]
+                if let url = primaryURLByKey[keys[i]] {
+                    try? processedFiles[i].imageData.write(to: url)
                 }
             }
         }
 
-        // Pass 2: HARDLINK cho biến thể (native FFI chỉ ĐỌC stage → an toàn)
-        let primaryNames = Set(primaryURLs.values.map { $0.lastPathComponent })
-        DispatchQueue.concurrentPerform(iterations: processedFiles.count) { i in
+        // Pass 2: hardlink (song song, không lock)
+        DispatchQueue.concurrentPerform(iterations: nonPrimaryIndices.count) { idx in
             autoreleasepool {
-                let (filename, _) = processedFiles[i]
-                if primaryNames.contains(filename) { return }
-                let key = PasscodeThemeViewModel.extractDigitStatic(from: filename) ?? filename
-                guard let src = primaryURLs[key] else { return }
+                let i = nonPrimaryIndices[idx]
+                let filename = processedFiles[i].filename
+                guard let src = primaryURLByKey[keys[i]] else { return }
                 let dest = stageDir.appendingPathComponent(filename)
                 do {
                     try fm.linkItem(at: src, to: dest)
@@ -371,10 +388,10 @@ class PasscodeThemeViewModel: ObservableObject {
         }
 
         fm.createFile(atPath: stageDir.appendingPathComponent("_big").path, contents: nil)
-        return (try? fm.contentsOfDirectory(atPath: stageDir.path).count) ?? (processedFiles.count + 1)
+        return (try? fm.contentsOfDirectory(atPath: stageDir.path).count) ?? (n + 1)
     }
 
-    // MARK: - Write 1 version + verify + retry
+    // MARK: - Write 1 version + verify + retry (Y NGUYÊN)
     nonisolated private func writeOneVersion(
         versionName: String,
         targetPath: String,
@@ -402,18 +419,13 @@ class PasscodeThemeViewModel: ObservableObject {
                         let current = counter.increment()
                         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmed.isEmpty else { return }
-                        let body = trimmed.lowercased().hasPrefix("write")
-                            ? trimmed
-                            : "write file \(trimmed)"
+                        let body = trimmed.lowercased().hasPrefix("write") ? trimmed : "write file \(trimmed)"
                         let msg = "  \(current)/\(totalPerVersion): \(body)"
                         DispatchQueue.main.async { onLogUpdate(msg) }
                     }
                 )
 
-                let ok = await verifyFileExists(
-                    pairingPath: pairPath,
-                    remotePath: "\(targetPath)/\(sampleFile)"
-                )
+                let ok = await verifyFileExists(pairingPath: pairPath, remotePath: "\(targetPath)/\(sampleFile)")
                 if ok { return }
 
                 onLogUpdate("  ⚠️ Attempt \(attempt) verify FAIL, retry...")
@@ -433,7 +445,7 @@ class PasscodeThemeViewModel: ObservableObject {
         )
     }
 
-    // MARK: - Apply Theme (dedup + sort 8 → 9 → 10)
+    // MARK: - Apply Theme (Y NGUYÊN)
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
@@ -449,12 +461,10 @@ class PasscodeThemeViewModel: ObservableObject {
         }
 
         let startTime = Date()
-
         let language = self.store.globalCustomPrefix
         let boldMode = self.store.globalBoldMode
         let telephony = self.store.globalTelephonyVersion
 
-        // 🎯 DEDUP + SORT: loại bỏ folder trùng (bug targetFolders), sắp xếp 8 → 9 → 10
         var seenVersions = Set<String>()
         let rawVersions = telephony.targetFolders
         let versions = rawVersions
@@ -470,7 +480,6 @@ class PasscodeThemeViewModel: ObservableObject {
         }
         onLogUpdate("  → Sẽ ghi \(totalVersions) folder: \(versions.joined(separator: " → "))")
 
-        // ⏱ Process
         let tProcess = Date()
         let processedFiles = try processThemeFiles(theme: theme, language: language, boldMode: boldMode)
         let processMs = Int(Date().timeIntervalSince(tProcess) * 1000)
@@ -488,14 +497,12 @@ class PasscodeThemeViewModel: ObservableObject {
         try FileManager.default.createDirectory(at: stageDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stageDir) }
 
-        // ⏱ Stage
         let tStage = Date()
         let totalPerVersion = try fastStage(processedFiles: processedFiles, stageDir: stageDir)
         let stageMs = Int(Date().timeIntervalSince(tStage) * 1000)
 
         onLogUpdate("[2/6] Matrix: \(totalPerVersion) file/version × \(totalVersions) = \(totalPerVersion * totalVersions) file (process \(processMs)ms, stage \(stageMs)ms)")
 
-        // ⏱ Tunnel
         onLogUpdate("[3/6] Dò tunnel...")
         let tTunnel = Date()
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
@@ -508,7 +515,6 @@ class PasscodeThemeViewModel: ObservableObject {
         let stagePath = stageDir.path
         let sampleFile = processedFiles.first!.0
 
-        // 🎯 TUẦN TỰ: 8 → 9 → 10
         let bq = BadQuery()
         var perVersionTimes: [(String, Int)] = []
         let tWrite = Date()
@@ -548,7 +554,7 @@ class PasscodeThemeViewModel: ObservableObject {
         onLogUpdate("[6/6] Reset Theme & Reboot để áp dụng")
     }
 
-    // MARK: - Reset
+    // MARK: - Reset (Y NGUYÊN)
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
