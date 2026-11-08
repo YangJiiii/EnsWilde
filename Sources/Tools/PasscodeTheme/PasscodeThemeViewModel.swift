@@ -14,7 +14,7 @@ class PasscodeThemeViewModel: ObservableObject {
 
     init(store: PasscodeThemeStore) { self.store = store }
 
-    // MARK: - Import (Y NGUYÊN 100%)
+    // MARK: - Import (Y NGUYÊN)
     func importTheme(from sourceURL: URL, name: String) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
@@ -24,7 +24,6 @@ class PasscodeThemeViewModel: ObservableObject {
             if activeTaskID == myID { activeTaskID = nil }
             isProcessing = false
         }
-
         let result = try await Task.detached(priority: .userInitiated) {
             () -> (PasscodeTheme, PasscodeTheme.DetectedSize) in
             let accessing = sourceURL.startAccessingSecurityScopedResource()
@@ -46,7 +45,6 @@ class PasscodeThemeViewModel: ObservableObject {
             try PasscodeThemeViewModel.extractImagesRecursively(themeFolder: themeFolder)
             return (newTheme, detectedSize)
         }.value
-
         var themeWithSize = result.0
         themeWithSize.detectedSize = result.1
         if result.1 == .big { themeWithSize.keySize = .big }
@@ -129,7 +127,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return nil
     }
 
-    // MARK: - processThemeFiles (Y NGUYÊN — parallel 10 ảnh + dedupe)
+    // MARK: - processThemeFiles (Y NGUYÊN — parallel resize 10 ảnh + dedupe)
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
         language: PasscodeTheme.PrefixLanguage,
@@ -257,7 +255,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Apply Theme (Y NGUYÊN + tối ưu tối đa)
+    // MARK: - Apply Theme (nhanh nhất trong số bản an toàn)
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
@@ -279,17 +277,14 @@ class PasscodeThemeViewModel: ObservableObject {
         let versions = telephony.targetFolders
         let totalVersions = versions.count
 
-        onLogUpdate("[1/6] Prepare")
-        onLogUpdate("  Language: \(language.displayName)")
-        onLogUpdate("  Bold: \(boldMode.rawValue)")
-        onLogUpdate("  Telephony: \(telephony.displayName)")
+        onLogUpdate("[1/6] Prepare: Lang=\(language.displayName), Bold=\(boldMode.rawValue), Ver=\(telephony.displayName)")
         if totalVersions > 1 {
-            onLogUpdate("  Note: Universal mode ghi \(totalVersions) folder, không phải loop")
+            onLogUpdate("  Universal mode: ghi \(totalVersions) folder (không phải loop)")
         }
 
         let processedFiles = try processThemeFiles(theme: theme, language: language, boldMode: boldMode)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
-        onLogUpdate("[2/6] Matrix: \(processedFiles.count) file x \(totalVersions) ver = \(processedFiles.count * totalVersions) file")
+        onLogUpdate("[2/6] Matrix: \(processedFiles.count) x \(totalVersions) = \(processedFiles.count * totalVersions) file")
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         guard FileManager.default.fileExists(atPath: pairingURL.path) else {
@@ -303,7 +298,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try FileManager.default.createDirectory(at: stageThemeDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stageThemeDir) }
 
-        // Stage parallel
+        // Stage song song
         let tStage = Date()
         DispatchQueue.concurrentPerform(iterations: processedFiles.count) { i in
             let (filename, data) = processedFiles[i]
@@ -311,99 +306,46 @@ class PasscodeThemeViewModel: ObservableObject {
         }
         try Data().write(to: stageThemeDir.appendingPathComponent("_big"))
         let stageMs = Int(Date().timeIntervalSince(tStage) * 1000)
-        onLogUpdate("[3/6] Stage: \(processedFiles.count) file trong \(stageMs)ms")
+        onLogUpdate("[3/6] Stage: \(processedFiles.count + 1) file trong \(stageMs)ms")
 
-        onLogUpdate("[4/6] Đang dò tunnel...")
+        onLogUpdate("[4/6] Dò tunnel...")
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN."])
         }
-        onLogUpdate("[4/6] Tunnel OK")
 
         let bq = BadQuery()
         let pairPath = pairingURL.path
         let stagePath = stageThemeDir.path
-
-        // Xoá cache trước cho tất cả version
-        for v in versions {
-            let tp = "/var/mobile/Library/Caches/\(v)"
-            if bq.grantAccess(atPath: tp).0 {
-                try? FileManager.default.removeItem(atPath: tp)
-            }
-            try? FileManager.default.createDirectory(atPath: tp, withIntermediateDirectories: true)
-        }
-
-        // Decide chunk count within each version
-        // Chia matrix thành N subdir, ghi song song N tunnel trong CÙNG 1 version
-        // Nếu tunnel support concurrent write → nhanh hơn N lần
-        // Nếu không → fallback sequential tự động
-        let chunkCount: Int
-        if processedFiles.count >= 500 && ProcessInfo.processInfo.activeProcessorCount >= 4 {
-            chunkCount = 3   // 3 tunnel song song / version
-        } else if processedFiles.count >= 150 {
-            chunkCount = 2
-        } else {
-            chunkCount = 1
-        }
-
-        onLogUpdate("[5/6] Bắt đầu ghi")
-        onLogUpdate("  Chunk strategy: \(chunkCount) tunnel song song / version")
-        onLogUpdate("  Versions: \(totalVersions) (\(versions.joined(separator: ", ")))")
-
-        // Pre-create chunk subdirs
-        var chunks: [URL] = []
-        if chunkCount > 1 {
-            for i in 0..<chunkCount {
-                let sub = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("_chunk_\(UUID().uuidString)_\(i)")
-                try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
-                chunks.append(sub)
-            }
-            // Copy files vào chunk (round-robin)
-            let files = try FileManager.default.contentsOfDirectory(atPath: stagePath)
-            for (i, f) in files.enumerated() {
-                let src = stageThemeDir.appendingPathComponent(f)
-                let dst = chunks[i % chunkCount].appendingPathComponent(f)
-                try? FileManager.default.copyItem(at: src, to: dst)
-            }
-        } else {
-            chunks = [stageThemeDir]
-        }
-
-        defer { for c in chunks where c.path != stagePath { try? FileManager.default.removeItem(at: c) } }
+        let fileCount = processedFiles.count
 
         let tWrite = Date()
+        for (idx, versionName) in versions.enumerated() {
+            let targetPath = "/var/mobile/Library/Caches/\(versionName)"
+            let tVer = Date()
+            onLogUpdate("[5/6] Version \(idx+1)/\(totalVersions): \(versionName)")
 
-        // Task group: (version × chunk) tasks
-        try await withThrowingTaskGroup(of: (String, Int).self) { group in
-            for v in versions {
-                let targetPath = "/var/mobile/Library/Caches/\(v)"
-                for (ci, chunk) in chunks.enumerated() {
-                    let chunkPath = chunk.path
-                    let label = chunkCount > 1 ? "\(v)[c\(ci+1)/\(chunks.count)]" : v
-                    group.addTask {
-                        let t0 = Date()
-                        try await self.writeDir(
-                            pairingPath: pairPath,
-                            srcDir: chunkPath,
-                            targetDir: targetPath,
-                            onLogUpdate: { _ in }
-                        )
-                        let ms = Int(Date().timeIntervalSince(t0) * 1000)
-                        return (label, ms)
-                    }
-                }
+            if bq.grantAccess(atPath: targetPath).0 {
+                try? FileManager.default.removeItem(atPath: targetPath)
             }
-            for try await (label, ms) in group {
-                onLogUpdate("  -> \(label): \(ms)ms")
-            }
+            try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
+
+            try await writeDir(
+                pairingPath: pairPath,
+                srcDir: stagePath,
+                targetDir: targetPath,
+                onLogUpdate: { _ in }
+            )
+            let ms = Int(Date().timeIntervalSince(tVer) * 1000)
+            let rate = ms > 0 ? (fileCount * 1000 / ms) : 0
+            onLogUpdate("  -> \(versionName): \(ms)ms (\(rate) file/s)")
         }
-
         let writeMs = Int(Date().timeIntervalSince(tWrite) * 1000)
+
         let total = Int(Date().timeIntervalSince(startTime))
         onLogUpdate("[6/6] Done")
-        onLogUpdate("  Total files: \(processedFiles.count * totalVersions)")
-        onLogUpdate("  Write time: \(writeMs)ms")
-        onLogUpdate("  Total time: \(total)s")
+        onLogUpdate("  Files: \(fileCount * totalVersions)")
+        onLogUpdate("  Write: \(writeMs)ms")
+        onLogUpdate("  Total: \(total)s")
         onLogUpdate("Reset Theme & Reboot để áp dụng")
     }
 
