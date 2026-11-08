@@ -13,11 +13,9 @@ struct PasscodeTheme: Identifiable, Codable {
     var name: String
     var isSelected: Bool
     var customPrefix: PrefixLanguage
-    var keySize: KeySize              // ← Stored, user chọn thủ công
+    var keySize: KeySize
     var telephonyVersion: TelephonyVersion
-    var detectedSize: DetectedSize    // ← Chỉ để hiển thị info, không dùng để tính
-
-    // MARK: - Enums
+    var detectedSize: DetectedSize
 
     enum BoldMode: String, Codable, CaseIterable {
         case regular = "Regular"
@@ -25,21 +23,15 @@ struct PasscodeTheme: Identifiable, Codable {
         case both = "Regular + Bold"
 
         var displayName: String { rawValue }
-
-        var suffixes: [String] {
-            switch self {
-            case .regular: return [""]
-            case .bold: return ["-bold"]
-            case .both: return ["", "-bold"]
-            }
-        }
     }
 
     enum PrefixLanguage: String, Codable, CaseIterable {
+        case universal = "all"   // ← MỚI: "All Languages (Universal)"
         case af = "af", ar = "ar", az = "az", bg = "bg", bn = "bn", ca = "ca", cs = "cs", da = "da", de = "de", el = "el", en = "en", es = "es", et = "et", eu = "eu", fa = "fa", fi = "fi", fil = "fil", fr = "fr", gl = "gl", he = "he", hi = "hi", hr = "hr", hu = "hu", hy = "hy", id = "id", `is` = "is", it = "it", ja = "ja", ka = "ka", kk = "kk", ko = "ko", lt = "lt", lv = "lv", mk = "mk", ml = "ml", mr = "mr", ms = "ms", nb = "nb", nl = "nl", nn = "nn", no = "no", pl = "pl", pt = "pt", ro = "ro", ru = "ru", sk = "sk", sl = "sl", sq = "sq", sr = "sr", sv = "sv", sw = "sw", ta = "ta", te = "te", th = "th", tr = "tr", uk = "uk", ur = "ur", vi = "vi", zh = "zh", other = "other"
 
         var displayName: String {
             switch self {
+            case .universal: return "All Languages (Universal)"
             case .af: return "Afrikaans"; case .ar: return "Arabic"; case .az: return "Azerbaijani"
             case .bg: return "Bulgarian"; case .bn: return "Bengali"; case .ca: return "Catalan"
             case .cs: return "Czech"; case .da: return "Danish"; case .de: return "German"
@@ -59,7 +51,7 @@ struct PasscodeTheme: Identifiable, Codable {
             case .sr: return "Serbian"; case .sv: return "Swedish"; case .sw: return "Swahili"
             case .ta: return "Tamil"; case .te: return "Telugu"; case .th: return "Thai"
             case .tr: return "Turkish"; case .uk: return "Ukrainian"; case .ur: return "Urdu"
-            case .vi: return "Vietnamese"; case .zh: return "Chinese"; case .other: return "Other"
+            case .vi: return "Vietnamese"; case .zh: return "Chinese"; case .other: return "Other / Fallback"
             }
         }
     }
@@ -67,7 +59,6 @@ struct PasscodeTheme: Identifiable, Codable {
     enum KeySize: String, Codable, CaseIterable {
         case small = "Small Keys"
         case big = "Big Keys"
-
         static let smallTargetSize: CGFloat = 202.0
         static let bigTargetSize: CGFloat = 287.0
         static let resizeThreshold: CGFloat = 0.01
@@ -83,21 +74,12 @@ struct PasscodeTheme: Identifiable, Codable {
         case unknown = 0, small = 1, big = 2
     }
 
-    // MARK: - Computed
-
     var themeFolderURL: URL {
-        URL.documentsDirectory
-            .appendingPathComponent("PasscodeThemes")
-            .appendingPathComponent(id.uuidString)
+        URL.documentsDirectory.appendingPathComponent("PasscodeThemes").appendingPathComponent(id.uuidString)
     }
 
-    // MARK: - Init
-
-    init(id: UUID = UUID(),
-         name: String,
-         customPrefix: PrefixLanguage = .en,
-         keySize: KeySize = .small,
-         telephonyVersion: TelephonyVersion = .telephony10,
+    init(id: UUID = UUID(), name: String, customPrefix: PrefixLanguage = .en,
+         keySize: KeySize = .small, telephonyVersion: TelephonyVersion = .telephony10,
          detectedSize: DetectedSize = .unknown) {
         self.id = id
         self.name = name
@@ -107,8 +89,6 @@ struct PasscodeTheme: Identifiable, Codable {
         self.telephonyVersion = telephonyVersion
         self.detectedSize = detectedSize
     }
-
-    // MARK: - Custom Decodable (backward compat với file JSON cũ thiếu keySize)
 
     private enum CodingKeys: String, CodingKey {
         case id, name, isSelected, customPrefix, keySize, telephonyVersion, detectedSize
@@ -124,8 +104,6 @@ struct PasscodeTheme: Identifiable, Codable {
         telephonyVersion = try c.decodeIfPresent(TelephonyVersion.self, forKey: .telephonyVersion) ?? .telephony10
         detectedSize     = try c.decodeIfPresent(DetectedSize.self, forKey: .detectedSize) ?? .unknown
     }
-
-    // MARK: - Helpers
 
     func getPreviewImage() -> UIImage? {
         let fm = FileManager.default
@@ -145,8 +123,6 @@ struct PasscodeTheme: Identifiable, Codable {
         }
     }
 }
-
-// MARK: - Store
 
 class PasscodeThemeStore: ObservableObject {
     @Published var themes: [PasscodeTheme] = []
@@ -198,13 +174,11 @@ class PasscodeThemeStore: ObservableObject {
             saveThemes()
         }
     }
-
     func deleteTheme(_ theme: PasscodeTheme) {
         themes.removeAll { $0.id == theme.id }
         saveThemes()
         try? FileManager.default.removeItem(at: theme.themeFolderURL)
     }
-
     func selectTheme(_ theme: PasscodeTheme) {
         for i in 0..<themes.count { themes[i].isSelected = false }
         if let idx = themes.firstIndex(where: { $0.id == theme.id }) {
@@ -212,6 +186,5 @@ class PasscodeThemeStore: ObservableObject {
         }
         saveThemes()
     }
-
     func getSelectedTheme() -> PasscodeTheme? { themes.first { $0.isSelected } }
 }
