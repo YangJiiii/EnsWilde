@@ -18,13 +18,24 @@ struct RemoteTheme: Identifiable {
     let authors: String
     let baseURL: String
     var id: String { url }
+
+    // ⚡ FIX: handle absolute URL + leading "/"
     var fullURL: URL? {
+        if url.hasPrefix("http://") || url.hasPrefix("https://") {
+            return URL(string: url)
+        }
         let clean = baseURL.hasSuffix("/") ? baseURL : baseURL + "/"
-        return URL(string: clean + url)
+        let relPath = url.hasPrefix("/") ? String(url.dropFirst()) : url
+        return URL(string: clean + relPath)
     }
+
     var previewURL: URL? {
+        if preview.hasPrefix("http://") || preview.hasPrefix("https://") {
+            return URL(string: preview)
+        }
         let clean = baseURL.hasSuffix("/") ? baseURL : baseURL + "/"
-        return URL(string: clean + preview)
+        let relPath = preview.hasPrefix("/") ? String(preview.dropFirst()) : preview
+        return URL(string: clean + relPath)
     }
 }
 
@@ -35,20 +46,26 @@ class ThemeStoreManager: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var downloadingThemes: Set<String> = []
+    @Published var downloadProgress: [String: Double] = [:]   // ⚡ NEW: progress %
     @Published var selectedRepository: ThemeRepository?
 
-    // 🎯 Repo mặc định — tên hiển thị CHÍNH XÁC
     private static let defaultRepoURL = "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde-Repository/main/themes.json"
     private static let defaultRepoName = "EnsWilde Repository"
-
-    // 🔄 v4: reset cache hoàn toàn để xoá tên cũ
     private let savedReposKey = "enswilde.themeStoreRepos.v4"
 
+    // ⚡ Session cấu hình cho download nhanh + timeout hợp lý
+    private static let downloadSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 300      // 5 phút cho file lớn
+        config.waitsForConnectivity = true
+        config.httpMaximumConnectionsPerHost = 4
+        return URLSession(configuration: config)
+    }()
+
     init() {
-        // 🧹 Xoá sạch cache cũ (v2 + v3) khi upgrade lên v4
         UserDefaults.standard.removeObject(forKey: "enswilde.themeStoreRepos.v2")
         UserDefaults.standard.removeObject(forKey: "enswilde.themeStoreRepos.v3")
-
         loadSavedRepos()
         if needsReset() {
             Task { await bootstrapDefault() }
@@ -57,18 +74,12 @@ class ThemeStoreManager: ObservableObject {
 
     private func needsReset() -> Bool {
         if repositories.isEmpty { return true }
-
-        // Không có repo mặc định → cần reset
         let hasDefault = repositories.contains { $0.url == Self.defaultRepoURL }
         if !hasDefault { return true }
-
-        // Tên repo mặc định bị sai → cần reset
         if let defRepo = repositories.first(where: { $0.url == Self.defaultRepoURL }),
            defRepo.name != Self.defaultRepoName {
             return true
         }
-
-        // Còn repo legacy → cần reset
         let hasLegacy = repositories.contains { repo in
             let u = repo.url.lowercased()
             let n = repo.name.lowercased()
@@ -101,17 +112,14 @@ class ThemeStoreManager: ObservableObject {
         for r in repositories {
             let u = r.url.lowercased()
             let n = r.name.lowercased()
-            // Bỏ legacy
             if u.contains("nugget") || u.contains("serstars") ||
                u.contains("yangjiii") || u.contains("yangjii") ||
                n.contains("nugget") || n.contains("yangjii") ||
                n.contains("ls nguyen") || n.contains("lsnguyen") { continue }
-            // Bỏ nếu trùng URL mặc định (sẽ thêm lại bên dưới với tên đúng)
             if r.url == Self.defaultRepoURL { continue }
             kept.append(r)
         }
 
-        // 🎯 Repo mặc định — LUÔN tên "EnsWilde Repository"
         let defaultRepo = ThemeRepository(
             url: Self.defaultRepoURL,
             name: Self.defaultRepoName,
@@ -145,8 +153,6 @@ class ThemeStoreManager: ObservableObject {
         throw ThemeStoreError.invalidJSON
     }
 
-    // ⚡ TỐI ƯU: fetch icon SONG SONG qua TaskGroup (thay vì await tuần tự trong loop)
-    // Logic y hệt: cùng entries, cùng thứ tự, cùng dedupe, cùng kết quả.
     private func flattenIndex(urlString: String, parentIndex: String) async throws {
         guard let url = URL(string: urlString) else { throw ThemeStoreError.invalidURL }
         let (data, _) = try await URLSession.shared.data(from: url)
@@ -154,7 +160,6 @@ class ThemeStoreManager: ObservableObject {
             throw ThemeStoreError.invalidJSON
         }
 
-        // Bước 1: parse entries (đồng bộ, không network)
         struct Entry { let name: String; let base: String; let themes: String }
         let entries: [Entry] = array.compactMap { dict in
             guard let name = dict["name"] as? String,
@@ -163,11 +168,7 @@ class ThemeStoreManager: ObservableObject {
             return Entry(name: name, base: base, themes: themes)
         }
 
-        // Bước 2: fetch icon SONG SONG — N repo → 1 RTT thay vì N RTT
-        let icons: [String?] = await withTaskGroup(
-            of: (Int, String?).self,
-            returning: [String?].self
-        ) { group in
+        let icons: [String?] = await withTaskGroup(of: (Int, String?).self, returning: [String?].self) { group in
             for (idx, e) in entries.enumerated() {
                 group.addTask {
                     let icon = await Self.fetchIconFromSubRepo(themesURL: e.themes, baseURL: e.base)
@@ -179,11 +180,9 @@ class ThemeStoreManager: ObservableObject {
             return results
         }
 
-        // Bước 3: build + append (giữ nguyên thứ tự, dedupe y hệt bản gốc)
         var newRepos: [ThemeRepository] = []
         newRepos.reserveCapacity(entries.count)
         for (idx, e) in entries.enumerated() {
-            // 🎯 Nếu URL trùng repo mặc định → force tên
             let finalName = (e.themes == Self.defaultRepoURL) ? Self.defaultRepoName : e.name
             newRepos.append(ThemeRepository(url: e.themes, name: finalName, iconURL: icons[idx], parentIndex: parentIndex))
         }
@@ -195,7 +194,6 @@ class ThemeStoreManager: ObservableObject {
         saveRepos()
     }
 
-    // ⚡ nonisolated + static → chạy off-main song song thật (không bị MainActor serialize)
     private nonisolated static func fetchIconFromSubRepo(themesURL: String, baseURL: String) async -> String? {
         guard let url = URL(string: themesURL) else { return nil }
         guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
@@ -208,7 +206,6 @@ class ThemeStoreManager: ObservableObject {
     }
 
     private func parseDirectRepo(url: URL, data: Data) throws -> ThemeRepository {
-        // 🎯 Force tên nếu URL là repo mặc định
         if url.absoluteString == Self.defaultRepoURL {
             return ThemeRepository(
                 url: Self.defaultRepoURL,
@@ -284,34 +281,98 @@ class ThemeStoreManager: ObservableObject {
         }
     }
 
+    // MARK: - Download + Import ⚡ Retry + recursive extract
     func downloadAndImportTheme(_ theme: RemoteTheme, themeStore: PasscodeThemeStore) async throws {
         guard let downloadURL = theme.fullURL else { throw ThemeStoreError.invalidURL }
         downloadingThemes.insert(theme.id)
-        defer { downloadingThemes.remove(theme.id) }
-        let (tempURL, _) = try await URLSession.shared.download(from: downloadURL)
-        let permanentURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("passthm")
-        try FileManager.default.copyItem(at: tempURL, to: permanentURL)
-        try await importThemeDirectly(from: permanentURL, name: theme.name, store: themeStore)
-        try? FileManager.default.removeItem(at: permanentURL)
+        downloadProgress[theme.id] = 0
+        defer {
+            downloadingThemes.remove(theme.id)
+            downloadProgress.removeValue(forKey: theme.id)
+        }
+
+        // Download với retry 3 lần
+        var lastError: Error?
+        var downloadedURL: URL?
+        for attempt in 1...3 {
+            do {
+                let (url, response) = try await Self.downloadSession.download(from: downloadURL)
+
+                // ⚡ Validate: phải là file thật, không phải HTML error page
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    throw NSError(domain: "ThemeStore", code: http.statusCode,
+                                  userInfo: [NSLocalizedDescriptionKey: "Server trả HTTP \(http.statusCode)"])
+                }
+                let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+                if size < 1024 {
+                    throw NSError(domain: "ThemeStore", code: -1,
+                                  userInfo: [NSLocalizedDescriptionKey: "File tải về quá nhỏ (\(size) bytes) — có thể là lỗi server."])
+                }
+
+                downloadedURL = url
+                break
+            } catch {
+                lastError = error
+                if attempt < 3 {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+        }
+
+        guard let srcURL = downloadedURL else {
+            throw lastError ?? NSError(domain: "ThemeStore", code: -2,
+                                       userInfo: [NSLocalizedDescriptionKey: "Download thất bại sau 3 lần."])
+        }
+
+        try await importThemeDirectly(from: srcURL, name: theme.name, store: themeStore)
     }
 
+    // ⚡ FIX: dùng extractImagesRecursively (handle mọi cấu trúc theme)
     private func importThemeDirectly(from sourceURL: URL, name: String, store: PasscodeThemeStore) async throws {
         let newTheme = PasscodeTheme(name: name)
         let folder = newTheme.themeFolderURL
-        if !FileManager.default.fileExists(atPath: folder.path) {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        }
+
+        // Xoá nếu có folder cũ trùng UUID (rare, nhưng an toàn)
+        try? FileManager.default.removeItem(at: folder)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
         let detected = detectSizeFromZIP(at: sourceURL)
-        do { try FileManager.default.unzipItem(at: sourceURL, to: folder) }
-        catch { try? FileManager.default.removeItem(at: folder); throw ThemeStoreError.unzipFailed }
-        try extractImagesFromTelephonySubfolder(themeFolder: folder)
-        var t = newTheme; t.detectedSize = detected
+
+        // Unzip
+        do {
+            try FileManager.default.unzipItem(at: sourceURL, to: folder)
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw ThemeStoreError.unzipFailed
+        }
+
+        // ⚡ Recursive extract — handle mọi cấu trúc (file ở root, folder lồng, Telephony*)
+        do {
+            try PasscodeThemeViewModel.extractImagesRecursively(themeFolder: folder)
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw ThemeStoreError.unzipFailed
+        }
+
+        // Validate: phải có ít nhất 1 ảnh
+        let hasImages = (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?
+            .contains { f in
+                let ext = (f as NSString).pathExtension.lowercased()
+                return ext == "png" || ext == "jpg" || ext == "jpeg"
+            } ?? false
+        guard hasImages else {
+            try? FileManager.default.removeItem(at: folder)
+            throw NSError(domain: "ThemeStore", code: -3,
+                          userInfo: [NSLocalizedDescriptionKey: "Theme không có ảnh nào sau khi giải nén."])
+        }
+
+        var t = newTheme
+        t.detectedSize = detected
+        if detected == .big { t.keySize = .big }
         store.addTheme(t)
     }
 
-    // ⚡ TỐI ƯU: gộp 2 pass → 1 pass
-    // Logic y hệt bản gốc: "_small" luôn thắng "_big" nếu cả hai cùng tồn tại
-    // (bản gốc: vòng 1 tìm small return sớm; nếu không có mới sang vòng 2 tìm big)
+    // ⚡ Gộp 1 pass
     private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
@@ -324,6 +385,8 @@ class ThemeStoreManager: ObservableObject {
         } catch { return .unknown }
     }
 
+    // Giữ nguyên để tránh break code khác (deprecated)
+    @available(*, deprecated, message: "Dùng PasscodeThemeViewModel.extractImagesRecursively")
     private func extractImagesFromTelephonySubfolder(themeFolder: URL) throws {
         let fm = FileManager.default
         guard let c = try? fm.contentsOfDirectory(atPath: themeFolder.path) else { return }
