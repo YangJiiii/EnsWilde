@@ -23,16 +23,16 @@ class PasscodeThemeViewModel: ObservableObject {
     private var activeTaskID: UUID?
     private let store: PasscodeThemeStore
 
-    /// `true` = verify sample file sau khi write version cuối.
-    /// `false` = tin FFI success (nhanh hơn ~400ms, rủi ro silent fail).
+    /// `true` = verify sample file sau khi write version CUỐI.
+    /// `false` = tin FFI success (nhanh hơn ~400ms, rủi ro silent fail cực thấp).
     var verifyAfterWrite: Bool = true
 
-    /// Số ms chờ trước khi reboot. Bản gốc 800ms, mặc định mới 400ms.
+    /// Số ms chờ trước khi reboot. Bản gốc 800ms, mặc định Ferrari 400ms.
     var rebootDelayMs: Int = 400
 
     init(store: PasscodeThemeStore) { self.store = store }
 
-    // MARK: - Loại file
+    // MARK: - Loại file passcode theme
     nonisolated static func isSupportedPasscodeThemeFile(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         return ["zip", "passthm", "3105pass"].contains(ext)
@@ -47,7 +47,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Import
+    // MARK: - Import ⚡ copyItem trực tiếp
     func importTheme(from sourceURL: URL, name: String) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
@@ -67,7 +67,8 @@ class PasscodeThemeViewModel: ObservableObject {
             let accessing = sourceURL.startAccessingSecurityScopedResource()
             defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
 
-            let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).zip")
+            let tempFileURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(UUID().uuidString).zip")
             defer { try? FileManager.default.removeItem(at: tempFileURL) }
 
             try? FileManager.default.removeItem(at: tempFileURL)
@@ -97,7 +98,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try await importTheme(from: sourceURL, name: name)
     }
 
-    // MARK: - detectSizeFromZIP
+    // MARK: - detectSizeFromZIP (Y NGUYÊN)
     nonisolated static private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
@@ -110,8 +111,8 @@ class PasscodeThemeViewModel: ObservableObject {
         } catch { return .unknown }
     }
 
-    // MARK: - extractImagesRecursively
-    nonisolated static private func extractImagesRecursively(themeFolder: URL) throws {
+    // MARK: - extractImagesRecursively ⚡ PUBLIC (ThemeStoreModel dùng) + MOVE
+    nonisolated static func extractImagesRecursively(themeFolder: URL) throws {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(atPath: themeFolder.path) else { return }
         var movedDigits = Set<String>()
@@ -181,9 +182,9 @@ class PasscodeThemeViewModel: ObservableObject {
         return 0
     }
 
-    // MARK: - processThemeFiles ⚡ TRẢ VỀ sourceURL, KHÔNG đọc Data vào RAM
-    /// Trả về danh sách (filename, sourceURL, digit, needsResize).
-    /// Stage sẽ hardlink từ sourceURL nếu không cần resize, hoặc decode+resize+write nếu cần.
+    // MARK: - processThemeFiles ⚡ TRẢ URL thay Data — KHÔNG đọc bytes vào RAM
+    /// Trả về (filename, sourceURL, digit, needsResize).
+    /// fastStage sẽ hardlink sourceURL nếu không resize, hoặc decode+resize nếu cần.
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
         language: PasscodeTheme.PrefixLanguage,
@@ -267,7 +268,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return processedFiles
     }
 
-    // MARK: - resizeImage (static — gọi từ background thread)
+    // MARK: - resizeImage (static — gọi từ background)
     nonisolated static private func resizeImage(
         _ image: UIImage,
         for keySize: PasscodeTheme.KeySize,
@@ -289,7 +290,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetPixelSize)) }
     }
 
-    // MARK: - writeDir FFI
+    // MARK: - writeDir FFI (Y NGUYÊN)
     nonisolated private func writeDir(
         pairingPath: String,
         srcDir: String,
@@ -320,7 +321,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - verifyFileExists FFI
+    // MARK: - verifyFileExists FFI (Y NGUYÊN)
     nonisolated private func verifyFileExists(pairingPath: String, remotePath: String) async -> Bool {
         await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
             DispatchQueue.global(qos: .utility).async {
@@ -339,7 +340,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - fastStage ⚡ HARDLINK từ source, không đọc Data vào RAM
+    // MARK: - fastStage ⚡ HARDLINK từ source (không đọc Data vào RAM)
     nonisolated private func fastStage(
         processedFiles: [(filename: String, sourceURL: URL, digit: String, needsResize: Bool)],
         theme: PasscodeTheme,
@@ -405,7 +406,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return n + 1
     }
 
-    // MARK: - writeOneVersion — verify CHỈ version cuối, batch log 200
+    // MARK: - writeOneVersion ⚡ verify CHỈ version cuối + batch log 200
     nonisolated private func writeOneVersion(
         versionName: String,
         targetPath: String,
@@ -432,6 +433,7 @@ class PasscodeThemeViewModel: ObservableObject {
                     targetDir: targetPath,
                     onLogUpdate: { line in
                         let current = counter.increment()
+                        // Batch: chỉ log mỗi 200 file + file cuối
                         guard current % 200 == 0 || current == totalPerVersion else { return }
                         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmed.isEmpty else { return }
@@ -463,7 +465,7 @@ class PasscodeThemeViewModel: ObservableObject {
         )
     }
 
-    // MARK: - Apply Theme
+    // MARK: - Apply Theme ⚡ Tunnel song song + verify cuối
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
@@ -493,6 +495,9 @@ class PasscodeThemeViewModel: ObservableObject {
         let totalVersions = versions.count
 
         onLogUpdate("[1/6] Prepare: Lang=\(language.displayName), Bold=\(boldMode.rawValue), Ver=\(telephony.displayName)")
+        if rawVersions.count != versions.count {
+            onLogUpdate("  ⚠️ targetFolders có phần tử trùng: \(rawVersions) → đã lọc còn \(versions)")
+        }
         onLogUpdate("  → Sẽ ghi \(totalVersions) folder: \(versions.joined(separator: " → "))")
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
@@ -503,7 +508,7 @@ class PasscodeThemeViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
         }
 
-        // Tunnel detect song song với process + stage
+        // 🚀 Tunnel detect SONG SONG với process + stage
         onLogUpdate("[3/6] Dò tunnel (song song với process)...")
         let logCb = onLogUpdate
         let tunnelTask = Task.detached(priority: .userInitiated) {
@@ -516,7 +521,8 @@ class PasscodeThemeViewModel: ObservableObject {
         let processMs = Int(Date().timeIntervalSince(tProcess) * 1000)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
 
-        let stageDir = FileManager.default.temporaryDirectory.appendingPathComponent("airlift_passthm_\(UUID().uuidString)")
+        let stageDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("airlift_passthm_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: stageDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stageDir) }
 
@@ -583,7 +589,7 @@ class PasscodeThemeViewModel: ObservableObject {
         onLogUpdate("[6/6] Reset Theme & Reboot để áp dụng")
     }
 
-    // MARK: - Reset
+    // MARK: - Reset ⚡ sleep 400ms
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
