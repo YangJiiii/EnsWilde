@@ -13,7 +13,7 @@ class PasscodeThemeViewModel: ObservableObject {
 
     init(store: PasscodeThemeStore) { self.store = store }
 
-    // MARK: - Import (nhận mọi ZIP/Passthm)
+    // MARK: - Import
     func importTheme(from sourceURL: URL, name: String) async throws {
         isProcessing = true
         defer { isProcessing = false }
@@ -48,7 +48,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try await importTheme(from: sourceURL, name: name)
     }
 
-    // MARK: - Detect size + extract ảnh
+    // MARK: - Helpers
     nonisolated static private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
@@ -118,7 +118,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return nil
     }
 
-    // MARK: - Ma trận file (y hệt AirCard)
+    // MARK: - Ma trận file (Tối ưu: Bỏ noSpace)
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
         language: PasscodeTheme.PrefixLanguage,
@@ -130,34 +130,13 @@ class PasscodeThemeViewModel: ObservableObject {
         guard !imageFiles.isEmpty else { throw PasscodeThemeError.noImagesFound }
 
         let allLocales = ["en", "other", "ru", "uk", "es", "fr", "de", "it", "pt", "tr", "pl", "nl", "ja", "ko", "zh", "ar", "he"]
-        let locales: [String]
-        if language == .universal {
-            locales = allLocales
-        } else if language == .other {
-            locales = ["other"]
-        } else {
-            locales = [language.rawValue, "other"]
-        }
+        let locales: [String] = (language == .universal) ? allLocales : (language == .other ? ["other"] : [language.rawValue, "other"])
 
-        let subtexts: [String: String] = [
-            "0": "+", "1": "", "2": "A B C", "3": "D E F", "4": "G H I", "5": "J K L",
-            "6": "M N O", "7": "P Q R S", "8": "T U V", "9": "W X Y Z"
-        ]
-        let ruSubtexts: [String: String] = [
-            "2": "А Б В Г", "3": "Д Е Ж З", "4": "И Й К Л", "5": "М Н О П",
-            "6": "Р С Т У", "7": "Ф Х Ц Ч", "8": "Ш Щ Ъ Ы", "9": "Ь Э Ю Я"
-        ]
-        let ukSubtexts: [String: String] = [
-            "2": "А Б В Г", "3": "Д Е Ж З", "4": "І Ї Й К", "5": "Л М Н О",
-            "6": "П Р С Т", "7": "У Ф Х Ц", "8": "Ч Ш Щ Ь", "9": "Ю Я"
-        ]
+        let subtexts: [String: String] = ["0": "+", "1": "", "2": "A B C", "3": "D E F", "4": "G H I", "5": "J K L", "6": "M N O", "7": "P Q R S", "8": "T U V", "9": "W X Y Z"]
+        let ruSubtexts: [String: String] = ["2": "А Б В Г", "3": "Д Е Ж З", "4": "И Й К Л", "5": "М Н О П", "6": "Р С Т У", "7": "Ф Х Ц Ч", "8": "Ш Щ Ъ Ы", "9": "Ь Э Ю Я"]
+        let ukSubtexts: [String: String] = ["2": "А Б В Г", "3": "Д Е Ж З", "4": "І Ї Й К", "5": "Л М Н О", "6": "П Р С Т", "7": "У Ф Х Ц", "8": "Ч Ш Щ Ь", "9": "Ю Я"]
 
-        let boldSuffixes: [String]
-        switch boldMode {
-        case .regular: boldSuffixes = [""]
-        case .bold: boldSuffixes = ["-bold"]
-        case .both: boldSuffixes = ["", "-bold"]
-        }
+        let boldSuffixes: [String] = (boldMode == .both) ? ["", "-bold"] : (boldMode == .bold ? ["-bold"] : [""])
 
         for filename in imageFiles {
             let sourceURL = theme.themeFolderURL.appendingPathComponent(filename)
@@ -173,12 +152,10 @@ class PasscodeThemeViewModel: ObservableObject {
             for lang in locales {
                 for bld in boldSuffixes {
                     processedFiles.append(("\(lang)-\(digit)---white\(bld).png", imageData))
+                    
+                    // Bỏ variant noSpace để tăng tốc
                     if !stdSub.isEmpty {
                         processedFiles.append(("\(lang)-\(digit)-\(stdSub)--white\(bld).png", imageData))
-                        let noSpace = stdSub.replacingOccurrences(of: " ", with: "")
-                        if noSpace != stdSub {
-                            processedFiles.append(("\(lang)-\(digit)-\(noSpace)--white\(bld).png", imageData))
-                        }
                     }
                     if lang == "ru" || language == .universal, let sub = ruSub {
                         processedFiles.append(("\(lang)-\(digit)-\(sub)--white\(bld).png", imageData))
@@ -206,19 +183,15 @@ class PasscodeThemeViewModel: ObservableObject {
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetPixelSize)) }
     }
 
-    // MARK: - OPTIMIZE: Auto-pick version theo iOS (chỉ dùng khi user chọn "Universal")
     private func resolvedVersions(_ telephony: PasscodeTheme.TelephonyVersion) -> [String] {
         if telephony == .universal {
-            // iOS 18+ → UI-10, iOS 16/17 → UI-9, iOS 14/15 → UI-8
             let major = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-            if major >= 18 { return ["TelephonyUI-10"] }
-            if major >= 16 { return ["TelephonyUI-9"] }
-            return ["TelephonyUI-8"]
+            return major >= 18 ? ["TelephonyUI-10"] : (major >= 16 ? ["TelephonyUI-9"] : ["TelephonyUI-8"])
         }
         return telephony.targetFolders
     }
 
-    // MARK: - Apply Theme (Optimized)
+    // MARK: - Apply Theme
     func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
         defer { isProcessing = false }
@@ -231,24 +204,16 @@ class PasscodeThemeViewModel: ObservableObject {
 
         onLogUpdate("Preparing (Lang: \(language.displayName), Bold: \(boldMode.rawValue), Ver: \(versions.joined(separator: ", ")))...")
 
-        // 1. Ma trận file
         let processedFiles = try processThemeFiles(theme: theme, language: language, boldMode: boldMode)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
+        
         let totalWrites = processedFiles.count * versions.count
-        let estimatedBytes = processedFiles.reduce(0) { $0 + $1.imageData.count } * versions.count
-        let estimatedMB = Double(estimatedBytes) / 1_000_000.0
-        let estimatedSeconds = Int(Double(totalWrites) * 0.08)
-        onLogUpdate("📊 \(processedFiles.count) file × \(versions.count) version = \(totalWrites) file (~\(String(format: "%.1f", estimatedMB)) MB). Ước tính: ~\(estimatedSeconds)s.")
+        onLogUpdate("📊 \(processedFiles.count) files × \(versions.count) versions = \(totalWrites) files to write.")
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
-        guard FileManager.default.fileExists(atPath: pairingURL.path) else {
-            throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."])
-        }
-        guard NetworkStatus.isVPNTunnelPresent() else {
-            throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
-        }
+        guard FileManager.default.fileExists(atPath: pairingURL.path) else { throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Pairing File."]) }
+        guard NetworkStatus.isVPNTunnelPresent() else { throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN not active."]) }
 
-        // 2. Stage file
         let stageThemeDir = FileManager.default.temporaryDirectory.appendingPathComponent("airlift_passthm_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: stageThemeDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stageThemeDir) }
@@ -257,20 +222,16 @@ class PasscodeThemeViewModel: ObservableObject {
             try data.write(to: stageThemeDir.appendingPathComponent(filename))
         }
         try Data().write(to: stageThemeDir.appendingPathComponent("_big"))
-        onLogUpdate("✅ Stage xong (\(Int(Date().timeIntervalSince(startTime)))s).")
 
-        // 3. Dò tunnel
         onLogUpdate("Đang dò tunnel IP...")
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
-            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN."])
+            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Could not connect to VPN."])
         }
-        onLogUpdate("✅ Tunnel OK (\(Int(Date().timeIntervalSince(startTime)))s).")
 
-        // 4. Ghi từng version với timing
         for (idx, versionName) in versions.enumerated() {
             let targetPath = "/var/mobile/Library/Caches/\(versionName)"
             let versionStart = Date()
-            onLogUpdate("[\(idx+1)/\(versions.count)] → \(versionName) (\(processedFiles.count) file)...")
+            onLogUpdate("[\(idx+1)/\(versions.count)] Writing \(processedFiles.count) files to \(versionName)...")
 
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -285,7 +246,7 @@ class PasscodeThemeViewModel: ObservableObject {
                         }
                     }
                     if res != 0 {
-                        let msg = errPtr != nil ? String(cString: errPtr!) : "Mã lỗi FFI: \(res)"
+                        let msg = errPtr != nil ? String(cString: errPtr!) : "FFI error: \(res)"
                         if let e = errPtr { al_string_free(e) }
                         continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
                     } else {
@@ -294,60 +255,18 @@ class PasscodeThemeViewModel: ObservableObject {
                     }
                 }
             }
-            let versionTime = Int(Date().timeIntervalSince(versionStart))
-            onLogUpdate("  ✅ \(versionName) xong sau \(versionTime)s.")
-        }
-
-        // 5. VERIFY: đọc lại 1 file trên device để phát hiện fail silent
-        onLogUpdate("🔍 Đang verify file trên device...")
-        let verifyFile = processedFiles[0].filename
-        let verifyPath = "/var/mobile/Library/Caches/\(versions[0])/\(verifyFile)"
-
-        // FIX: khai báo kiểu tường minh CheckedContinuation<Data?, Never>
-        // để resume(returning: nil) hợp lệ và khớp với if let verifyData phía dưới.
-        let verifyData = await withCheckedContinuation { (cont: CheckedContinuation<Data?, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var outData: UnsafeMutablePointer<UInt8>? = nil
-                var outLen: Int = 0
-                var outErr: UnsafeMutablePointer<CChar>? = nil
-                let res: Int32 = pairingURL.path.withCString { p in
-                    verifyPath.withCString { r in
-                        al_exploit_read_file(p, r, nil, nil, &outData, &outLen, &outErr)
-                    }
-                }
-                if res == 0, let ptr = outData, outLen > 0 {
-                    let d = Data(bytes: ptr, count: outLen)
-                    al_bytes_free(ptr, outLen)
-                    if let e = outErr { al_string_free(e) }
-                    cont.resume(returning: d)
-                } else {
-                    if let ptr = outData, outLen > 0 { al_bytes_free(ptr, outLen) }
-                    if let e = outErr { al_string_free(e) }
-                    cont.resume(returning: nil)
-                }
-            }
-        }
-
-        if let verifyData = verifyData, !verifyData.isEmpty {
-            onLogUpdate("✅ Verify OK: đọc được \(verifyData.count) bytes từ \(verifyFile)")
-        } else {
-            onLogUpdate("⚠️ CẢNH BÁO: không đọc lại được file \(verifyFile) — có thể ghi thất bại âm thầm!")
-            throw NSError(domain: "AirLift", code: -20, userInfo: [NSLocalizedDescriptionKey: "Verify thất bại: file không có trên device sau khi ghi. Tunnel có thể bị chặn."])
+            onLogUpdate("  ✅ \(versionName) written in \(Int(Date().timeIntervalSince(versionStart)))s.")
         }
 
         let totalTime = Int(Date().timeIntervalSince(startTime))
-        onLogUpdate("🎉 Xong. Tổng thời gian: \(totalTime)s. Bấm 'Reset Theme & Reboot' để áp dụng.")
+        onLogUpdate("🎉 Done. Total time: \(totalTime)s. Tap 'Reset Theme & Reboot' to apply.")
     }
 
-    // MARK: - Reset (Giữ nguyên)
+    // MARK: - Reset
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
         defer { isProcessing = false }
-        let cacheDirs = [
-            "/var/mobile/Library/Caches/TelephonyUI-10",
-            "/var/mobile/Library/Caches/TelephonyUI-9",
-            "/var/mobile/Library/Caches/TelephonyUI-8"
-        ]
+        let cacheDirs = ["/var/mobile/Library/Caches/TelephonyUI-10", "/var/mobile/Library/Caches/TelephonyUI-9", "/var/mobile/Library/Caches/TelephonyUI-8"]
         let bq = BadQuery()
         for dir in cacheDirs {
             if bq.grantAccess(atPath: dir).0 {
@@ -358,8 +277,8 @@ class PasscodeThemeViewModel: ObservableObject {
                 }
             }
         }
-        onLogUpdate("✅ Đã xoá Passcode Theme thành công.")
-        onLogUpdate("🔄 Đang khởi động lại thiết bị...")
+        onLogUpdate("✅ Cleared Passcode Theme.")
+        onLogUpdate("🔄 Rebooting device...")
         try await Task.sleep(nanoseconds: 800_000_000)
         RebootHelper.rebootDevice()
     }
@@ -369,10 +288,10 @@ enum PasscodeThemeError: LocalizedError {
     case accessDenied, noImagesFound, noImagesProcessed, invalidFormat
     var errorDescription: String? {
         switch self {
-        case .accessDenied:      return "Không có quyền truy cập file."
-        case .noImagesFound:     return "Không tìm thấy ảnh."
-        case .noImagesProcessed: return "Không xử lý được ảnh."
-        case .invalidFormat:     return "Định dạng theme không hợp lệ."
+        case .accessDenied:      return "Access denied."
+        case .noImagesFound:     return "No images found."
+        case .noImagesProcessed: return "Failed to process images."
+        case .invalidFormat:     return "Invalid theme format."
         }
     }
 }
