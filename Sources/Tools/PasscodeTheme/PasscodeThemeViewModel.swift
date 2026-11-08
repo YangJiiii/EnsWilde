@@ -128,18 +128,21 @@ class PasscodeThemeViewModel: ObservableObject {
         return telephony.targetFolders
     }
 
-    // MARK: - TỐI ƯU CỰC ĐẠI: Hardware Resize + Hard Link + Parallel Write
-
-    /// Downsample ảnh bằng ImageIO (nhanh gấp 10 lần UIGraphicsImageRenderer)
+    // MARK: - Encode ảnh (ImageIO - nhanh gấp 10x)
     nonisolated private func fastResizeAndEncode(at url: URL, to targetSize: PasscodeTheme.KeySize, detected: PasscodeTheme.DetectedSize) -> Data? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         
-        // Nếu không cần resize, chỉ đọc data
-        if detected == .unknown || (detected == .small && targetSize == .small) || (detected == .big && targetSize == .big) {
+        let targetPx = (targetSize == .big) ? 287 : 202
+        let maxPixelSize = CGFloat(targetPx)
+        
+        // Kiểm tra kích thước gốc - nếu đã đúng thì dùng luôn, chưa đúng thì resize
+        if let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+           let w = props[kCGImagePropertyPixelWidth as String] as? Int,
+           let h = props[kCGImagePropertyPixelHeight as String] as? Int,
+           w == targetPx && h == targetPx && detected != .unknown {
             return try? Data(contentsOf: url)
         }
         
-        let maxPixelSize: CGFloat = (targetSize == .big) ? 287.0 : 202.0
         let options = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: true,
@@ -147,7 +150,9 @@ class PasscodeThemeViewModel: ObservableObject {
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
         ] as CFDictionary
         
-        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
+            return try? Data(contentsOf: url)
+        }
         
         let mutableData = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(mutableData, UTType.png.identifier as CFString, 1, nil) else { return nil }
@@ -156,13 +161,11 @@ class PasscodeThemeViewModel: ObservableObject {
         return mutableData as Data
     }
 
-    /// Stage files: Ghi 1 lần data gốc, sau đó hard link cho các tên khác (cực nhanh).
+    // MARK: - Stage (Hard Link + Parallel)
     nonisolated private func stageFiles(theme: PasscodeTheme, language: PasscodeTheme.PrefixLanguage, boldMode: PasscodeTheme.BoldMode, into stageDir: URL) throws -> Int {
-        
         let imageFiles = theme.getImageFiles()
         guard !imageFiles.isEmpty else { throw PasscodeThemeError.noImagesFound }
 
-        // GIỮ NGUYÊN 17 locale chuẩn AirCard
         let allLocales = ["en", "other", "ru", "uk", "es", "fr", "de", "it", "pt", "tr", "pl", "nl", "ja", "ko", "zh", "ar", "he"]
         let locales: [String] = (language == .universal) ? allLocales : (language == .other ? ["other"] : [language.rawValue, "other"])
 
@@ -172,13 +175,8 @@ class PasscodeThemeViewModel: ObservableObject {
 
         let boldSuffixes: [String] = (boldMode == .both) ? ["", "-bold"] : (boldMode == .bold ? ["-bold"] : [""])
         
-        struct StageTask {
-            let masterFilename: String
-            let data: Data
-            let linkFilenames: [String]
-        }
-        
-        var tasks: [StageTask] = []
+        struct Task { let master: String; let data: Data; let links: [String] }
+        var tasks: [Task] = []
 
         for filename in imageFiles {
             let sourceURL = theme.themeFolderURL.appendingPathComponent(filename)
@@ -189,66 +187,138 @@ class PasscodeThemeViewModel: ObservableObject {
             let ruSub = ruSubtexts[digit]
             let ukSub = ukSubtexts[digit]
             
-            var allNames: [String] = []
-            
+            var names: [String] = []
             for lang in locales {
                 for bld in boldSuffixes {
-                    allNames.append("\(lang)-\(digit)---white\(bld).png")
+                    names.append("\(lang)-\(digit)---white\(bld).png")
                     if !stdSub.isEmpty {
-                        allNames.append("\(lang)-\(digit)-\(stdSub)--white\(bld).png")
+                        names.append("\(lang)-\(digit)-\(stdSub)--white\(bld).png")
                         let noSpace = stdSub.replacingOccurrences(of: " ", with: "")
                         if noSpace != stdSub {
-                            allNames.append("\(lang)-\(digit)-\(noSpace)--white\(bld).png")
+                            names.append("\(lang)-\(digit)-\(noSpace)--white\(bld).png")
                         }
                     }
                     if lang == "ru" || language == .universal, let sub = ruSub {
-                        allNames.append("\(lang)-\(digit)-\(sub)--white\(bld).png")
+                        names.append("\(lang)-\(digit)-\(sub)--white\(bld).png")
                     }
                     if lang == "uk" || language == .universal, let sub = ukSub {
-                        allNames.append("\(lang)-\(digit)-\(sub)--white\(bld).png")
+                        names.append("\(lang)-\(digit)-\(sub)--white\(bld).png")
                     }
                 }
             }
-            
-            guard let master = allNames.first else { continue }
-            tasks.append(StageTask(masterFilename: master, data: imageData, linkFilenames: Array(allNames.dropFirst())))
+            guard let master = names.first else { continue }
+            tasks.append(Task(master: master, data: imageData, links: Array(names.dropFirst())))
         }
 
-        var totalFiles = 0
+        var total = 0
         let lock = NSLock()
-
-        // Parallel write + Hard link (cực nhanh, không nhân bản data)
         DispatchQueue.concurrentPerform(iterations: tasks.count) { i in
             let task = tasks[i]
-            let masterURL = stageDir.appendingPathComponent(task.masterFilename)
-            
-            // Ghi data gốc 1 LẦN DUY NHẤT
+            let masterURL = stageDir.appendingPathComponent(task.master)
             try? task.data.write(to: masterURL)
-            
-            // Hard link cho tất cả các tên khác (chỉ tạo metadata, không copy byte nào)
-            for name in task.linkFilenames {
+            for name in task.links {
                 let destURL = stageDir.appendingPathComponent(name)
-                do {
-                    try FileManager.default.linkItem(at: masterURL, to: destURL)
-                } catch {
-                    // Fallback nếu APFS từ chối (hiếm): copy thường
-                    try? FileManager.default.copyItem(at: masterURL, to: destURL)
-                }
+                do { try FileManager.default.linkItem(at: masterURL, to: destURL) }
+                catch { try? FileManager.default.copyItem(at: masterURL, to: destURL) }
             }
-            
-            lock.lock()
-            totalFiles += 1 + task.linkFilenames.count
-            lock.unlock()
+            lock.lock(); total += 1 + task.links.count; lock.unlock()
         }
         
-        // Marker _big cho Big Keys
         try? Data().write(to: stageDir.appendingPathComponent("_big"))
-        totalFiles += 1
-        
-        return totalFiles
+        return total + 1
     }
 
-    // MARK: - Apply Theme
+    // MARK: - Ghi folder qua Airlift (3 phương thức, fallback tự động)
+
+    /// Mode 1: inject_folder - 1 AirTraffic operation (nhanh nhất nếu hỗ trợ)
+    nonisolated private func injectFolder(pairingPath: String, srcDir: String, parentDir: String, folderName: String, onLogUpdate: @escaping (String) -> Void) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
+                defer { AirliftFFIBridge.releaseLogCallback(ctx) }
+                var errPtr: UnsafeMutablePointer<CChar>? = nil
+                let res = pairingPath.withCString { pairC in
+                    srcDir.withCString { srcC in
+                        parentDir.withCString { parentC in
+                            folderName.withCString { destC in
+                                al_exploit_inject_folder(pairC, srcC, parentC, destC, cb, ctx, &errPtr)
+                            }
+                        }
+                    }
+                }
+                if res != 0 {
+                    let msg = errPtr != nil ? String(cString: errPtr!) : "FFI error: \(res)"
+                    if let e = errPtr { al_string_free(e) }
+                    cont.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
+                } else {
+                    if let e = errPtr { al_string_free(e) }
+                    cont.resume()
+                }
+            }
+        }
+    }
+
+    /// Mode 2: write_dir (biết chạy chắc chắn)
+    nonisolated private func writeDir(pairingPath: String, srcDir: String, targetDir: String, onLogUpdate: @escaping (String) -> Void) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
+                defer { AirliftFFIBridge.releaseLogCallback(ctx) }
+                var errPtr: UnsafeMutablePointer<CChar>? = nil
+                let res = pairingPath.withCString { pairC in
+                    srcDir.withCString { srcC in
+                        targetDir.withCString { tgtC in
+                            al_exploit_write_dir(pairC, srcC, tgtC, cb, ctx, &errPtr)
+                        }
+                    }
+                }
+                if res != 0 {
+                    let msg = errPtr != nil ? String(cString: errPtr!) : "FFI error: \(res)"
+                    if let e = errPtr { al_string_free(e) }
+                    cont.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
+                } else {
+                    if let e = errPtr { al_string_free(e) }
+                    cont.resume()
+                }
+            }
+        }
+    }
+
+    /// Mode 3: parallel write_dir (2-3 tunnel đồng thời)
+    nonisolated private func parallelWriteDir(pairingPath: String, stageDir: URL, targetDir: String, groups: Int, onLogUpdate: @escaping (String) -> Void) async throws {
+        let allFiles = (try? FileManager.default.contentsOfDirectory(atPath: stageDir.path)) ?? []
+        guard !allFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
+
+        // Round-robin split để cân bằng
+        var buckets: [[String]] = Array(repeating: [], count: groups)
+        for (i, f) in allFiles.enumerated() { buckets[i % groups].append(f) }
+
+        // Tạo subdir với hard link
+        var subdirs: [URL] = []
+        for (i, files) in buckets.enumerated() where !files.isEmpty {
+            let subdir = stageDir.appendingPathComponent("_p_\(i)")
+            try? FileManager.default.createDirectory(at: subdir, withIntermediateDirectories: true)
+            for f in files {
+                let src = stageDir.appendingPathComponent(f)
+                let dst = subdir.appendingPathComponent(f)
+                do { try FileManager.default.linkItem(at: src, to: dst) }
+                catch { try? FileManager.default.copyItem(at: src, to: dst) }
+            }
+            subdirs.append(subdir)
+        }
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for subdir in subdirs {
+                let subPath = subdir.path
+                group.addTask {
+                    try await self.writeDir(pairingPath: pairingPath, srcDir: subPath, targetDir: targetDir, onLogUpdate: { _ in })
+                }
+            }
+            try await group.waitForAll()
+        }
+    }
+
+    // MARK: - Apply Theme (3 mode fallback: inject → parallel → sequential)
     func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
         defer { isProcessing = false }
@@ -265,63 +335,67 @@ class PasscodeThemeViewModel: ObservableObject {
         guard FileManager.default.fileExists(atPath: pairingURL.path) else { throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Pairing File."]) }
         guard NetworkStatus.isVPNTunnelPresent() else { throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN not active."]) }
 
-        let stageThemeDir = FileManager.default.temporaryDirectory.appendingPathComponent("airlift_passthm_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: stageThemeDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: stageThemeDir) }
+        let stageDir = FileManager.default.temporaryDirectory.appendingPathComponent("airlift_passthm_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: stageDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stageDir) }
 
-        // Stage files (Hard link + Parallel)
-        let fileCount = try stageFiles(theme: theme, language: language, boldMode: boldMode, into: stageThemeDir)
+        let tStage = Date()
+        let fileCount = try stageFiles(theme: theme, language: language, boldMode: boldMode, into: stageDir)
         guard fileCount > 0 else { throw PasscodeThemeError.noImagesProcessed }
-        
-        let totalWrites = fileCount * versions.count
-        onLogUpdate("📊 Staged \(fileCount) files × \(versions.count) versions = \(totalWrites) files to write.")
-        onLogUpdate("⏱ Stage mất \(Int(Date().timeIntervalSince(startTime)))s (Hard Link optimized).")
+        onLogUpdate("📊 Staged \(fileCount) files in \(Int(Date().timeIntervalSince(tStage)))s.")
 
         onLogUpdate("Đang dò tunnel IP...")
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Could not connect to VPN."])
         }
 
+        let targetParent = "/var/mobile/Library/Caches"
         let bq = BadQuery()
 
         for (idx, versionName) in versions.enumerated() {
-            let targetPath = "/var/mobile/Library/Caches/\(versionName)"
-            let versionStart = Date()
-            onLogUpdate("[\(idx+1)/\(versions.count)] Writing to \(versionName)...")
+            let targetPath = "\(targetParent)/\(versionName)"
+            let tVer = Date()
+            onLogUpdate("[\(idx+1)/\(versions.count)] \(versionName)...")
 
-            // Xoá cache cũ cực nhanh (1 syscall thay vì loop hàng ngàn file)
+            // Clear cache trước (1 syscall)
             if bq.grantAccess(atPath: targetPath).0 {
                 try? FileManager.default.removeItem(atPath: targetPath)
-                try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
             }
 
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let (cb, ctx) = AirliftFFIBridge.makeLogCallback(onLine: onLogUpdate)
-                    defer { AirliftFFIBridge.releaseLogCallback(ctx) }
-                    var errPtr: UnsafeMutablePointer<CChar>? = nil
-                    let res = pairingURL.path.withCString { pairC in
-                        stageThemeDir.path.withCString { srcC in
-                            targetPath.withCString { tgtC in
-                                al_exploit_write_dir(pairC, srcC, tgtC, cb, ctx, &errPtr)
-                            }
-                        }
-                    }
-                    if res != 0 {
-                        let msg = errPtr != nil ? String(cString: errPtr!) : "FFI error: \(res)"
-                        if let e = errPtr { al_string_free(e) }
-                        continuation.resume(throwing: NSError(domain: "AirLift", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg]))
-                    } else {
-                        if let e = errPtr { al_string_free(e) }
-                        continuation.resume()
-                    }
+            // Try 1: inject_folder (nhanh nhất)
+            var done = false
+            do {
+                try await injectFolder(pairingPath: pairingURL.path, srcDir: stageDir.path, parentDir: targetParent, folderName: versionName, onLogUpdate: onLogUpdate)
+                onLogUpdate("  ✅ inject_folder: \(Int(Date().timeIntervalSince(tVer)))s")
+                done = true
+            } catch {
+                onLogUpdate("  ⚠️ inject_folder failed: \(error.localizedDescription)")
+            }
+
+            // Try 2: parallel write_dir
+            if !done {
+                try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
+                let groups = max(2, min(3, ProcessInfo.processInfo.activeProcessorCount / 2))
+                do {
+                    try await parallelWriteDir(pairingPath: pairingURL.path, stageDir: stageDir, targetDir: targetPath, groups: groups, onLogUpdate: onLogUpdate)
+                    onLogUpdate("  ✅ parallel write_dir (\(groups)x): \(Int(Date().timeIntervalSince(tVer)))s")
+                    done = true
+                } catch {
+                    onLogUpdate("  ⚠️ parallel failed: \(error.localizedDescription)")
+                    try? FileManager.default.removeItem(atPath: targetPath)
+                    try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
                 }
             }
-            onLogUpdate("  ✅ \(versionName) written in \(Int(Date().timeIntervalSince(versionStart)))s.")
+
+            // Try 3: sequential write_dir (last resort)
+            if !done {
+                try await writeDir(pairingPath: pairingURL.path, srcDir: stageDir.path, targetDir: targetPath, onLogUpdate: onLogUpdate)
+                onLogUpdate("  ✅ sequential write_dir: \(Int(Date().timeIntervalSince(tVer)))s")
+            }
         }
 
-        let totalTime = Int(Date().timeIntervalSince(startTime))
-        onLogUpdate("🎉 Done. Total time: \(totalTime)s. Tap 'Reset Theme & Reboot' to apply.")
+        let total = Int(Date().timeIntervalSince(startTime))
+        onLogUpdate("🎉 Done in \(total)s. Tap 'Reset Theme & Reboot' to apply.")
     }
 
     // MARK: - Reset
