@@ -3,8 +3,9 @@ import PhotosUI
 import UniformTypeIdentifiers
 import ZIPFoundation
 
-// MARK: - WalletCardPreview (Giao diện ngoài danh sách)
+// MARK: - WalletCardPreview
 struct WalletCardPreview: View {
+    @ObservedObject private var localizationManager = LocalizationManager.shared
     let card: AppleWalletCard
     let index: Int
     let total: Int
@@ -50,8 +51,9 @@ struct WalletCardPreview: View {
     }
 }
 
-// MARK: - AppleWalletCardDetailView (Giao diện sửa Card)
+// MARK: - AppleWalletCardDetailView
 struct AppleWalletCardDetailView: View {
+    @ObservedObject private var localizationManager = LocalizationManager.shared
     @State private var card: AppleWalletCard
     @ObservedObject var walletStore: AppleWalletStore
     @Environment(\.dismiss) var dismiss
@@ -74,21 +76,19 @@ struct AppleWalletCardDetailView: View {
         _primaryAccountSuffix = State(initialValue: card.getPrimaryAccountSuffix() ?? "")
         _hasPassJSON = State(initialValue: card.hasPassJSON)
         
-        // Ưu tiên load backgroundImage, nếu không có thì load previewImage
         let imgData = card.backgroundImageData ?? card.previewImageData
         _cardImage = State(initialValue: imgData.flatMap(UIImage.init(data:)))
     }
 
     var body: some View {
         Form {
-            Section(header: Text("Card Info")) {
-                TextField("Card Name", text: $cardName)
+            Section(header: Text(L("section_card_information"))) {
+                TextField(L("wallet_card_name"), text: $cardName)
                 Text("ID: \(card.id)").font(.caption).foregroundStyle(.secondary)
                 
-                // Thêm ô nhập số cuối thẻ (8390)
                 if hasPassJSON {
                     HStack {
-                        Text("Last 4 Digits")
+                        Text(L("wallet_card_last4"))
                         Spacer()
                         TextField("8390", text: $primaryAccountSuffix)
                             .multilineTextAlignment(.trailing)
@@ -96,10 +96,10 @@ struct AppleWalletCardDetailView: View {
                     }
                 }
                 
-                Toggle("Enabled", isOn: $enabled)
+                Toggle(L("enabled"), isOn: $enabled)
             }
 
-            Section(header: Text("Card Image (Preview)")) {
+            Section(header: Text(L("section_card_preview"))) {
                 Button {
                     showPicker = true
                 } label: {
@@ -115,7 +115,7 @@ struct AppleWalletCardDetailView: View {
                             Image(systemName: "photo")
                                 .font(.system(size: 40))
                                 .foregroundStyle(.secondary)
-                            Text("Tap to select card image")
+                            Text(L("wallet_tap_to_select_image"))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
@@ -129,18 +129,18 @@ struct AppleWalletCardDetailView: View {
             }
 
             Section {
-                Button("Save Changes") { saveAll(); dismiss() }
-                Button(role: .destructive) { showDeleteAlert = true } label: { Text("Delete Card") }
+                Button(L("save_changes")) { saveAll(); dismiss() }
+                Button(role: .destructive) { showDeleteAlert = true } label: { Text(L("wallet_delete_card")) }
             }
         }
-        .navigationTitle(cardName.isEmpty ? "Card" : cardName)
+        .navigationTitle(cardName.isEmpty ? L("card_label") : cardName)
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Delete Card", isPresented: $showDeleteAlert) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) {
+        .alert(L("wallet_delete_card"), isPresented: $showDeleteAlert) {
+            Button(L("alert_cancel"), role: .cancel) {}
+            Button(L("alert_delete"), role: .destructive) {
                 walletStore.deleteCard(card); dismiss()
             }
-        } message: { Text("Delete this card permanently?") }
+        } message: { Text(L("wallet_delete_card_confirm")) }
         .photosPicker(isPresented: $showPicker, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { item in
             guard let item else { return }
@@ -161,7 +161,6 @@ struct AppleWalletCardDetailView: View {
         card.enabled = enabled
         
         if let cardImage {
-            // Gán 1 ảnh này cho cả 3 vị trí để thẻ hiển thị đẹp nhất
             let data = cardImage.pngData()
             card.backgroundImageData = data
             card.previewImageData = data
@@ -178,6 +177,7 @@ struct AppleWalletCardDetailView: View {
 
 // MARK: - ManualAddCardSheet
 struct ManualAddCardSheet: View {
+    @ObservedObject private var localizationManager = LocalizationManager.shared
     @ObservedObject var walletStore: AppleWalletStore
     @Environment(\.dismiss) var dismiss
     @State private var cardID = ""
@@ -186,28 +186,29 @@ struct ManualAddCardSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section(header: Text("Card Details")) {
-                    TextField("Card ID", text: $cardID)
+                Section(header: Text(L("section_card_information"))) {
+                    TextField(L("wallet_card_id"), text: $cardID)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
-                    TextField("Card Name", text: $cardName)
+                    TextField(L("wallet_card_name"), text: $cardName)
                 }
                 Section {
-                    Button("Add Card") {
+                    Button(L("wallet_add_card_btn")) {
                         let finalName = cardName.isEmpty ? "Card \(cardID.prefix(8))" : cardName
                         walletStore.addCard(AppleWalletCard(id: cardID, name: finalName))
                         dismiss()
                     }.disabled(cardID.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            .navigationTitle("Manual Add")
+            .navigationTitle(L("wallet_manual_add_title"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(L("alert_cancel")) { dismiss() } } }
         }
     }
 }
 
 // MARK: - ImportDefaultCardSheet
 struct ImportDefaultCardSheet: View {
+    @ObservedObject private var localizationManager = LocalizationManager.shared
     @ObservedObject var walletStore: AppleWalletStore
     @Environment(\.dismiss) var dismiss
 
@@ -220,31 +221,32 @@ struct ImportDefaultCardSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section(header: Text("Card Info")) {
-                    TextField("Card ID", text: $cardID)
+                Section(header: Text(L("section_card_information"))) {
+                    TextField(L("wallet_card_id"), text: $cardID)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
-                    TextField("Card Name (optional)", text: $cardName)
+                    TextField(L("wallet_card_name"), text: $cardName)
                 }
-                Section(header: Text("ZIP File")) {
-                    Button("Select ZIP") { showPicker = true }
+                Section(header: Text(L("wallet_zip_section"))) {
+                    Button(L("wallet_select_zip")) { showPicker = true }
                 }
                 if let errorMessage {
                     Section { Text(errorMessage).foregroundStyle(.red) }
                 }
                 Section {
-                    if isImporting { ProgressView("Importing...") }
+                    if isImporting { ProgressView(L("importing")) }
                 }
             }
-            .navigationTitle("Import Default Card")
+            .navigationTitle(L("wallet_import_default_title"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(L("alert_cancel")) { dismiss() } } }
             .fileImporter(
                 isPresented: $showPicker,
                 allowedContentTypes: [UTType(filenameExtension: "zip") ?? .data, .data]
             ) { result in
                 switch result {
                 case .success(let url): Task { await importZIP(url) }
-                case .failure(let err): errorMessage = err.localizedDescription
+                case .failure(let err):
+                    errorMessage = L("wallet_import_failed").replacingOccurrences(of: "{error}", with: err.localizedDescription)
                 }
             }
         }
@@ -252,7 +254,7 @@ struct ImportDefaultCardSheet: View {
 
     private func importZIP(_ url: URL) async {
         let id = cardID.trimmingCharacters(in: .whitespaces)
-        guard !id.isEmpty else { errorMessage = "Card ID is required."; return }
+        guard !id.isEmpty else { errorMessage = L("wallet_card_id_required"); return }
         isImporting = true; errorMessage = nil
         defer { isImporting = false }
 
@@ -267,7 +269,7 @@ struct ImportDefaultCardSheet: View {
         do {
             try FileManager.default.unzipItem(at: url, to: temp)
         } catch {
-            errorMessage = "Unzip failed: \(error.localizedDescription)"; return
+            errorMessage = L("wallet_unzip_failed").replacingOccurrences(of: "{error}", with: error.localizedDescription); return
         }
 
         let contents = (try? FileManager.default.contentsOfDirectory(atPath: temp.path)) ?? []
@@ -306,7 +308,7 @@ struct ImportDefaultCardSheet: View {
         }
 
         guard imported > 0 else {
-            errorMessage = "No known card files found in ZIP."; return
+            errorMessage = L("wallet_no_card_files"); return
         }
         walletStore.addCard(newCard)
         dismiss()
