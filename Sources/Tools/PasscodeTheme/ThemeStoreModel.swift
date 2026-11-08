@@ -145,21 +145,47 @@ class ThemeStoreManager: ObservableObject {
         throw ThemeStoreError.invalidJSON
     }
 
+    // ⚡ TỐI ƯU: fetch icon SONG SONG qua TaskGroup (thay vì await tuần tự trong loop)
+    // Logic y hệt: cùng entries, cùng thứ tự, cùng dedupe, cùng kết quả.
     private func flattenIndex(urlString: String, parentIndex: String) async throws {
         guard let url = URL(string: urlString) else { throw ThemeStoreError.invalidURL }
         let (data, _) = try await URLSession.shared.data(from: url)
         guard let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw ThemeStoreError.invalidJSON
         }
-        var newRepos: [ThemeRepository] = []
-        for dict in array {
+
+        // Bước 1: parse entries (đồng bộ, không network)
+        struct Entry { let name: String; let base: String; let themes: String }
+        let entries: [Entry] = array.compactMap { dict in
             guard let name = dict["name"] as? String,
                   let base = dict["baseURL"] as? String,
-                  let themes = dict["themesURL"] as? String else { continue }
-            let iconURL = await fetchIconFromSubRepo(themesURL: themes, baseURL: base)
+                  let themes = dict["themesURL"] as? String else { return nil }
+            return Entry(name: name, base: base, themes: themes)
+        }
+
+        // Bước 2: fetch icon SONG SONG — N repo → 1 RTT thay vì N RTT
+        let icons: [String?] = await withTaskGroup(
+            of: (Int, String?).self,
+            returning: [String?].self
+        ) { group in
+            for (idx, e) in entries.enumerated() {
+                group.addTask {
+                    let icon = await Self.fetchIconFromSubRepo(themesURL: e.themes, baseURL: e.base)
+                    return (idx, icon)
+                }
+            }
+            var results = [String?](repeating: nil, count: entries.count)
+            for await (idx, icon) in group { results[idx] = icon }
+            return results
+        }
+
+        // Bước 3: build + append (giữ nguyên thứ tự, dedupe y hệt bản gốc)
+        var newRepos: [ThemeRepository] = []
+        newRepos.reserveCapacity(entries.count)
+        for (idx, e) in entries.enumerated() {
             // 🎯 Nếu URL trùng repo mặc định → force tên
-            let finalName = (themes == Self.defaultRepoURL) ? Self.defaultRepoName : name
-            newRepos.append(ThemeRepository(url: themes, name: finalName, iconURL: iconURL, parentIndex: parentIndex))
+            let finalName = (e.themes == Self.defaultRepoURL) ? Self.defaultRepoName : e.name
+            newRepos.append(ThemeRepository(url: e.themes, name: finalName, iconURL: icons[idx], parentIndex: parentIndex))
         }
         for repo in newRepos {
             if !repositories.contains(where: { $0.url == repo.url }) {
@@ -169,7 +195,8 @@ class ThemeStoreManager: ObservableObject {
         saveRepos()
     }
 
-    private func fetchIconFromSubRepo(themesURL: String, baseURL: String) async -> String? {
+    // ⚡ nonisolated + static → chạy off-main song song thật (không bị MainActor serialize)
+    private nonisolated static func fetchIconFromSubRepo(themesURL: String, baseURL: String) async -> String? {
         guard let url = URL(string: themesURL) else { return nil }
         guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
         guard let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
@@ -282,12 +309,18 @@ class ThemeStoreManager: ObservableObject {
         store.addTheme(t)
     }
 
+    // ⚡ TỐI ƯU: gộp 2 pass → 1 pass
+    // Logic y hệt bản gốc: "_small" luôn thắng "_big" nếu cả hai cùng tồn tại
+    // (bản gốc: vòng 1 tìm small return sớm; nếu không có mới sang vòng 2 tìm big)
     private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
-            for e in archive { if e.path.hasSuffix("_small") { return .small } }
-            for e in archive { if e.path.hasSuffix("_big") { return .big } }
-            return .unknown
+            var sawBig = false
+            for e in archive {
+                if e.path.hasSuffix("_small") { return .small }
+                if e.path.hasSuffix("_big") { sawBig = true }
+            }
+            return sawBig ? .big : .unknown
         } catch { return .unknown }
     }
 
