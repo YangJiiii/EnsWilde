@@ -52,6 +52,7 @@ struct RemoteThemeCodable: Codable {
     
     enum CodingKeys: String, CodingKey {
         case name, description, url, preview, authors
+        // alias decode-only (không có stored property trùng tên):
         case summary, author, download, icon
     }
     
@@ -66,6 +67,18 @@ struct RemoteThemeCodable: Codable {
             ?? c.decodeIfPresent(String.self, forKey: .icon) ?? ""
         authors = try c.decodeIfPresent(String.self, forKey: .authors)
             ?? c.decodeIfPresent(String.self, forKey: .author) ?? "Unknown Author"
+    }
+    
+    // FIX: CodingKeys có các alias decode-only (summary/author/download/icon)
+    // mà không có stored property tương ứng → auto-synthesize encode(to:) fail.
+    // Viết encode(to:) thủ công chỉ encode các property thật.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        try c.encodeIfPresent(description, forKey: .description)
+        try c.encode(url, forKey: .url)
+        try c.encode(preview, forKey: .preview)
+        try c.encodeIfPresent(authors, forKey: .authors)
     }
 }
 
@@ -159,7 +172,9 @@ class ThemeStoreManager: ObservableObject {
         if let repoJSON = try? JSONDecoder().decode(RepoJSONCodable.self, from: data) {
             let name = repoJSON.name ?? Self.deriveNameFromURL(url)
             let baseURL = url.deletingLastPathComponent().absoluteString
-            let icon = repoJSON.icon.map { resolveIcon($0, baseURL: baseURL) }
+            // FIX: dùng flatMap thay vì map để tránh String?? (double optional).
+            // resolveIcon trả về String? nên flatMap trả String? khớp với iconURL.
+            let icon = repoJSON.icon.flatMap { resolveIcon($0, baseURL: baseURL) }
             return ThemeRepository(url: url.absoluteString, name: name, iconURL: icon, isIndex: false)
         }
         
