@@ -46,9 +46,9 @@ enum SpeedPreset: String, CaseIterable {
 }
 
 enum LogLevel: Int {
-    case silent  = 0   // chỉ log đầu/cuối
-    case normal  = 1   // log mỗi 200 file
-    case verbose = 2   // log mọi file
+    case silent  = 0
+    case normal  = 1
+    case verbose = 2
 }
 
 // MARK: - Counter an toàn luồng
@@ -69,28 +69,14 @@ class PasscodeThemeViewModel: ObservableObject {
     private var activeTaskID: UUID?
     private let store: PasscodeThemeStore
 
-    // MARK: - 🎛 KNOBS (tự set theo preset, có thể override)
-
-    /// Chọn preset — tự động set tất cả knob bên dưới.
-    /// Override tay sau khi set preset nếu muốn tinh chỉnh.
+    // MARK: - 🎛 KNOBS
     var speedPreset: SpeedPreset = .fast {
         didSet { applyPreset(speedPreset) }
     }
-
-    /// Verify sample file sau khi write version cuối.
     var verifyAfterWrite: Bool = true
-
-    /// Verify cả 3 version (chỉ preset `.safe` bật).
-    /// Bật = chậm hơn ~600ms nhưng an toàn tối đa.
     var verifyAllVersions: Bool = false
-
-    /// Số ms chờ trước khi reboot.
     var rebootDelayMs: Int = 400
-
-    /// Số lần retry nếu write/verify fail (1–3).
     var retryAttempts: Int = 3
-
-    /// Mức độ log trong quá trình write.
     var logLevel: LogLevel = .normal
 
     // MARK: - Init
@@ -108,18 +94,17 @@ class PasscodeThemeViewModel: ObservableObject {
         logLevel = c.logLevel
     }
 
-    // MARK: - Ước lượng thời gian (cho UI hiển thị trước khi apply)
+    // MARK: - Ước lượng thời gian
     func estimateDurationSec(language: PasscodeTheme.PrefixLanguage,
                              telephony: PasscodeTheme.TelephonyVersion) -> Double {
-        // ~7ms/file qua FFI + overhead
         let localeMultiplier: Double = {
             switch language {
             case .universal: return 16.0
             case .other:     return 1.0
-            default:         return 2.0  // lang + other
+            default:         return 2.0
             }
         }()
-        let estFilesPerVersion = 10.0 * localeMultiplier  // 10 digits
+        let estFilesPerVersion = 10.0 * localeMultiplier
         let versionCount = Double(telephony.targetFolders.count)
         let totalFiles = estFilesPerVersion * versionCount
         let writeSec = totalFiles * 0.007
@@ -193,7 +178,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try await importTheme(from: sourceURL, name: name)
     }
 
-    // MARK: - detectSizeFromZIP (Y NGUYÊN)
+    // MARK: - detectSizeFromZIP
     nonisolated static private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
@@ -206,7 +191,7 @@ class PasscodeThemeViewModel: ObservableObject {
         } catch { return .unknown }
     }
 
-    // MARK: - extractImagesRecursively ⚡ PUBLIC + MOVE
+    // MARK: - extractImagesRecursively
     nonisolated static func extractImagesRecursively(themeFolder: URL) throws {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(atPath: themeFolder.path) else { return }
@@ -277,7 +262,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return 0
     }
 
-    // MARK: - processThemeFiles ⚡ Trả URL — không đọc bytes vào RAM
+    // MARK: - processThemeFiles
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
         language: PasscodeTheme.PrefixLanguage,
@@ -433,7 +418,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - fastStage ⚡ HARDLINK source, không đọc Data
+    // MARK: - fastStage
     nonisolated private func fastStage(
         processedFiles: [(filename: String, sourceURL: URL, digit: String, needsResize: Bool)],
         theme: PasscodeTheme,
@@ -497,7 +482,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return n + 1
     }
 
-    // MARK: - writeOneVersion ⚡ log theo logLevel + retryAttempts
+    // MARK: - writeOneVersion ⚡ (đổi BadQuery → WorseQuery)
     nonisolated private func writeOneVersion(
         versionName: String,
         targetPath: String,
@@ -506,7 +491,7 @@ class PasscodeThemeViewModel: ObservableObject {
         sampleFile: String,
         totalPerVersion: Int,
         shouldVerify: Bool,
-        bq: BadQuery,
+        bq: WorseQuery,
         onLogUpdate: @escaping (String) -> Void
     ) async throws {
         if bq.grantAccess(atPath: targetPath).0 {
@@ -516,7 +501,7 @@ class PasscodeThemeViewModel: ObservableObject {
 
         let logBatch: Int = {
             switch logLevel {
-            case .silent:  return 999_999        // chỉ log file cuối
+            case .silent:  return 999_999
             case .normal:  return 200
             case .verbose: return 1
             }
@@ -644,7 +629,8 @@ class PasscodeThemeViewModel: ObservableObject {
         let stagePath = stageDir.path
         let sampleFile = processedFiles.first!.filename
 
-        let bq = BadQuery()
+        // ⚡ ĐÃ ĐỔI: WorseQuery
+        let bq = WorseQuery()
         var perVersionTimes: [(String, Int)] = []
         let tWrite = Date()
 
@@ -690,7 +676,7 @@ class PasscodeThemeViewModel: ObservableObject {
         onLogUpdate("[6/6] Reset Theme & Reboot để áp dụng")
     }
 
-    // MARK: - Reset ⚡ dùng rebootDelayMs
+    // MARK: - Reset ⚡ (đổi BadQuery → WorseQuery)
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
@@ -706,7 +692,7 @@ class PasscodeThemeViewModel: ObservableObject {
         let versions = telephony.targetFolders.filter { seen.insert($0).inserted }
         let cacheDirs = versions.map { "/var/mobile/Library/Caches/\($0)" }
 
-        let bq = BadQuery()
+        let bq = WorseQuery()
         for dir in cacheDirs {
             if bq.grantAccess(atPath: dir).0 {
                 try? FileManager.default.removeItem(atPath: dir)
