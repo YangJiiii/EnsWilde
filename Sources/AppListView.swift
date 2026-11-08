@@ -18,16 +18,16 @@ struct AppItemView: View {
                     }
                 }
             } label: {
-                Text("View app details")
+                Text(L("app_view_details"))
             }
-            Section(header: Text("Arbitrary read exploit")) {
+            Section(header: Text(L("section_arbitrary_read"))) {
                 if let bundlePath = appDetails["Path"] {
-                    Button("Copy app bundle folder") {
+                    Button(L("app_copy_bundle")) {
                         UIPasteboard.general.string = "file://a\(bundlePath)"
                     }
                 }
                 if let containerPath = appDetails["Container"] {
-                    Button("Copy app data folder") {
+                    Button(L("app_copy_data")) {
                         UIPasteboard.general.string = "file://a\(containerPath)"
                     }
                 }
@@ -111,12 +111,12 @@ struct AppListView: View {
                 do {
                     apps = try JITEnableContext.shared.getAllAppsInfo() as! [String : [String : Any]]
                 } catch {
-                    apps = ["Failed to get app list: \(error)": [:]]
+                    apps = ["\(L("error_prefix").replacingOccurrences(of: "{error}", with: "\(error)"))": [:]]
                 }
             }
         }
         .searchable(text: $searchString)
-        .navigationTitle("App list")
+        .navigationTitle(L("app_list_title"))
         .navigationBarTitleDisplayMode(.inline)
     }
     
