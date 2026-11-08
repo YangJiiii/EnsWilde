@@ -5,7 +5,53 @@ import ZIPFoundation
 import AirliftFFI
 import Network
 
-// MARK: - Counter an toàn luồng cho callback FFI
+// MARK: - Preset tốc độ
+enum SpeedPreset: String, CaseIterable {
+    case safe       // ~14.8s — verify cả 3 version, reboot 800ms
+    case balanced   // ~13.8s — verify version cuối, reboot 500ms
+    case fast       // ~13.2s — verify cuối, reboot 400ms (DEFAULT)
+    case turbo      // ~12.6s — không verify, reboot 300ms
+    case ferrari    // ~12.0s — không verify, reboot 200ms, log im lặng, retry 1
+
+    var displayName: String {
+        switch self {
+        case .safe:     return "Safe"
+        case .balanced: return "Balanced"
+        case .fast:     return "Fast (default)"
+        case .turbo:    return "Turbo"
+        case .ferrari:  return "Ferrari 🏎"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .safe:     return "Verify cả 3 version, reboot 800ms. An toàn tối đa."
+        case .balanced: return "Verify version cuối, reboot 500ms."
+        case .fast:     return "Verify version cuối, reboot 400ms. Cân bằng."
+        case .turbo:    return "Không verify, reboot 300ms. Nhanh hơn ~600ms."
+        case .ferrari:  return "Không verify, reboot 200ms, retry 1. Nhanh nhất có thể."
+        }
+    }
+
+    // (verify, verifyAll, rebootMs, retries, logLevel)
+    var config: (verify: Bool, verifyAll: Bool, rebootMs: Int, retries: Int, logLevel: LogLevel) {
+        switch self {
+        case .safe:     return (true,  true,  800, 3, .normal)
+        case .balanced: return (true,  false, 500, 3, .normal)
+        case .fast:     return (true,  false, 400, 3, .normal)
+        case .turbo:    return (false, false, 300, 2, .normal)
+        case .ferrari:  return (false, false, 200, 1, .silent)
+        }
+    }
+}
+
+enum LogLevel: Int {
+    case silent  = 0   // chỉ log đầu/cuối
+    case normal  = 1   // log mỗi 200 file
+    case verbose = 2   // log mọi file
+}
+
+// MARK: - Counter an toàn luồng
 private final class WriteCounter: @unchecked Sendable {
     private var value = 0
     private let lock = NSLock()
@@ -23,16 +69,65 @@ class PasscodeThemeViewModel: ObservableObject {
     private var activeTaskID: UUID?
     private let store: PasscodeThemeStore
 
-    /// `true` = verify sample file sau khi write version CUỐI.
-    /// `false` = tin FFI success (nhanh hơn ~400ms, rủi ro silent fail cực thấp).
+    // MARK: - 🎛 KNOBS (tự set theo preset, có thể override)
+
+    /// Chọn preset — tự động set tất cả knob bên dưới.
+    /// Override tay sau khi set preset nếu muốn tinh chỉnh.
+    var speedPreset: SpeedPreset = .fast {
+        didSet { applyPreset(speedPreset) }
+    }
+
+    /// Verify sample file sau khi write version cuối.
     var verifyAfterWrite: Bool = true
 
-    /// Số ms chờ trước khi reboot. Bản gốc 800ms, mặc định Ferrari 400ms.
+    /// Verify cả 3 version (chỉ preset `.safe` bật).
+    /// Bật = chậm hơn ~600ms nhưng an toàn tối đa.
+    var verifyAllVersions: Bool = false
+
+    /// Số ms chờ trước khi reboot.
     var rebootDelayMs: Int = 400
 
-    init(store: PasscodeThemeStore) { self.store = store }
+    /// Số lần retry nếu write/verify fail (1–3).
+    var retryAttempts: Int = 3
 
-    // MARK: - Loại file passcode theme
+    /// Mức độ log trong quá trình write.
+    var logLevel: LogLevel = .normal
+
+    // MARK: - Init
+    init(store: PasscodeThemeStore) {
+        self.store = store
+        applyPreset(.fast)
+    }
+
+    private func applyPreset(_ preset: SpeedPreset) {
+        let c = preset.config
+        verifyAfterWrite = c.verify
+        verifyAllVersions = c.verifyAll
+        rebootDelayMs = c.rebootMs
+        retryAttempts = c.retries
+        logLevel = c.logLevel
+    }
+
+    // MARK: - Ước lượng thời gian (cho UI hiển thị trước khi apply)
+    func estimateDurationSec(language: PasscodeTheme.PrefixLanguage,
+                             telephony: PasscodeTheme.TelephonyVersion) -> Double {
+        // ~7ms/file qua FFI + overhead
+        let localeMultiplier: Double = {
+            switch language {
+            case .universal: return 16.0
+            case .other:     return 1.0
+            default:         return 2.0  // lang + other
+            }
+        }()
+        let estFilesPerVersion = 10.0 * localeMultiplier  // 10 digits
+        let versionCount = Double(telephony.targetFolders.count)
+        let totalFiles = estFilesPerVersion * versionCount
+        let writeSec = totalFiles * 0.007
+        let overhead = 0.5 + versionCount * 0.05
+        return writeSec + overhead + Double(rebootDelayMs) / 1000
+    }
+
+    // MARK: - Loại file
     nonisolated static func isSupportedPasscodeThemeFile(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         return ["zip", "passthm", "3105pass"].contains(ext)
@@ -111,7 +206,7 @@ class PasscodeThemeViewModel: ObservableObject {
         } catch { return .unknown }
     }
 
-    // MARK: - extractImagesRecursively ⚡ PUBLIC (ThemeStoreModel dùng) + MOVE
+    // MARK: - extractImagesRecursively ⚡ PUBLIC + MOVE
     nonisolated static func extractImagesRecursively(themeFolder: URL) throws {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(atPath: themeFolder.path) else { return }
@@ -182,9 +277,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return 0
     }
 
-    // MARK: - processThemeFiles ⚡ TRẢ URL thay Data — KHÔNG đọc bytes vào RAM
-    /// Trả về (filename, sourceURL, digit, needsResize).
-    /// fastStage sẽ hardlink sourceURL nếu không resize, hoặc decode+resize nếu cần.
+    // MARK: - processThemeFiles ⚡ Trả URL — không đọc bytes vào RAM
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
         language: PasscodeTheme.PrefixLanguage,
@@ -268,7 +361,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return processedFiles
     }
 
-    // MARK: - resizeImage (static — gọi từ background)
+    // MARK: - resizeImage
     nonisolated static private func resizeImage(
         _ image: UIImage,
         for keySize: PasscodeTheme.KeySize,
@@ -290,7 +383,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetPixelSize)) }
     }
 
-    // MARK: - writeDir FFI (Y NGUYÊN)
+    // MARK: - writeDir FFI
     nonisolated private func writeDir(
         pairingPath: String,
         srcDir: String,
@@ -321,7 +414,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - verifyFileExists FFI (Y NGUYÊN)
+    // MARK: - verifyFileExists FFI
     nonisolated private func verifyFileExists(pairingPath: String, remotePath: String) async -> Bool {
         await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
             DispatchQueue.global(qos: .utility).async {
@@ -340,7 +433,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - fastStage ⚡ HARDLINK từ source (không đọc Data vào RAM)
+    // MARK: - fastStage ⚡ HARDLINK source, không đọc Data
     nonisolated private func fastStage(
         processedFiles: [(filename: String, sourceURL: URL, digit: String, needsResize: Bool)],
         theme: PasscodeTheme,
@@ -369,7 +462,6 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
 
-        // Pass 1: primary — hardlink từ source (không resize) hoặc decode+resize (có resize)
         DispatchQueue.concurrentPerform(iterations: primaryIndices.count) { idx in
             autoreleasepool {
                 let p = processedFiles[primaryIndices[idx]]
@@ -391,7 +483,6 @@ class PasscodeThemeViewModel: ObservableObject {
             }
         }
 
-        // Pass 2: biến thể — hardlink từ primary (instant, cùng inode)
         DispatchQueue.concurrentPerform(iterations: nonPrimaryIndices.count) { idx in
             autoreleasepool {
                 let p = processedFiles[nonPrimaryIndices[idx]]
@@ -406,7 +497,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return n + 1
     }
 
-    // MARK: - writeOneVersion ⚡ verify CHỈ version cuối + batch log 200
+    // MARK: - writeOneVersion ⚡ log theo logLevel + retryAttempts
     nonisolated private func writeOneVersion(
         versionName: String,
         targetPath: String,
@@ -423,8 +514,17 @@ class PasscodeThemeViewModel: ObservableObject {
         }
         try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
 
+        let logBatch: Int = {
+            switch logLevel {
+            case .silent:  return 999_999        // chỉ log file cuối
+            case .normal:  return 200
+            case .verbose: return 1
+            }
+        }()
+
+        let maxAttempts = max(1, min(3, retryAttempts))
         var lastError: Error?
-        for attempt in 1...3 {
+        for attempt in 1...maxAttempts {
             let counter = WriteCounter()
             do {
                 try await writeDir(
@@ -433,8 +533,7 @@ class PasscodeThemeViewModel: ObservableObject {
                     targetDir: targetPath,
                     onLogUpdate: { line in
                         let current = counter.increment()
-                        // Batch: chỉ log mỗi 200 file + file cuối
-                        guard current % 200 == 0 || current == totalPerVersion else { return }
+                        guard current % logBatch == 0 || current == totalPerVersion else { return }
                         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmed.isEmpty else { return }
                         let body = trimmed.lowercased().hasPrefix("write") ? trimmed : "write file \(trimmed)"
@@ -448,24 +547,27 @@ class PasscodeThemeViewModel: ObservableObject {
                 let ok = await verifyFileExists(pairingPath: pairPath, remotePath: "\(targetPath)/\(sampleFile)")
                 if ok { return }
 
-                onLogUpdate("  ⚠️ Attempt \(attempt) verify FAIL, retry...")
+                onLogUpdate("  ⚠️ Attempt \(attempt)/\(maxAttempts) verify FAIL, retry...")
                 if bq.grantAccess(atPath: targetPath).0 {
                     try? FileManager.default.removeItem(atPath: targetPath)
                 }
                 try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
             } catch {
                 lastError = error
-                onLogUpdate("  ⚠️ Attempt \(attempt) error: \(error.localizedDescription)")
+                onLogUpdate("  ⚠️ Attempt \(attempt)/\(maxAttempts) error: \(error.localizedDescription)")
+                if attempt < maxAttempts {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                }
             }
         }
         throw NSError(
             domain: "AirLift",
             code: -40,
-            userInfo: [NSLocalizedDescriptionKey: "Ghi \(versionName) thất bại sau 3 lần. Lỗi cuối: \(lastError?.localizedDescription ?? "verify fail")"]
+            userInfo: [NSLocalizedDescriptionKey: "Ghi \(versionName) thất bại sau \(maxAttempts) lần. Lỗi cuối: \(lastError?.localizedDescription ?? "verify fail")"]
         )
     }
 
-    // MARK: - Apply Theme ⚡ Tunnel song song + verify cuối
+    // MARK: - Apply Theme
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
@@ -495,9 +597,7 @@ class PasscodeThemeViewModel: ObservableObject {
         let totalVersions = versions.count
 
         onLogUpdate("[1/6] Prepare: Lang=\(language.displayName), Bold=\(boldMode.rawValue), Ver=\(telephony.displayName)")
-        if rawVersions.count != versions.count {
-            onLogUpdate("  ⚠️ targetFolders có phần tử trùng: \(rawVersions) → đã lọc còn \(versions)")
-        }
+        onLogUpdate("  → Preset: \(speedPreset.displayName) · verify=\(verifyAfterWrite ? (verifyAllVersions ? "all" : "last") : "off") · reboot=\(rebootDelayMs)ms · retry=\(retryAttempts)")
         onLogUpdate("  → Sẽ ghi \(totalVersions) folder: \(versions.joined(separator: " → "))")
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
@@ -508,7 +608,7 @@ class PasscodeThemeViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
         }
 
-        // 🚀 Tunnel detect SONG SONG với process + stage
+        // Tunnel detect song song
         onLogUpdate("[3/6] Dò tunnel (song song với process)...")
         let logCb = onLogUpdate
         let tunnelTask = Task.detached(priority: .userInitiated) {
@@ -552,7 +652,8 @@ class PasscodeThemeViewModel: ObservableObject {
             let targetPath = "/var/mobile/Library/Caches/\(versionName)"
             let tVer = Date()
             let isLastVersion = (idx == totalVersions - 1)
-            onLogUpdate("[4/6] Version \(idx+1)/\(totalVersions): \(versionName)\(isLastVersion && verifyAfterWrite ? " (verify)" : "")")
+            let shouldVerify = verifyAfterWrite && (verifyAllVersions || isLastVersion)
+            onLogUpdate("[4/6] Version \(idx+1)/\(totalVersions): \(versionName)\(shouldVerify ? " (verify)" : "")")
 
             try await writeOneVersion(
                 versionName: versionName,
@@ -561,7 +662,7 @@ class PasscodeThemeViewModel: ObservableObject {
                 pairPath: pairPath,
                 sampleFile: sampleFile,
                 totalPerVersion: totalPerVersion,
-                shouldVerify: isLastVersion && verifyAfterWrite,
+                shouldVerify: shouldVerify,
                 bq: bq,
                 onLogUpdate: onLogUpdate
             )
@@ -571,7 +672,7 @@ class PasscodeThemeViewModel: ObservableObject {
             let runningTotal = Int(Date().timeIntervalSince(startTime) * 1000)
             onLogUpdate(String(format: "  ✅ %@: %@ (%dms) — tổng %.2fs",
                                versionName,
-                               isLastVersion && verifyAfterWrite ? "verified" : "done",
+                               shouldVerify ? "verified" : "done",
                                ms,
                                Double(runningTotal) / 1000))
         }
@@ -589,7 +690,7 @@ class PasscodeThemeViewModel: ObservableObject {
         onLogUpdate("[6/6] Reset Theme & Reboot để áp dụng")
     }
 
-    // MARK: - Reset ⚡ sleep 400ms
+    // MARK: - Reset ⚡ dùng rebootDelayMs
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
