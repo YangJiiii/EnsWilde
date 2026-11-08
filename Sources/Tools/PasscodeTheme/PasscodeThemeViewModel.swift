@@ -127,7 +127,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return nil
     }
 
-    // MARK: - processThemeFiles (Y NGUYÊN — parallel resize 10 ảnh + dedupe)
+    // MARK: - processThemeFiles (Y NGUYÊN)
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
         language: PasscodeTheme.PrefixLanguage,
@@ -255,7 +255,26 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Apply Theme (nhanh nhất trong số bản an toàn)
+    // MARK: - VERIFY (mới — kiểm tra file thực sự có trên device)
+    nonisolated private func verifyFileExists(pairingPath: String, remotePath: String) async -> Bool {
+        await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+            DispatchQueue.global(qos: .utility).async {
+                var data: UnsafeMutablePointer<UInt8>? = nil
+                var len = 0
+                var err: UnsafeMutablePointer<CChar>? = nil
+                let res = pairingPath.withCString { p in
+                    remotePath.withCString { i in
+                        al_exploit_read_file(p, i, nil, nil, &data, &len, &err)
+                    }
+                }
+                if let d = data, len > 0 { al_bytes_free(d, len) }
+                if let e = err { al_string_free(e) }
+                c.resume(returning: res == 0 && len > 0)
+            }
+        }
+    }
+
+    // MARK: - Apply Theme (có verify + retry)
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
@@ -298,7 +317,6 @@ class PasscodeThemeViewModel: ObservableObject {
         try FileManager.default.createDirectory(at: stageThemeDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stageThemeDir) }
 
-        // Stage song song
         let tStage = Date()
         DispatchQueue.concurrentPerform(iterations: processedFiles.count) { i in
             let (filename, data) = processedFiles[i]
@@ -312,11 +330,13 @@ class PasscodeThemeViewModel: ObservableObject {
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN."])
         }
+        onLogUpdate("[4/6] Tunnel OK")
 
         let bq = BadQuery()
         let pairPath = pairingURL.path
         let stagePath = stageThemeDir.path
         let fileCount = processedFiles.count
+        let sampleFile = processedFiles.first!.0
 
         let tWrite = Date()
         for (idx, versionName) in versions.enumerated() {
@@ -329,15 +349,49 @@ class PasscodeThemeViewModel: ObservableObject {
             }
             try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
 
-            try await writeDir(
-                pairingPath: pairPath,
-                srcDir: stagePath,
-                targetDir: targetPath,
-                onLogUpdate: { _ in }
-            )
+            // Retry tối đa 3 lần với verify sau mỗi lần
+            var verified = false
+            var lastError: Error?
+            for attempt in 1...3 {
+                do {
+                    try await writeDir(
+                        pairingPath: pairPath,
+                        srcDir: stagePath,
+                        targetDir: targetPath,
+                        onLogUpdate: { _ in }
+                    )
+                    
+                    // Verify 1 file mẫu trên device
+                    let remotePath = "\(targetPath)/\(sampleFile)"
+                    let ok = await verifyFileExists(pairingPath: pairPath, remotePath: remotePath)
+                    if ok {
+                        verified = true
+                        break
+                    } else {
+                        onLogUpdate("  Attempt \(attempt): write OK nhưng verify FAIL, retry...")
+                        // Xoá cache trước khi retry
+                        if bq.grantAccess(atPath: targetPath).0 {
+                            try? FileManager.default.removeItem(atPath: targetPath)
+                        }
+                        try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
+                    }
+                } catch {
+                    lastError = error
+                    onLogUpdate("  Attempt \(attempt): error \(error.localizedDescription)")
+                }
+            }
+
+            if !verified {
+                throw NSError(
+                    domain: "AirLift",
+                    code: -40,
+                    userInfo: [NSLocalizedDescriptionKey: "Ghi \(versionName) thất bại sau 3 lần. Lỗi cuối: \(lastError?.localizedDescription ?? "verify fail")"]
+                )
+            }
+
             let ms = Int(Date().timeIntervalSince(tVer) * 1000)
             let rate = ms > 0 ? (fileCount * 1000 / ms) : 0
-            onLogUpdate("  -> \(versionName): \(ms)ms (\(rate) file/s)")
+            onLogUpdate("  -> \(versionName): \(ms)ms (\(rate) file/s) [verified]")
         }
         let writeMs = Int(Date().timeIntervalSince(tWrite) * 1000)
 
