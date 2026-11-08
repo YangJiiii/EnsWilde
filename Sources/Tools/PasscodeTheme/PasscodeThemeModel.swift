@@ -21,12 +21,11 @@ struct PasscodeTheme: Identifiable, Codable {
         case regular = "Regular"
         case bold = "Bold"
         case both = "Regular + Bold"
-
         var displayName: String { rawValue }
     }
 
     enum PrefixLanguage: String, Codable, CaseIterable {
-        case universal = "all"   // ← MỚI: "All Languages (Universal)"
+        case universal = "all"
         case af = "af", ar = "ar", az = "az", bg = "bg", bn = "bn", ca = "ca", cs = "cs", da = "da", de = "de", el = "el", en = "en", es = "es", et = "et", eu = "eu", fa = "fa", fi = "fi", fil = "fil", fr = "fr", gl = "gl", he = "he", hi = "hi", hr = "hr", hu = "hu", hy = "hy", id = "id", `is` = "is", it = "it", ja = "ja", ka = "ka", kk = "kk", ko = "ko", lt = "lt", lv = "lv", mk = "mk", ml = "ml", mr = "mr", ms = "ms", nb = "nb", nl = "nl", nn = "nn", no = "no", pl = "pl", pt = "pt", ro = "ro", ru = "ru", sk = "sk", sl = "sl", sq = "sq", sr = "sr", sv = "sv", sw = "sw", ta = "ta", te = "te", th = "th", tr = "tr", uk = "uk", ur = "ur", vi = "vi", zh = "zh", other = "other"
 
         var displayName: String {
@@ -65,9 +64,34 @@ struct PasscodeTheme: Identifiable, Codable {
     }
 
     enum TelephonyVersion: String, Codable, CaseIterable {
-        case telephony8 = "TelephonyUI-8", telephony9 = "TelephonyUI-9", telephony10 = "TelephonyUI-10"
-        var displayName: String { rawValue }
-        var cachePath: String { "/var/mobile/Library/Caches/\(self.rawValue)/" }
+        case universal = "all"   // ← MỚI
+        case telephony8 = "TelephonyUI-8"
+        case telephony9 = "TelephonyUI-9"
+        case telephony10 = "TelephonyUI-10"
+
+        var displayName: String {
+            switch self {
+            case .universal: return "Universal (8 + 9 + 10)"
+            case .telephony8: return "TelephonyUI-8"
+            case .telephony9: return "TelephonyUI-9"
+            case .telephony10: return "TelephonyUI-10"
+            }
+        }
+
+        /// Danh sách folder đích thực sự cần ghi.
+        var targetFolders: [String] {
+            switch self {
+            case .universal: return ["TelephonyUI-10", "TelephonyUI-9", "TelephonyUI-8"]
+            case .telephony8: return ["TelephonyUI-8"]
+            case .telephony9: return ["TelephonyUI-9"]
+            case .telephony10: return ["TelephonyUI-10"]
+            }
+        }
+
+        /// Cache path (chỉ dùng cho single version).
+        var cachePath: String {
+            return "/var/mobile/Library/Caches/\(self.rawValue)/"
+        }
     }
 
     enum DetectedSize: Int, Codable {
@@ -108,7 +132,7 @@ struct PasscodeTheme: Identifiable, Codable {
     func getPreviewImage() -> UIImage? {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(atPath: themeFolderURL.path) else { return nil }
-        if let zeroFile = files.first(where: { $0.contains("-0-") || $0.contains("-0@") }) {
+        if let zeroFile = files.first(where: { $0.contains("-0-") || $0.contains("-0@") || $0 == "0.png" }) {
             return UIImage(contentsOfFile: themeFolderURL.appendingPathComponent(zeroFile).path)
         }
         return nil
@@ -135,12 +159,10 @@ class PasscodeThemeStore: ObservableObject {
         get { PasscodeTheme.PrefixLanguage(rawValue: globalCustomPrefixRaw) ?? .en }
         set { globalCustomPrefixRaw = newValue.rawValue }
     }
-
     var globalTelephonyVersion: PasscodeTheme.TelephonyVersion {
         get { PasscodeTheme.TelephonyVersion(rawValue: globalTelephonyVersionRaw) ?? .telephony10 }
         set { globalTelephonyVersionRaw = newValue.rawValue }
     }
-
     var globalBoldMode: PasscodeTheme.BoldMode {
         get { PasscodeTheme.BoldMode(rawValue: globalBoldModeRaw) ?? .regular }
         set { globalBoldModeRaw = newValue.rawValue }
@@ -152,7 +174,6 @@ class PasscodeThemeStore: ObservableObject {
         themesFileURL = URL.documentsDirectory.appendingPathComponent("PasscodeThemes.json")
         loadThemes()
     }
-
     func loadThemes() {
         guard FileManager.default.fileExists(atPath: themesFileURL.path) else { return }
         if let data = try? Data(contentsOf: themesFileURL),
@@ -160,18 +181,15 @@ class PasscodeThemeStore: ObservableObject {
             themes = decoded
         }
     }
-
     func saveThemes() {
         if let data = try? JSONEncoder().encode(themes) {
             try? data.write(to: themesFileURL, options: .atomic)
         }
     }
-
     func addTheme(_ theme: PasscodeTheme) { themes.append(theme); saveThemes() }
     func updateTheme(_ theme: PasscodeTheme) {
         if let idx = themes.firstIndex(where: { $0.id == theme.id }) {
-            themes[idx] = theme
-            saveThemes()
+            themes[idx] = theme; saveThemes()
         }
     }
     func deleteTheme(_ theme: PasscodeTheme) {
@@ -181,9 +199,7 @@ class PasscodeThemeStore: ObservableObject {
     }
     func selectTheme(_ theme: PasscodeTheme) {
         for i in 0..<themes.count { themes[i].isSelected = false }
-        if let idx = themes.firstIndex(where: { $0.id == theme.id }) {
-            themes[idx].isSelected = true
-        }
+        if let idx = themes.firstIndex(where: { $0.id == theme.id }) { themes[idx].isSelected = true }
         saveThemes()
     }
     func getSelectedTheme() -> PasscodeTheme? { themes.first { $0.isSelected } }
