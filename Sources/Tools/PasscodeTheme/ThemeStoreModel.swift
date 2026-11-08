@@ -5,7 +5,7 @@ struct ThemeRepository: Codable, Identifiable {
     let url: String              // themesJSONURL
     var name: String
     var iconURL: String?
-    var parentIndex: String?     // URL index gốc nếu được flatten (để xoá theo nhóm)
+    var parentIndex: String?
     var id: String { url }
     var jsonURL: URL? { URL(string: url) }
 }
@@ -37,11 +37,11 @@ class ThemeStoreManager: ObservableObject {
     @Published var downloadingThemes: Set<String> = []
     @Published var selectedRepository: ThemeRepository?
 
-    // 🎯 Repo mặc định DUY NHẤT — trỏ thẳng tới themes.json của bạn
+    // 🎯 Repo mặc định — EnsWilde Repository
     private static let defaultRepoURL = "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde-Repository/main/themes.json"
-    private static let defaultRepoName = "LS Nguyen - EnsWilde Themes"
+    private static let defaultRepoName = "EnsWilde Repository"
 
-    // 🔄 Bump v2 → v3: reset toàn bộ cache cũ (2 repo Nugget + YangJiii sẽ bị xoá)
+    // v3: reset cache cũ
     private let savedReposKey = "enswilde.themeStoreRepos.v3"
 
     init() {
@@ -51,16 +51,10 @@ class ThemeStoreManager: ObservableObject {
         }
     }
 
-    // Kiểm tra xem có cần reset về repo mặc định không
     private func needsReset() -> Bool {
-        // 1. Chưa có repo nào → cần khởi tạo
         if repositories.isEmpty { return true }
-
-        // 2. Không chứa repo mặc định của mình → cần thêm
         let hasDefault = repositories.contains { $0.url == Self.defaultRepoURL }
         if !hasDefault { return true }
-
-        // 3. Còn sót repo legacy (Nugget / YangJiii / SerStars) → cần xoá
         let hasLegacy = repositories.contains { repo in
             let u = repo.url.lowercased()
             let n = repo.name.lowercased()
@@ -68,12 +62,8 @@ class ThemeStoreManager: ObservableObject {
                    u.contains("yangjiii") || u.contains("yangjii") ||
                    n.contains("nugget") || n.contains("yangjii")
         }
-        if hasLegacy { return true }
-
-        return false
+        return hasLegacy
     }
-
-    // MARK: - Persistence
 
     private func loadSavedRepos() {
         if let data = UserDefaults.standard.data(forKey: savedReposKey),
@@ -88,28 +78,21 @@ class ThemeStoreManager: ObservableObject {
         }
     }
 
-    // 🎯 Khởi tạo: hard-code đúng 1 repo duy nhất, KHÔNG tải index.json nữa
     private func bootstrapDefault() async {
         isLoading = true
         defer { isLoading = false }
 
-        // Giữ lại các repo khác user đã add (trừ legacy), luôn đảm bảo có repo mặc định
         var kept: [ThemeRepository] = []
         for r in repositories {
-            // Bỏ qua legacy
             let u = r.url.lowercased()
             let n = r.name.lowercased()
             if u.contains("nugget") || u.contains("serstars") ||
                u.contains("yangjiii") || u.contains("yangjii") ||
-               n.contains("nugget") || n.contains("yangjii") {
-                continue
-            }
-            // Bỏ qua nếu trùng URL mặc định (sẽ thêm lại bên dưới)
+               n.contains("nugget") || n.contains("yangjii") { continue }
             if r.url == Self.defaultRepoURL { continue }
             kept.append(r)
         }
 
-        // Thêm repo mặc định lên đầu
         let defaultRepo = ThemeRepository(
             url: Self.defaultRepoURL,
             name: Self.defaultRepoName,
@@ -120,8 +103,6 @@ class ThemeStoreManager: ObservableObject {
         saveRepos()
     }
 
-    // MARK: - Add Repo (vẫn giữ hỗ trợ add index / repo trực tiếp)
-
     func addRepo(urlString: String) async throws {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), url.scheme?.hasPrefix("http") == true else {
@@ -130,14 +111,11 @@ class ThemeStoreManager: ObservableObject {
         let (data, _) = try await URLSession.shared.data(from: url)
 
         if let json = try? JSONSerialization.jsonObject(with: data) {
-            // Index format: [{name, baseURL, themesURL}]
             if let array = json as? [[String: Any]],
                array.contains(where: { $0["themesURL"] != nil && $0["baseURL"] != nil }) {
                 try await flattenIndex(urlString: trimmed, parentIndex: trimmed)
                 return
             }
-
-            // Direct repo: {name, icon, themes|packages} hoặc [themes]
             let repo = try parseDirectRepo(url: url, data: data)
             if !repositories.contains(where: { $0.url == repo.url }) {
                 repositories.append(repo)
@@ -154,23 +132,14 @@ class ThemeStoreManager: ObservableObject {
         guard let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw ThemeStoreError.invalidJSON
         }
-
         var newRepos: [ThemeRepository] = []
         for dict in array {
             guard let name = dict["name"] as? String,
                   let base = dict["baseURL"] as? String,
                   let themes = dict["themesURL"] as? String else { continue }
-
             let iconURL = await fetchIconFromSubRepo(themesURL: themes, baseURL: base)
-
-            newRepos.append(ThemeRepository(
-                url: themes,
-                name: name,
-                iconURL: iconURL,
-                parentIndex: parentIndex
-            ))
+            newRepos.append(ThemeRepository(url: themes, name: name, iconURL: iconURL, parentIndex: parentIndex))
         }
-
         for repo in newRepos {
             if !repositories.contains(where: { $0.url == repo.url }) {
                 repositories.append(repo)
@@ -183,7 +152,6 @@ class ThemeStoreManager: ObservableObject {
         guard let url = URL(string: themesURL) else { return nil }
         guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
         guard let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
-
         if let dict = json as? [String: Any], let iconStr = dict["icon"] as? String {
             let clean = baseURL.hasSuffix("/") ? baseURL : baseURL + "/"
             return iconStr.hasPrefix("http") ? iconStr : clean + iconStr
@@ -194,7 +162,6 @@ class ThemeStoreManager: ObservableObject {
     private func parseDirectRepo(url: URL, data: Data) throws -> ThemeRepository {
         let baseURLString = url.deletingLastPathComponent().absoluteString
         let defaultName = Self.deriveNameFromURL(url)
-
         if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             let name = dict["name"] as? String ?? defaultName
             var icon: String? = nil
@@ -212,8 +179,6 @@ class ThemeStoreManager: ObservableObject {
         return url.deletingPathExtension().lastPathComponent
     }
 
-    // MARK: - Remove Repo (xử lý theo parentIndex)
-
     func removeRepo(_ repo: ThemeRepository) {
         if let parent = repo.parentIndex {
             repositories.removeAll { $0.parentIndex == parent }
@@ -223,13 +188,9 @@ class ThemeStoreManager: ObservableObject {
         saveRepos()
     }
 
-    // MARK: - Fetch Themes
-
     func fetchThemes(from repo: ThemeRepository) async {
         isLoading = true; errorMessage = nil; remoteThemes = []; selectedRepository = repo
-
         guard let url = repo.jsonURL else { isLoading = false; return }
-
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             let baseURL = url.deletingLastPathComponent().absoluteString
@@ -248,14 +209,12 @@ class ThemeStoreManager: ObservableObject {
 
     private func parseThemes(from data: Data, baseURL: String) throws -> [RemoteTheme] {
         guard let json = try? JSONSerialization.jsonObject(with: data) else { return [] }
-
         var arr: [[String: Any]] = []
         if let a = json as? [[String: Any]] { arr = a }
         else if let d = json as? [String: Any] {
             if let t = d["themes"] as? [[String: Any]] { arr = t }
             else if let p = d["packages"] as? [[String: Any]] { arr = p }
         }
-
         return arr.compactMap { dict in
             let name = dict["name"] as? String ?? "Unknown"
             let desc = (dict["description"] as? String) ?? (dict["summary"] as? String) ?? ""
@@ -267,13 +226,10 @@ class ThemeStoreManager: ObservableObject {
         }
     }
 
-    // MARK: - Download
-
     func downloadAndImportTheme(_ theme: RemoteTheme, themeStore: PasscodeThemeStore) async throws {
         guard let downloadURL = theme.fullURL else { throw ThemeStoreError.invalidURL }
         downloadingThemes.insert(theme.id)
         defer { downloadingThemes.remove(theme.id) }
-
         let (tempURL, _) = try await URLSession.shared.download(from: downloadURL)
         let permanentURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("passthm")
         try FileManager.default.copyItem(at: tempURL, to: permanentURL)
