@@ -9,16 +9,13 @@ import Network
 class PasscodeThemeViewModel: ObservableObject {
 
     @Published var isProcessing = false
-    // FIX LOOP: guard chống gọi trùng + timestamp
     private var activeTaskID: UUID?
-
     private let store: PasscodeThemeStore
 
     init(store: PasscodeThemeStore) { self.store = store }
 
     // MARK: - Import (Y NGUYÊN)
     func importTheme(from sourceURL: URL, name: String) async throws {
-        // Guard chống gọi trùng
         guard activeTaskID == nil else { return }
         let myID = UUID()
         activeTaskID = myID
@@ -27,7 +24,6 @@ class PasscodeThemeViewModel: ObservableObject {
             if activeTaskID == myID { activeTaskID = nil }
             isProcessing = false
         }
-
         let result = try await Task.detached(priority: .userInitiated) {
             () -> (PasscodeTheme, PasscodeTheme.DetectedSize) in
             let accessing = sourceURL.startAccessingSecurityScopedResource()
@@ -166,7 +162,6 @@ class PasscodeThemeViewModel: ObservableObject {
         case .both: boldSuffixes = ["", "-bold"]
         }
 
-        // Parallel 10 ảnh + dedupe bằng Set (fix duplicate nếu có)
         var processedFiles: [(String, Data)] = []
         var seenNames = Set<String>()
         let lock = NSLock()
@@ -203,7 +198,6 @@ class PasscodeThemeViewModel: ObservableObject {
                         }
                     }
                 }
-                
                 lock.lock()
                 for item in localFiles where !seenNames.contains(item.0) {
                     seenNames.insert(item.0)
@@ -261,17 +255,13 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Apply Theme (Y NGUYÊN + fix loop + tối ưu)
+    // MARK: - Apply Theme (Y NGUYÊN + fix loop + parallel versions)
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
         onLogUpdate: @escaping (String) -> Void
     ) async throws {
-        // FIX LOOP #1: guard chống gọi trùng
-        guard activeTaskID == nil else {
-            print("[EnsWilde] applyTheme đang chạy (taskID=\(activeTaskID?.uuidString ?? "?")) — bỏ qua lần gọi trùng")
-            return
-        }
+        guard activeTaskID == nil else { return }
         let myID = UUID()
         activeTaskID = myID
         isProcessing = true
@@ -287,21 +277,15 @@ class PasscodeThemeViewModel: ObservableObject {
         let versions = telephony.targetFolders
         let totalVersions = versions.count
 
-        onLogUpdate("===== BẮT ĐẦU APPLY =====")
-        onLogUpdate("Lang: \(language.displayName) | Bold: \(boldMode.rawValue) | Ver: \(telephony.displayName)")
-        
-        // FIX LOOP #2: log rõ nếu Universal
+        // LOG TỪNG DÒNG - KHÔNG ICON
+        onLogUpdate("[1/5] Prepare: Lang=\(language.displayName) | Bold=\(boldMode.rawValue) | Ver=\(telephony.displayName)")
         if totalVersions > 1 {
-            onLogUpdate("⚠️ Universal mode: sẽ ghi \(totalVersions) folder (\(versions.joined(separator: " + "))).")
-            onLogUpdate("   Đây KHÔNG phải loop — đây là logic ghi đủ \(totalVersions) folder.")
-            onLogUpdate("   Nếu chỉ dùng iOS \(ProcessInfo.processInfo.operatingSystemVersion.majorVersion), hãy chọn 1 version cụ thể.")
+            onLogUpdate("[Info] Universal mode: ghi \(totalVersions) folder (\(versions.joined(separator: ", "))) - không phải loop")
         }
 
         let processedFiles = try processThemeFiles(theme: theme, language: language, boldMode: boldMode)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
-        
-        let expectedTotal = processedFiles.count * totalVersions
-        onLogUpdate("📦 Matrix: \(processedFiles.count) file × \(totalVersions) ver = \(expectedTotal) file tổng.")
+        onLogUpdate("[2/5] Matrix: \(processedFiles.count) file x \(totalVersions) ver = \(processedFiles.count * totalVersions) file")
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         guard FileManager.default.fileExists(atPath: pairingURL.path) else {
@@ -315,7 +299,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try FileManager.default.createDirectory(at: stageThemeDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stageThemeDir) }
 
-        // TỐI ƯU: stage song song (2000 file trong ~0.5s thay vì 10s)
+        // Stage song song
         let tStage = Date()
         DispatchQueue.concurrentPerform(iterations: processedFiles.count) { i in
             let (filename, data) = processedFiles[i]
@@ -323,47 +307,51 @@ class PasscodeThemeViewModel: ObservableObject {
         }
         try Data().write(to: stageThemeDir.appendingPathComponent("_big"))
         let stageMs = Int(Date().timeIntervalSince(tStage) * 1000)
-        
-        let actualStaged = (try? FileManager.default.contentsOfDirectory(atPath: stageThemeDir.path))?.count ?? 0
-        onLogUpdate("📊 Staged \(actualStaged) file trong \(stageMs)ms (parallel).")
+        onLogUpdate("[3/5] Stage xong: \(processedFiles.count) file trong \(stageMs)ms")
 
-        onLogUpdate("Đang dò tunnel IP...")
+        onLogUpdate("[4/5] Đang dò tunnel IP...")
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
             throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN."])
         }
+        onLogUpdate("[4/5] Tunnel OK")
 
         let bq = BadQuery()
+        let pairPath = pairingURL.path
+        let stagePath = stageThemeDir.path
 
-        // Ghi tuần tự từng version — log RÕ RÀNG để không ai tưởng loop
-        for (idx, versionName) in versions.enumerated() {
-            let targetPath = "/var/mobile/Library/Caches/\(versionName)"
-            let tVer = Date()
-            
-            // FIX LOOP #3: log header rõ với timestamp + version number
-            onLogUpdate("───── VERSION \(idx+1)/\(totalVersions): \(versionName) ─────")
-
-            // TỐI ƯU: xoá cache 1 syscall
-            if bq.grantAccess(atPath: targetPath).0 {
-                try? FileManager.default.removeItem(atPath: targetPath)
+        // Xoá cache trước cho tất cả version
+        for v in versions {
+            let tp = "/var/mobile/Library/Caches/\(v)"
+            if bq.grantAccess(atPath: tp).0 {
+                try? FileManager.default.removeItem(atPath: tp)
             }
-            try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
-
-            try await writeDir(
-                pairingPath: pairingURL.path,
-                srcDir: stageThemeDir.path,
-                targetDir: targetPath,
-                onLogUpdate: { _ in }  // suppress per-file log để đỡ rối
-            )
-            
-            let elapsed = Int(Date().timeIntervalSince(tVer))
-            let rate = elapsed > 0 ? (processedFiles.count / elapsed) : 0
-            onLogUpdate("  ✅ \(versionName) hoàn tất: \(elapsed)s (\(rate) file/s)")
+            try? FileManager.default.createDirectory(atPath: tp, withIntermediateDirectories: true)
         }
 
+        // PARALLEL VERSION: 3 version ghi cùng lúc, mỗi version 1 tunnel riêng
+        // Nếu chỉ 1 version thì cũng đi qua path này (group 1 phần tử)
+        onLogUpdate("[5/5] Bắt đầu ghi \(totalVersions) version (parallel)...")
+        let tWrite = Date()
+
+        try await withThrowingTaskGroup(of: (String, Int).self) { group in
+            for v in versions {
+                let targetPath = "/var/mobile/Library/Caches/\(v)"
+                group.addTask {
+                    let t0 = Date()
+                    try await self.writeDir(pairingPath: pairPath, srcDir: stagePath, targetDir: targetPath, onLogUpdate: { _ in })
+                    let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                    return (v, ms)
+                }
+            }
+            for try await (v, ms) in group {
+                onLogUpdate("  -> \(v): \(ms)ms")
+            }
+        }
+
+        let writeMs = Int(Date().timeIntervalSince(tWrite) * 1000)
         let total = Int(Date().timeIntervalSince(startTime))
-        onLogUpdate("===== HOÀN TẤT =====")
-        onLogUpdate("🎉 \(processedFiles.count) file × \(totalVersions) version = \(processedFiles.count * totalVersions) file trong \(total)s.")
-        onLogUpdate("✅ Bấm 'Reset Theme & Reboot' để áp dụng.")
+        onLogUpdate("[Done] Ghi \(processedFiles.count) x \(totalVersions) = \(processedFiles.count * totalVersions) file trong \(writeMs)ms (tổng \(total)s)")
+        onLogUpdate("Reset Theme & Reboot để áp dụng")
     }
 
     // MARK: - Reset (Y NGUYÊN)
@@ -376,23 +364,20 @@ class PasscodeThemeViewModel: ObservableObject {
             if activeTaskID == myID { activeTaskID = nil }
             isProcessing = false
         }
-        
         let cacheDirs = [
             "/var/mobile/Library/Caches/TelephonyUI-10",
             "/var/mobile/Library/Caches/TelephonyUI-9",
             "/var/mobile/Library/Caches/TelephonyUI-8"
         ]
         let bq = BadQuery()
-        
-        // TỐI ƯU: xoá cả folder 1 syscall thay vì loop từng file
         for dir in cacheDirs {
             if bq.grantAccess(atPath: dir).0 {
                 try? FileManager.default.removeItem(atPath: dir)
                 try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
             }
         }
-        onLogUpdate("✅ Đã xoá Passcode Theme thành công.")
-        onLogUpdate("🔄 Đang khởi động lại thiết bị...")
+        onLogUpdate("Đã xoá Passcode Theme")
+        onLogUpdate("Đang khởi động lại...")
         try await Task.sleep(nanoseconds: 800_000_000)
         RebootHelper.rebootDevice()
     }
