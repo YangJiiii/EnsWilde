@@ -5,10 +5,12 @@ import ZIPFoundation
 import AirliftFFI
 import Network
 
-// ⚡ Bật/tắt ghi song song nhiều version. Nếu FFI không thread-safe → đổi thành false.
+// ⚡ Ghi song song nhiều version (chỉ ảnh hưởng khi chọn Universal).
+// - true: nhanh gấp ~3× khi Universal
+// - false: fallback tuần tự nếu FFI crash (native không thread-safe)
 private let PARALLEL_WRITE_VERSIONS = true
 
-// MARK: - Counter an toàn luồng (callback FFI chạy background)
+// MARK: - Counter an toàn luồng cho callback FFI
 private final class WriteCounter: @unchecked Sendable {
     private var value = 0
     private let lock = NSLock()
@@ -269,7 +271,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - VERIFY (Y NGUYÊN)
+    // MARK: - verifyFileExists (Y NGUYÊN)
     nonisolated private func verifyFileExists(pairingPath: String, remotePath: String) async -> Bool {
         await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
             DispatchQueue.global(qos: .utility).async {
@@ -288,45 +290,118 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Stage siêu nhanh (clone thay vì ghi từng biến thể)
+    // MARK: - Stage siêu nhanh (song song + APFS clone)
     nonisolated private func fastStage(
         processedFiles: [(filename: String, imageData: Data)],
-        stageThemeDir: URL
+        stageDir: URL
     ) throws -> Int {
         let fm = FileManager.default
 
-        // Pass 1: mỗi digit ghi 1 file thật (nguồn)
-        var primaryPaths: [String: URL] = [:]
-        for (filename, data) in processedFiles {
-            let key = PasscodeThemeViewModel.extractDigitStatic(from: filename) ?? filename
-            if primaryPaths[key] == nil {
-                let dest = stageThemeDir.appendingPathComponent(filename)
-                try data.write(to: dest)
-                primaryPaths[key] = dest
+        // Pass 1 song song: mỗi digit chỉ ghi 1 file thật
+        let primaryLock = NSLock()
+        var primaryURLs: [String: URL] = [:]
+        var claimed = Set<String>()
+
+        DispatchQueue.concurrentPerform(iterations: processedFiles.count) { i in
+            autoreleasepool {
+                let (filename, data) = processedFiles[i]
+                let key = PasscodeThemeViewModel.extractDigitStatic(from: filename) ?? filename
+
+                primaryLock.lock()
+                let isPrimary = !claimed.contains(key)
+                if isPrimary {
+                    claimed.insert(key)
+                    primaryURLs[key] = stageDir.appendingPathComponent(filename)
+                }
+                primaryLock.unlock()
+
+                if isPrimary {
+                    try? data.write(to: stageDir.appendingPathComponent(filename))
+                }
             }
         }
 
-        // Pass 2: clone (APFS COW — gần như tức thời) cho các biến thể còn lại
+        // Pass 2 song song: clone (APFS COW, gần như tức thời) cho biến thể
         DispatchQueue.concurrentPerform(iterations: processedFiles.count) { i in
             autoreleasepool {
                 let (filename, _) = processedFiles[i]
                 let key = PasscodeThemeViewModel.extractDigitStatic(from: filename) ?? filename
-                guard let src = primaryPaths[key] else { return }
-                let dest = stageThemeDir.appendingPathComponent(filename)
+                guard let src = primaryURLs[key] else { return }
+                let dest = stageDir.appendingPathComponent(filename)
                 if dest.lastPathComponent == src.lastPathComponent { return }
                 try? fm.copyItem(at: src, to: dest)
             }
         }
 
-        // Marker `_big` (zero-byte)
-        let bigPath = stageThemeDir.appendingPathComponent("_big").path
-        fm.createFile(atPath: bigPath, contents: nil)
+        // Marker _big (zero byte, tạo nhanh hơn Data().write)
+        fm.createFile(atPath: stageDir.appendingPathComponent("_big").path, contents: nil)
 
         // Đếm động số file thực tế trên đĩa
-        return (try? fm.contentsOfDirectory(atPath: stageThemeDir.path).count) ?? (processedFiles.count + 1)
+        return (try? fm.contentsOfDirectory(atPath: stageDir.path).count) ?? (processedFiles.count + 1)
     }
 
-    // MARK: - Apply Theme (logic y nguyên — chỉ đổi log + tối ưu tốc độ)
+    // MARK: - Write 1 version + verify + retry
+    nonisolated private func writeOneVersion(
+        versionName: String,
+        targetPath: String,
+        stagePath: String,
+        pairPath: String,
+        sampleFile: String,
+        totalPerVersion: Int,
+        label: String,
+        bq: BadQuery,
+        onLogUpdate: @escaping (String) -> Void
+    ) async throws {
+        // Clean lần đầu
+        if bq.grantAccess(atPath: targetPath).0 {
+            try? FileManager.default.removeItem(atPath: targetPath)
+        }
+        try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
+
+        var lastError: Error?
+        for attempt in 1...3 {
+            let counter = WriteCounter()
+            do {
+                try await writeDir(
+                    pairingPath: pairPath,
+                    srcDir: stagePath,
+                    targetDir: targetPath,
+                    onLogUpdate: { line in
+                        let current = counter.increment()
+                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        let body = trimmed.lowercased().hasPrefix("write")
+                            ? trimmed
+                            : "write file \(trimmed)"
+                        let msg = "  \(label)\(current)/\(totalPerVersion): \(body)"
+                        DispatchQueue.main.async { onLogUpdate(msg) }
+                    }
+                )
+
+                let ok = await verifyFileExists(
+                    pairingPath: pairPath,
+                    remotePath: "\(targetPath)/\(sampleFile)"
+                )
+                if ok { return }
+
+                onLogUpdate("  \(label)Attempt \(attempt) verify FAIL, retry...")
+                if bq.grantAccess(atPath: targetPath).0 {
+                    try? FileManager.default.removeItem(atPath: targetPath)
+                }
+                try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
+            } catch {
+                lastError = error
+                onLogUpdate("  \(label)Attempt \(attempt) error: \(error.localizedDescription)")
+            }
+        }
+        throw NSError(
+            domain: "AirLift",
+            code: -40,
+            userInfo: [NSLocalizedDescriptionKey: "Ghi \(versionName) thất bại sau 3 lần. Lỗi cuối: \(lastError?.localizedDescription ?? "verify fail")"]
+        )
+    }
+
+    // MARK: - Apply Theme (logic y nguyên — chỉ đổi log + tối ưu)
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
@@ -347,9 +422,10 @@ class PasscodeThemeViewModel: ObservableObject {
         let language = self.store.globalCustomPrefix
         let boldMode = self.store.globalBoldMode
         let telephony = self.store.globalTelephonyVersion
+        // 🎯 CHỈ ghi folder thuộc version đã chọn
         let versions = telephony.targetFolders
         let totalVersions = versions.count
-        let multipleVersions = totalVersions > 1
+        let multi = totalVersions > 1
 
         onLogUpdate("[1/6] Prepare: Lang=\(language.displayName), Bold=\(boldMode.rawValue), Ver=\(telephony.displayName)")
 
@@ -364,13 +440,12 @@ class PasscodeThemeViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
         }
 
-        // ⚡ Stage siêu nhanh: 1 write/digit + clone
-        let stageThemeDir = FileManager.default.temporaryDirectory.appendingPathComponent("airlift_passthm_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: stageThemeDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: stageThemeDir) }
+        let stageDir = FileManager.default.temporaryDirectory.appendingPathComponent("airlift_passthm_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: stageDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stageDir) }
 
         let tStage = Date()
-        let totalPerVersion = try fastStage(processedFiles: processedFiles, stageThemeDir: stageThemeDir)
+        let totalPerVersion = try fastStage(processedFiles: processedFiles, stageDir: stageDir)
         let stageMs = Int(Date().timeIntervalSince(tStage) * 1000)
 
         onLogUpdate("[2/6] Matrix: \(totalPerVersion) file/version × \(totalVersions) = \(totalPerVersion * totalVersions) file")
@@ -382,128 +457,71 @@ class PasscodeThemeViewModel: ObservableObject {
         }
         onLogUpdate("[4/6] Tunnel OK")
 
-        let bq = BadQuery()
         let pairPath = pairingURL.path
-        let stagePath = stageThemeDir.path
+        let stagePath = stageDir.path
         let sampleFile = processedFiles.first!.0
-
-        // ⚡ Chuẩn bị target dirs (clean + create) 1 lần duy nhất
-        var targetPaths: [String: String] = [:]
-        for versionName in versions {
-            let targetPath = "/var/mobile/Library/Caches/\(versionName)"
-            targetPaths[versionName] = targetPath
-            if bq.grantAccess(atPath: targetPath).0 {
-                try? FileManager.default.removeItem(atPath: targetPath)
-            }
-            try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
-        }
 
         let tWrite = Date()
 
-        // 🔥 Mỗi version có state riêng, retry độc lập — nhưng chạy song song
-        struct VersionState {
-            let name: String
-            let targetPath: String
-            var attempts: Int = 0
-            var verified: Bool = false
-            var lastError: Error? = nil
-            var elapsedMs: Int = 0
-        }
-        var states = versions.map {
-            VersionState(name: $0, targetPath: targetPaths[$0] ?? "/var/mobile/Library/Caches/\($0)")
-        }
-
-        if multipleVersions {
-            onLogUpdate("[5/6] Writing \(totalVersions) versions in parallel...")
+        if multi {
+            onLogUpdate("[5/6] Writing \(totalVersions) versions\(PARALLEL_WRITE_VERSIONS ? " in parallel" : "")...")
         } else {
-            onLogUpdate("[5/6] Version 1/1: \(states[0].name)")
+            onLogUpdate("[5/6] Version 1/1: \(versions[0])")
         }
 
-        // Vòng lặp: mỗi round chạy tất cả version chưa verify xong, song song
-        while states.contains(where: { !$0.verified && $0.attempts < 3 }) {
-            let pending = states.indices.filter { !states[$0].verified && states[$0].attempts < 3 }
-
-            await withTaskGroup(of: (Int, Bool, Error?).self) { group in
-                for idx in pending {
-                    let state = states[idx]
-                    let label = multipleVersions ? "[\(state.name)] " : ""
-
+        if PARALLEL_WRITE_VERSIONS && multi {
+            // ⚡ Parallel versions
+            try await withThrowingTaskGroup(of: String.self) { group in
+                for versionName in versions {
+                    let targetPath = "/var/mobile/Library/Caches/\(versionName)"
+                    let label = "[\(versionName)] "
                     group.addTask { [self] in
-                        let counter = WriteCounter()
-                        do {
-                            try await self.writeDir(
-                                pairingPath: pairPath,
-                                srcDir: stagePath,
-                                targetDir: state.targetPath,
-                                onLogUpdate: { line in
-                                    let current = counter.increment()
-                                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    guard !trimmed.isEmpty else { return }
-                                    // Chuẩn hoá prefix "write file ..."
-                                    let body = trimmed.lowercased().hasPrefix("write")
-                                        ? trimmed
-                                        : "write file \(trimmed)"
-                                    let msg = "  \(label)\(current)/\(totalPerVersion): \(body)"
-                                    DispatchQueue.main.async { onLogUpdate(msg) }
-                                }
-                            )
-                            let ok = await self.verifyFileExists(
-                                pairingPath: pairPath,
-                                remotePath: "\(state.targetPath)/\(sampleFile)"
-                            )
-                            return (idx, ok, nil)
-                        } catch {
-                            return (idx, false, error)
-                        }
+                        let localBQ = BadQuery()
+                        try await self.writeOneVersion(
+                            versionName: versionName,
+                            targetPath: targetPath,
+                            stagePath: stagePath,
+                            pairPath: pairPath,
+                            sampleFile: sampleFile,
+                            totalPerVersion: totalPerVersion,
+                            label: label,
+                            bq: localBQ,
+                            onLogUpdate: onLogUpdate
+                        )
+                        return versionName
                     }
                 }
-
-                for await (idx, ok, err) in group {
-                    states[idx].attempts += 1
-                    if ok {
-                        states[idx].verified = true
-                    } else {
-                        if let e = err { states[idx].lastError = e }
-                        let label = multipleVersions ? "[\(states[idx].name)] " : ""
-                        if states[idx].attempts < 3 {
-                            onLogUpdate("  \(label)Attempt \(states[idx].attempts) verify FAIL, retry...")
-                            if bq.grantAccess(atPath: states[idx].targetPath).0 {
-                                try? FileManager.default.removeItem(atPath: states[idx].targetPath)
-                            }
-                            try? FileManager.default.createDirectory(
-                                atPath: states[idx].targetPath,
-                                withIntermediateDirectories: true
-                            )
-                        }
-                    }
+                for try await name in group {
+                    onLogUpdate("  ✅ \(name): verified")
                 }
             }
-        }
-
-        // Ghi thời gian từng version (sau khi tất cả đã verify)
-        for i in states.indices where states[i].verified {
-            // ước lượng elapsed dựa trên tWrite (chỉ để log)
-            // (giữ đơn giản: không log per-version riêng khi parallel, chỉ log tổng)
-        }
-
-        // Check lỗi
-        for state in states where !state.verified {
-            throw NSError(
-                domain: "AirLift",
-                code: -40,
-                userInfo: [NSLocalizedDescriptionKey: "Ghi \(state.name) thất bại sau 3 lần. Lỗi cuối: \(state.lastError?.localizedDescription ?? "verify fail")"]
-            )
-        }
-
-        // In verify OK theo đúng thứ tự version
-        for state in states {
-            onLogUpdate("  ✅ \(state.name): verified")
+        } else {
+            // 🛡 Sequential (an toàn tuyệt đối)
+            let bq = BadQuery()
+            for (idx, versionName) in versions.enumerated() {
+                let targetPath = "/var/mobile/Library/Caches/\(versionName)"
+                let tVer = Date()
+                onLogUpdate("[5/6] Version \(idx+1)/\(totalVersions): \(versionName)")
+                try await writeOneVersion(
+                    versionName: versionName,
+                    targetPath: targetPath,
+                    stagePath: stagePath,
+                    pairPath: pairPath,
+                    sampleFile: sampleFile,
+                    totalPerVersion: totalPerVersion,
+                    label: "",
+                    bq: bq,
+                    onLogUpdate: onLogUpdate
+                )
+                let ms = Int(Date().timeIntervalSince(tVer) * 1000)
+                onLogUpdate("  ✅ \(versionName): verified (\(ms)ms)")
+            }
         }
 
         let writeMs = Int(Date().timeIntervalSince(tWrite) * 1000)
         let totalMs = Int(Date().timeIntervalSince(startTime) * 1000)
 
-        // 🏁 Chỉ in thời gian tổng ở cuối
+        // 🏁 Kết quả thời gian chỉ in ở cuối
         onLogUpdate("[6/6] Done")
         onLogUpdate("  Tổng file: \(totalPerVersion * totalVersions)")
         onLogUpdate("  Write: \(writeMs)ms")
@@ -511,7 +529,7 @@ class PasscodeThemeViewModel: ObservableObject {
         onLogUpdate("Reset Theme & Reboot để áp dụng")
     }
 
-    // MARK: - Reset (Y NGUYÊN)
+    // MARK: - Reset (chỉ version đã chọn)
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
@@ -521,11 +539,12 @@ class PasscodeThemeViewModel: ObservableObject {
             if activeTaskID == myID { activeTaskID = nil }
             isProcessing = false
         }
-        let cacheDirs = [
-            "/var/mobile/Library/Caches/TelephonyUI-10",
-            "/var/mobile/Library/Caches/TelephonyUI-9",
-            "/var/mobile/Library/Caches/TelephonyUI-8"
-        ]
+
+        // 🎯 Chỉ xoá folder của version đã chọn (không đụng version khác)
+        let telephony = store.globalTelephonyVersion
+        let versions = telephony.targetFolders
+        let cacheDirs = versions.map { "/var/mobile/Library/Caches/\($0)" }
+
         let bq = BadQuery()
         for dir in cacheDirs {
             if bq.grantAccess(atPath: dir).0 {
@@ -533,7 +552,7 @@ class PasscodeThemeViewModel: ObservableObject {
                 try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
             }
         }
-        onLogUpdate("Đã xoá Passcode Theme")
+        onLogUpdate("Đã xoá Passcode Theme (\(versions.count) folder: \(versions.joined(separator: ", ")))")
         onLogUpdate("Đang khởi động lại...")
         try await Task.sleep(nanoseconds: 800_000_000)
         RebootHelper.rebootDevice()
