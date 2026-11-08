@@ -5,7 +5,7 @@ import ZIPFoundation
 import AirliftFFI
 import Network
 
-// MARK: - Thread-safe counter cho progress từng file
+// MARK: - Counter an toàn luồng (background callback từ FFI)
 private final class WriteCounter: @unchecked Sendable {
     private var value = 0
     private let lock = NSLock()
@@ -13,6 +13,10 @@ private final class WriteCounter: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         value += 1
         return value
+    }
+    func reset() {
+        lock.lock(); defer { lock.unlock() }
+        value = 0
     }
 }
 
@@ -235,7 +239,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetPixelSize)) }
     }
 
-    // MARK: - writeDir (Y NGUYÊN)
+    // MARK: - writeDir (Y NGUYÊN — chỉ truyền callback thật)
     nonisolated private func writeDir(
         pairingPath: String,
         srcDir: String,
@@ -266,7 +270,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - VERIFY
+    // MARK: - VERIFY (Y NGUYÊN)
     nonisolated private func verifyFileExists(pairingPath: String, remotePath: String) async -> Bool {
         await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
             DispatchQueue.global(qos: .utility).async {
@@ -285,7 +289,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Apply Theme (chỉ đổi LOG, giữ nguyên logic)
+    // MARK: - Apply Theme (logic y nguyên — chỉ đổi log)
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
@@ -300,7 +304,7 @@ class PasscodeThemeViewModel: ObservableObject {
             isProcessing = false
         }
 
-        // ⏱️ Mốc thời gian bắt đầu tính từ lúc ấn Apply
+        // ⏱ Mốc bắt đầu tính từ lúc ấn Apply
         let startTime = Date()
 
         let language = self.store.globalCustomPrefix
@@ -316,9 +320,11 @@ class PasscodeThemeViewModel: ObservableObject {
 
         let processedFiles = try processThemeFiles(theme: theme, language: language, boldMode: boldMode)
         guard !processedFiles.isEmpty else { throw PasscodeThemeError.noImagesProcessed }
-        // +1 cho file marker `_big` được ghi kèm trong stage
+
+        // 🎯 ĐẾM ĐỘNG: tự co theo Lang/Bold đã chọn + 1 marker `_big`
         let totalPerVersion = processedFiles.count + 1
-        onLogUpdate("[2/6] Matrix: \(processedFiles.count) x \(totalVersions) = \(processedFiles.count * totalVersions) file")
+
+        onLogUpdate("[2/6] Matrix: \(totalPerVersion) file/version × \(totalVersions) = \(totalPerVersion * totalVersions) file")
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
         guard FileManager.default.fileExists(atPath: pairingURL.path) else {
@@ -363,11 +369,10 @@ class PasscodeThemeViewModel: ObservableObject {
             }
             try? FileManager.default.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
 
-            // Retry tối đa 3 lần, mỗi lần counter reset về 0
+            // Retry tối đa 3 lần — counter mới cho từng attempt
             var verified = false
             var lastError: Error?
             for attempt in 1...3 {
-                // Counter mới cho từng attempt → log dạng 1/54, 2/54, ..., 54/54
                 let counter = WriteCounter()
                 do {
                     try await writeDir(
@@ -376,8 +381,10 @@ class PasscodeThemeViewModel: ObservableObject {
                         targetDir: targetPath,
                         onLogUpdate: { line in
                             let current = counter.increment()
-                            let msg = "  \(current)/\(totalPerVersion): \(line)"
-                            // Callback native chạy trên background → đẩy về MainActor để an toàn
+                            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { return }
+                            let msg = "  \(current)/\(totalPerVersion): \(trimmed)"
+                            // Callback native chạy background → đẩy về MainActor
                             DispatchQueue.main.async { onLogUpdate(msg) }
                         }
                     )
@@ -410,16 +417,16 @@ class PasscodeThemeViewModel: ObservableObject {
             }
 
             let ms = Int(Date().timeIntervalSince(tVer) * 1000)
-            onLogUpdate("  -> \(versionName): verified (\(ms)ms)")
+            onLogUpdate("  ✅ \(versionName): verified (\(ms)ms)")
         }
         let writeMs = Int(Date().timeIntervalSince(tWrite) * 1000)
         let totalMs = Int(Date().timeIntervalSince(startTime) * 1000)
 
-        // 🏁 Chỉ in kết quả thời gian ở cuối
+        // 🏁 Kết quả thời gian chỉ in ở cuối
         onLogUpdate("[6/6] Done")
         onLogUpdate("  Tổng file: \(totalPerVersion * totalVersions)")
         onLogUpdate("  Write: \(writeMs)ms")
-        onLogUpdate(String(format: "  Elapsed (từ lúc ấn Apply): %.2fs", Double(totalMs) / 1000))
+        onLogUpdate(String(format: "  ⏱ Elapsed (từ lúc ấn Apply): %.2fs", Double(totalMs) / 1000))
         onLogUpdate("Reset Theme & Reboot để áp dụng")
     }
 
