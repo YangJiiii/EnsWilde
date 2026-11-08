@@ -42,7 +42,7 @@ struct AppleWalletView: View {
             
             Section {
                 Button { showApplyTab = true; showSavedAlert = true } label: {
-                    HStack { Image(systemName: "square.and.arrow.down"); Text("Save Changes").font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
+                    HStack { Image(systemName: "square.and.arrow.down"); Text(L("save_changes")).font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
                 }.disabled(!walletStore.appleWalletEnabled)
                 
                 Button(role: .destructive) {
@@ -50,7 +50,7 @@ struct AppleWalletView: View {
                     walletStore.appleWalletEnabled = false
                     walletStore.saveCards()
                 } label: {
-                    HStack { Image(systemName: "trash"); Text("Reset Wallet").font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
+                    HStack { Image(systemName: "trash"); Text(L("wallet_reset")).font(.headline) }.frame(maxWidth: .infinity).padding(.vertical, 4)
                 }
             }
         }
@@ -61,13 +61,14 @@ struct AppleWalletView: View {
         .sheet(isPresented: $showScanSheet) { ScanCardIDSheet(walletStore: walletStore, isPresented: $showScanSheet) }
         .sheet(isPresented: $showImportZIPSheet) { ImportDefaultCardSheet(walletStore: walletStore) }
         .alert(L("alert_error"), isPresented: $showErrorAlert) { Button(L("alert_ok")) {} } message: { Text(errorMessage) }
-        .alert("Saved", isPresented: $showSavedAlert) { Button("OK") {} } message: { Text("Tab Apply đã được mở. Chuyển sang tab Apply để áp dụng.") }
+        .alert(L("saved_title"), isPresented: $showSavedAlert) { Button(L("alert_ok")) {} } message: { Text(L("saved_message")) }
     }
 }
 
 // MARK: - Scan Card Sheet
 
 struct ScanCardIDSheet: View {
+    @ObservedObject private var localizationManager = LocalizationManager.shared
     @Environment(\.dismiss) var dismiss
     @ObservedObject var walletStore: AppleWalletStore
     @Binding var isPresented: Bool
@@ -96,7 +97,8 @@ struct ScanCardIDSheet: View {
                         }.frame(maxWidth: .infinity)
                         Text(scanStatus).font(.headline).multilineTextAlignment(.center)
                         if isScanning {
-                            Text(String(format: "%.0f / 60 seconds", elapsedTime)).font(.subheadline).foregroundStyle(.secondary)
+                            Text(L("wallet_scan_time_60s").replacingOccurrences(of: "{time}", with: String(format: "%.0f", elapsedTime)))
+                                .font(.subheadline).foregroundStyle(.secondary)
                             Text(L("wallet_scan_instruction")).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
                     }.padding(.vertical, 20)
@@ -121,22 +123,20 @@ struct ScanCardIDSheet: View {
     private func startScanning() {
         guard !isScanning else { return }
         
-        // 1. Kiểm tra VPN
         guard NetworkStatus.isVPNTunnelPresent() else {
-            scanStatus = "VPN chưa bật. Vui lòng bật LocalDevVPN để quét."
+            scanStatus = L("wallet_scan_vpn_required")
             return
         }
         
-        // 2. Kiểm tra Pairing File (Airlift cần file này)
         let pairingPath = URL.documentsDirectory.appendingPathComponent("pairingFile.plist").path
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            scanStatus = "Không tìm thấy Pairing File."
+            scanStatus = L("wallet_scan_pairing_missing")
             return
         }
         
         isScanning = true
         elapsedTime = 0
-        scanStatus = "Scanning... Open Apple Wallet now"
+        scanStatus = L("wallet_scan_scanning")
 
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
@@ -154,7 +154,7 @@ struct ScanCardIDSheet: View {
                     stopScanningTimerOnly()
                     let newCard = AppleWalletCard(id: cardID, name: "Card \(cardID.prefix(8))")
                     walletStore?.addCard(newCard)
-                    scanStatus = "✓ Successfully scanned card ID!"
+                    scanStatus = L("wallet_scan_success")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dismiss() }
                 }
             } catch is CancellationError {
@@ -163,7 +163,7 @@ struct ScanCardIDSheet: View {
                 await MainActor.run {
                     guard isScanning else { return }
                     stopScanningTimerOnly()
-                    scanStatus = "✗ Error: \(error.localizedDescription)"
+                    scanStatus = L("wallet_scan_error").replacingOccurrences(of: "{error}", with: error.localizedDescription)
                 }
             }
         }
@@ -190,7 +190,6 @@ struct ScanCardIDSheet: View {
 
 // MARK: - Airlift Syslog Scanner
 
-/// Box giữ tham chiếu closure Swift để C callback không bị giải phóng
 private final class SyslogContextBox {
     let onLine: (String) -> Void
     init(onLine: @escaping (String) -> Void) { self.onLine = onLine }
@@ -204,25 +203,21 @@ func scanOneWalletCardIDSafe(timeout: TimeInterval = 60) async throws -> String 
             var resumed = false
             let lock = NSLock()
             
-            // Helper đảm bảo continuation chỉ resume 1 lần duy nhất
             func safeResume(_ result: Result<String, Error>) {
                 lock.lock()
                 defer { lock.unlock() }
                 guard !resumed else { return }
                 resumed = true
                 continuation.resume(with: result)
-                al_syslog_stream_stop() // Tắt syslog sau khi lấy được ID hoặc timeout
+                al_syslog_stream_stop()
             }
 
-            // Hẹn giờ timeout
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                 safeResume(.failure(NSError(domain: "Scan", code: -2, userInfo: [NSLocalizedDescriptionKey: "Hết thời gian quét (60s)."])))
             }
 
-            // Bắt đầu Syslog bằng Airlift (chạy dưới background)
             DispatchQueue.global(qos: .userInitiated).async {
                 let box = SyslogContextBox { line in
-                    // Lọc log của passd
                     if line.localizedCaseInsensitiveContains("passd") || line.localizedCaseInsensitiveContains("Cards") {
                         if let cardID = extractWalletCardID(from: line) {
                             safeResume(.success(cardID))
@@ -231,7 +226,6 @@ func scanOneWalletCardIDSafe(timeout: TimeInterval = 60) async throws -> String 
                 }
                 let opaque = Unmanaged.passRetained(box).toOpaque()
                 
-                // C-convention callback cho Airlift
                 let cb: ALSyslogLineCallback = { ctx, msgPtr in
                     guard let ctx = ctx, let msgPtr = msgPtr else { return }
                     let box = Unmanaged<SyslogContextBox>.fromOpaque(ctx).takeUnretainedValue()
@@ -240,7 +234,6 @@ func scanOneWalletCardIDSafe(timeout: TimeInterval = 60) async throws -> String 
                 }
                 
                 var errPtr: UnsafeMutablePointer<CChar>? = nil
-                // Hàm này sẽ block thread hiện tại cho đến khi al_syslog_stream_stop() được gọi
                 let res = al_syslog_stream_start(pairingPath, cb, opaque, &errPtr)
                 
                 if res != 0 {
@@ -249,12 +242,10 @@ func scanOneWalletCardIDSafe(timeout: TimeInterval = 60) async throws -> String 
                     safeResume(.failure(NSError(domain: "Scan", code: Int(res), userInfo: [NSLocalizedDescriptionKey: msg])))
                 }
                 
-                // Giải phóng box sau khi stream dừng
                 Unmanaged<SyslogContextBox>.fromOpaque(opaque).release()
             }
         }
     } onCancel: {
-        // Nếu user bấm Cancel, dừng syslog
         al_syslog_stream_stop()
     }
 }
