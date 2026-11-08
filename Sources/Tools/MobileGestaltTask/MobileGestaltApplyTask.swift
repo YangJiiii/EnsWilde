@@ -38,10 +38,10 @@ enum MobileGestaltApplyTask {
         let fm = FileManager.default
         if !fm.isWritableFile(atPath: onDeviceMGPath) {
             onLogUpdate("[MG] Đang xin quyền ghi vào thư mục Caches...")
-            let bq = BadQuery()
-            let res = bq.grantAccess(atPath: mgDir)
+            let wq = WorseQuery()
+            let res = wq.grantAccess(atPath: mgDir)
             if !res.0 {
-                throw mgError(-5, "BadQuery grant access thất bại: \(res.2)")
+                throw mgError(-5, "WorseQuery grant access thất bại: \(res.2)")
             }
             onLogUpdate("[MG] ✅ Đã được cấp quyền ghi.")
         }
