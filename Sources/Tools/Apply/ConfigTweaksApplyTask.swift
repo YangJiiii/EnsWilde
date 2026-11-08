@@ -16,16 +16,16 @@ enum ConfigTweaksApplyTask {
             return
         }
 
-        let bq = BadQuery()
+        let wq = WorseQuery()
         let fm = FileManager.default
 
         // Xin quyền cho thư mục cha
         if !fm.isWritableFile(atPath: footnoteURL.path) || !fm.isWritableFile(atPath: supervisionURL.path) {
             onLogUpdate("[Config] Đang xin quyền ghi vào ConfigurationProfiles...")
-            let res = bq.grantAccess(atPath: configDir)
+            let res = wq.grantAccess(atPath: configDir)
             if !res.0 {
                 throw NSError(domain: "ConfigTweak", code: -1, userInfo: [
-                    NSLocalizedDescriptionKey: "BadQuery grant access thất bại: \(res.2)"
+                    NSLocalizedDescriptionKey: "WorseQuery grant access thất bại: \(res.2)"
                 ])
             }
             onLogUpdate("[Config] ✅ Đã được cấp quyền ghi.")
