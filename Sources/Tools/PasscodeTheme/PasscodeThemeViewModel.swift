@@ -5,7 +5,7 @@ import ZIPFoundation
 import AirliftFFI
 import Network
 
-// ⚡ Tắt song song: FFI al_exploit_write_dir KHÔNG thread-safe → gây loop khi Universal.
+// ⚡ FFI al_exploit_write_dir KHÔNG thread-safe → gây loop khi Universal.
 private let PARALLEL_WRITE_VERSIONS = false
 
 // MARK: - Counter an toàn luồng cho callback FFI
@@ -26,11 +26,6 @@ class PasscodeThemeViewModel: ObservableObject {
     private var activeTaskID: UUID?
     private let store: PasscodeThemeStore
 
-    /// 🎯 Auto-detect từ `IOSSupportChecker`. Chỉ override khi cần test.
-    /// - `true`  → Native path (BadQuery + FileManager), nhanh ~3–5s
-    /// - `false` → Airlift FFI qua tunnel (máy bị block → user đã bấm "Continue with Airlift")
-    var isIOSSupported: Bool = IOSSupportChecker.isCurrentIOSSupported
-
     init(store: PasscodeThemeStore) { self.store = store }
 
     // MARK: - Nhận dạng loại file passcode theme
@@ -48,7 +43,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Import ⚡ copyItem trực tiếp
+    // MARK: - Import ⚡ copyItem trực tiếp, không load RAM
     func importTheme(from sourceURL: URL, name: String) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
@@ -218,7 +213,6 @@ class PasscodeThemeViewModel: ObservableObject {
         case .both: boldSuffixes = ["", "-bold"]
         }
 
-        // Đúng y logic resizeImage: chỉ resize khi small↔big NGƯỢC nhau
         let needsResize = (theme.detectedSize == .small && theme.keySize == .big) ||
                           (theme.detectedSize == .big && theme.keySize == .small)
 
@@ -235,7 +229,7 @@ class PasscodeThemeViewModel: ObservableObject {
                 let srcExt = (filename as NSString).pathExtension.lowercased()
                 let imageData: Data
 
-                // 🚀 FAST PATH: PNG + không cần resize → copy bytes gốc. Pixel y hệt.
+                // 🚀 FAST PATH: PNG + không cần resize → dùng bytes gốc
                 if !needsResize && srcExt == "png" {
                     guard let raw = try? Data(contentsOf: sourceURL) else { return }
                     imageData = raw
@@ -396,64 +390,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return n + 1
     }
 
-    // MARK: - writeOneVersionNative ⚡ NATIVE PATH (iOS supported)
-    nonisolated private func writeOneVersionNative(
-        versionName: String,
-        targetPath: String,
-        stagePath: String,
-        sampleFile: String,
-        bq: BadQuery,
-        totalPerVersion: Int,
-        onLogUpdate: @escaping (String) -> Void
-    ) throws {
-        let fm = FileManager.default
-
-        _ = bq.grantAccess(atPath: targetPath)
-        try? fm.removeItem(atPath: targetPath)
-        try fm.createDirectory(atPath: targetPath, withIntermediateDirectories: true)
-
-        let items: [String]
-        do {
-            items = try fm.contentsOfDirectory(atPath: stagePath)
-        } catch {
-            throw NSError(domain: "AirLift", code: -41,
-                          userInfo: [NSLocalizedDescriptionKey: "Native: không đọc được stage \(stagePath): \(error.localizedDescription)"])
-        }
-
-        var count = 0
-        var grantedRetry = false
-
-        for name in items {
-            let src = (stagePath as NSString).appendingPathComponent(name)
-            let dst = (targetPath as NSString).appendingPathComponent(name)
-
-            // Hardlink O(1) nếu cùng volume (thường vậy: /tmp → /var/mobile đều APFS)
-            if (try? fm.linkItem(atPath: src, toPath: dst)) == nil {
-                do {
-                    try fm.copyItem(atPath: src, toPath: dst)
-                } catch {
-                    if !grantedRetry {
-                        _ = bq.grantAccess(atPath: targetPath)
-                        grantedRetry = true
-                    }
-                    try fm.copyItem(atPath: src, toPath: dst)
-                }
-            }
-            count += 1
-            if count % 100 == 0 || count == items.count {
-                let msg = "  \(count)/\(totalPerVersion): write file \(name)"
-                DispatchQueue.main.async { onLogUpdate(msg) }
-            }
-        }
-
-        let verifyPath = (targetPath as NSString).appendingPathComponent(sampleFile)
-        guard fm.fileExists(atPath: verifyPath) else {
-            throw NSError(domain: "AirLift", code: -43,
-                          userInfo: [NSLocalizedDescriptionKey: "Native: verify fail — \(sampleFile) không tồn tại sau write \(versionName)."])
-        }
-    }
-
-    // MARK: - writeOneVersion FFI (Y NGUYÊN — Airlift path)
+    // MARK: - Write 1 version + verify + retry (Y NGUYÊN)
     nonisolated private func writeOneVersion(
         versionName: String,
         targetPath: String,
@@ -464,6 +401,7 @@ class PasscodeThemeViewModel: ObservableObject {
         bq: BadQuery,
         onLogUpdate: @escaping (String) -> Void
     ) async throws {
+        // Xoá folder đích trước khi ghi (BadQuery + FFI đều cần target rỗng)
         if bq.grantAccess(atPath: targetPath).0 {
             try? FileManager.default.removeItem(atPath: targetPath)
         }
@@ -507,7 +445,7 @@ class PasscodeThemeViewModel: ObservableObject {
         )
     }
 
-    // MARK: - Apply Theme ⚡ Transport tự chọn + tunnel detect song song
+    // MARK: - Apply Theme ⚡ Airlift-only + tunnel detect song song
     func applyTheme(
         _ theme: PasscodeTheme,
         store: ToolStore,
@@ -526,7 +464,6 @@ class PasscodeThemeViewModel: ObservableObject {
         let language = self.store.globalCustomPrefix
         let boldMode = self.store.globalBoldMode
         let telephony = self.store.globalTelephonyVersion
-        let useNative = isIOSSupported   // ← auto từ IOSSupportChecker
 
         var seenVersions = Set<String>()
         let rawVersions = telephony.targetFolders
@@ -538,32 +475,26 @@ class PasscodeThemeViewModel: ObservableObject {
         let totalVersions = versions.count
 
         onLogUpdate("[1/6] Prepare: Lang=\(language.displayName), Bold=\(boldMode.rawValue), Ver=\(telephony.displayName)")
-        onLogUpdate("  → Transport: \(useNative ? "Native (BadQuery + FileManager)" : "Airlift FFI")")
         if rawVersions.count != versions.count {
             onLogUpdate("  ⚠️ targetFolders có phần tử trùng: \(rawVersions) → đã lọc còn \(versions)")
         }
         onLogUpdate("  → Sẽ ghi \(totalVersions) folder: \(versions.joined(separator: " → "))")
 
         let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
-        if !useNative {
-            guard FileManager.default.fileExists(atPath: pairingURL.path) else {
-                throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."])
-            }
-            guard NetworkStatus.isVPNTunnelPresent() else {
-                throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
-            }
+        guard FileManager.default.fileExists(atPath: pairingURL.path) else {
+            throw NSError(domain: "AirLift", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy Pairing File."])
+        }
+        guard NetworkStatus.isVPNTunnelPresent() else {
+            throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
         }
 
-        // 🚀 Tunnel detect SONG SONG với process + stage (chỉ airlift mode)
-        var tunnelTask: Task<Bool, Never>? = nil
-        if !useNative {
-            onLogUpdate("[3/6] Dò tunnel (song song với process)...")
-            let logCb = onLogUpdate
-            tunnelTask = Task.detached(priority: .userInitiated) {
-                await AirliftHostResolver.bestAvailable(log: logCb) != nil
-            }
+        // 🚀 Tunnel detect SONG SONG với process + stage
+        onLogUpdate("[3/6] Dò tunnel (song song với process)...")
+        let logCb = onLogUpdate
+        let tunnelTask = Task.detached(priority: .userInitiated) {
+            await AirliftHostResolver.bestAvailable(log: logCb) != nil
         }
-        defer { tunnelTask?.cancel() }
+        defer { tunnelTask.cancel() }
 
         let tProcess = Date()
         let processedFiles = try processThemeFiles(theme: theme, language: language, boldMode: boldMode)
@@ -580,19 +511,18 @@ class PasscodeThemeViewModel: ObservableObject {
 
         onLogUpdate("[2/6] Matrix: \(totalPerVersion) file/version × \(totalVersions) = \(totalPerVersion * totalVersions) file (process \(processMs)ms, stage \(stageMs)ms)")
 
-        if let tunnelTask {
-            let tTunnel = Date()
-            let tunnelOK = await tunnelTask.value
-            let tunnelMs = Int(Date().timeIntervalSince(tTunnel) * 1000)
-            if !tunnelOK {
-                throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN."])
-            }
-            onLogUpdate("[3/6] Tunnel OK (await \(tunnelMs)ms)")
+        let tTunnel = Date()
+        let tunnelOK = await tunnelTask.value
+        let tunnelMs = Int(Date().timeIntervalSince(tTunnel) * 1000)
+        if !tunnelOK {
+            throw NSError(domain: "AirLift", code: -3, userInfo: [NSLocalizedDescriptionKey: "Không kết nối được tới VPN."])
         }
+        onLogUpdate("[3/6] Tunnel OK (await \(tunnelMs)ms)")
 
         let pairPath = pairingURL.path
         let stagePath = stageDir.path
         let sampleFile = processedFiles.first!.filename
+
         let bq = BadQuery()
         var perVersionTimes: [(String, Int)] = []
         let tWrite = Date()
@@ -600,30 +530,18 @@ class PasscodeThemeViewModel: ObservableObject {
         for (idx, versionName) in versions.enumerated() {
             let targetPath = "/var/mobile/Library/Caches/\(versionName)"
             let tVer = Date()
-            onLogUpdate("[4/6] Version \(idx+1)/\(totalVersions): \(versionName)\(useNative ? " [native]" : "")")
+            onLogUpdate("[4/6] Version \(idx+1)/\(totalVersions): \(versionName)")
 
-            if useNative {
-                try writeOneVersionNative(
-                    versionName: versionName,
-                    targetPath: targetPath,
-                    stagePath: stagePath,
-                    sampleFile: sampleFile,
-                    bq: bq,
-                    totalPerVersion: totalPerVersion,
-                    onLogUpdate: onLogUpdate
-                )
-            } else {
-                try await writeOneVersion(
-                    versionName: versionName,
-                    targetPath: targetPath,
-                    stagePath: stagePath,
-                    pairPath: pairPath,
-                    sampleFile: sampleFile,
-                    totalPerVersion: totalPerVersion,
-                    bq: bq,
-                    onLogUpdate: onLogUpdate
-                )
-            }
+            try await writeOneVersion(
+                versionName: versionName,
+                targetPath: targetPath,
+                stagePath: stagePath,
+                pairPath: pairPath,
+                sampleFile: sampleFile,
+                totalPerVersion: totalPerVersion,
+                bq: bq,
+                onLogUpdate: onLogUpdate
+            )
 
             let ms = Int(Date().timeIntervalSince(tVer) * 1000)
             perVersionTimes.append((versionName, ms))
