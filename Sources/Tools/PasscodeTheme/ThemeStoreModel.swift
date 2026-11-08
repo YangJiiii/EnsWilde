@@ -2,7 +2,7 @@ import Foundation
 import ZIPFoundation
 
 struct ThemeRepository: Codable, Identifiable {
-    let url: String              // themesJSONURL
+    let url: String
     var name: String
     var iconURL: String?
     var parentIndex: String?
@@ -37,14 +37,18 @@ class ThemeStoreManager: ObservableObject {
     @Published var downloadingThemes: Set<String> = []
     @Published var selectedRepository: ThemeRepository?
 
-    // 🎯 Repo mặc định — EnsWilde Repository
+    // 🎯 Repo mặc định — tên hiển thị CHÍNH XÁC
     private static let defaultRepoURL = "https://raw.githubusercontent.com/nguyenls3005-cell/EnsWilde-Repository/main/themes.json"
     private static let defaultRepoName = "EnsWilde Repository"
 
-    // v3: reset cache cũ
-    private let savedReposKey = "enswilde.themeStoreRepos.v3"
+    // 🔄 v4: reset cache hoàn toàn để xoá tên cũ
+    private let savedReposKey = "enswilde.themeStoreRepos.v4"
 
     init() {
+        // 🧹 Xoá sạch cache cũ (v2 + v3) khi upgrade lên v4
+        UserDefaults.standard.removeObject(forKey: "enswilde.themeStoreRepos.v2")
+        UserDefaults.standard.removeObject(forKey: "enswilde.themeStoreRepos.v3")
+
         loadSavedRepos()
         if needsReset() {
             Task { await bootstrapDefault() }
@@ -53,14 +57,25 @@ class ThemeStoreManager: ObservableObject {
 
     private func needsReset() -> Bool {
         if repositories.isEmpty { return true }
+
+        // Không có repo mặc định → cần reset
         let hasDefault = repositories.contains { $0.url == Self.defaultRepoURL }
         if !hasDefault { return true }
+
+        // Tên repo mặc định bị sai → cần reset
+        if let defRepo = repositories.first(where: { $0.url == Self.defaultRepoURL }),
+           defRepo.name != Self.defaultRepoName {
+            return true
+        }
+
+        // Còn repo legacy → cần reset
         let hasLegacy = repositories.contains { repo in
             let u = repo.url.lowercased()
             let n = repo.name.lowercased()
             return u.contains("nugget") || u.contains("serstars") ||
                    u.contains("yangjiii") || u.contains("yangjii") ||
-                   n.contains("nugget") || n.contains("yangjii")
+                   n.contains("nugget") || n.contains("yangjii") ||
+                   n.contains("ls nguyen") || n.contains("lsnguyen")
         }
         return hasLegacy
     }
@@ -86,13 +101,17 @@ class ThemeStoreManager: ObservableObject {
         for r in repositories {
             let u = r.url.lowercased()
             let n = r.name.lowercased()
+            // Bỏ legacy
             if u.contains("nugget") || u.contains("serstars") ||
                u.contains("yangjiii") || u.contains("yangjii") ||
-               n.contains("nugget") || n.contains("yangjii") { continue }
+               n.contains("nugget") || n.contains("yangjii") ||
+               n.contains("ls nguyen") || n.contains("lsnguyen") { continue }
+            // Bỏ nếu trùng URL mặc định (sẽ thêm lại bên dưới với tên đúng)
             if r.url == Self.defaultRepoURL { continue }
             kept.append(r)
         }
 
+        // 🎯 Repo mặc định — LUÔN tên "EnsWilde Repository"
         let defaultRepo = ThemeRepository(
             url: Self.defaultRepoURL,
             name: Self.defaultRepoName,
@@ -138,7 +157,9 @@ class ThemeStoreManager: ObservableObject {
                   let base = dict["baseURL"] as? String,
                   let themes = dict["themesURL"] as? String else { continue }
             let iconURL = await fetchIconFromSubRepo(themesURL: themes, baseURL: base)
-            newRepos.append(ThemeRepository(url: themes, name: name, iconURL: iconURL, parentIndex: parentIndex))
+            // 🎯 Nếu URL trùng repo mặc định → force tên
+            let finalName = (themes == Self.defaultRepoURL) ? Self.defaultRepoName : name
+            newRepos.append(ThemeRepository(url: themes, name: finalName, iconURL: iconURL, parentIndex: parentIndex))
         }
         for repo in newRepos {
             if !repositories.contains(where: { $0.url == repo.url }) {
@@ -160,6 +181,16 @@ class ThemeStoreManager: ObservableObject {
     }
 
     private func parseDirectRepo(url: URL, data: Data) throws -> ThemeRepository {
+        // 🎯 Force tên nếu URL là repo mặc định
+        if url.absoluteString == Self.defaultRepoURL {
+            return ThemeRepository(
+                url: Self.defaultRepoURL,
+                name: Self.defaultRepoName,
+                iconURL: nil,
+                parentIndex: nil
+            )
+        }
+
         let baseURLString = url.deletingLastPathComponent().absoluteString
         let defaultName = Self.deriveNameFromURL(url)
         if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
