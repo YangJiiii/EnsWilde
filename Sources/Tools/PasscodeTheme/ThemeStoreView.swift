@@ -1,7 +1,5 @@
 import SwiftUI
 
-// MARK: - Root Theme Store View
-
 struct ThemeStoreView: View {
     @StateObject private var storeManager = ThemeStoreManager()
     @ObservedObject var themeStore: PasscodeThemeStore
@@ -9,26 +7,13 @@ struct ThemeStoreView: View {
     
     var body: some View {
         Group {
-            if let indexed = storeManager.selectedIndexedRepo {
+            if let repo = storeManager.selectedRepository {
                 ThemesListView(
-                    title: indexed.name,
+                    title: repo.name,
                     themeStore: themeStore,
                     storeManager: storeManager,
-                    backAction: { storeManager.backToIndexedRepos() },
-                    backLabel: storeManager.selectedRepository?.name ?? "Back"
+                    backAction: { storeManager.backToRepositories() }
                 )
-            } else if let repo = storeManager.selectedRepository {
-                if repo.isIndex {
-                    IndexedRepositoriesListView(storeManager: storeManager, themeStore: themeStore)
-                } else {
-                    ThemesListView(
-                        title: repo.name,
-                        themeStore: themeStore,
-                        storeManager: storeManager,
-                        backAction: { storeManager.backToRepositories() },
-                        backLabel: "Theme Store"
-                    )
-                }
             } else {
                 RepositoriesListView(storeManager: storeManager)
             }
@@ -47,29 +32,29 @@ struct ThemeStoreView: View {
     }
 }
 
-// MARK: - Repositories List
+// MARK: - Repos List
 
 struct RepositoriesListView: View {
     @ObservedObject var storeManager: ThemeStoreManager
     
     var body: some View {
         Form {
-            if storeManager.isLoading {
+            if storeManager.isLoading && storeManager.repositories.isEmpty {
                 Section { HStack { Spacer(); ProgressView(); Spacer() }.padding(.vertical, 20) }
             } else if storeManager.repositories.isEmpty {
                 Section {
                     VStack(spacing: 12) {
                         Image(systemName: "folder").font(.system(size: 48)).foregroundStyle(.secondary)
-                        Text("No repos added. Tap + to add.").font(.subheadline).foregroundStyle(.secondary)
+                        Text("No repos. Tap + to add.").font(.subheadline).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity).padding(.vertical, 20)
                 }
             } else {
                 Section(header: Text("Repositories")) {
                     ForEach(storeManager.repositories) { repo in
-                        RepositoryRowView(repository: repo, storeManager: storeManager)
+                        RepoRow(repo: repo, storeManager: storeManager)
                             .contextMenu {
                                 Button(role: .destructive) { storeManager.removeRepo(repo) } label: {
-                                    Label("Delete Repo", systemImage: "trash")
+                                    Label(repo.parentIndex != nil ? "Delete Group" : "Delete Repo", systemImage: "trash")
                                 }
                             }
                     }
@@ -80,135 +65,97 @@ struct RepositoriesListView: View {
     }
 }
 
-// MARK: - Repository Row
-
-struct RepositoryRowView: View {
-    let repository: ThemeRepository
+struct RepoRow: View {
+    let repo: ThemeRepository
     @ObservedObject var storeManager: ThemeStoreManager
     @State private var themeCount: Int?
     
     var body: some View {
         Button {
-            Task {
-                if repository.isIndex { await storeManager.fetchIndexedRepos(from: repository) }
-                else { await storeManager.fetchThemes(from: repository) }
-            }
+            Task { await storeManager.fetchThemes(from: repo) }
         } label: {
             HStack(spacing: 12) {
-                repoIcon.frame(width: 40, height: 40)
+                iconView.frame(width: 40, height: 40)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(repository.name).font(.body).foregroundStyle(.primary)
-                    if let count = themeCount {
-                        Text("\(count) themes").font(.caption).foregroundStyle(.secondary)
-                    } else if repository.isIndex {
-                        Text("Index · Tap to open").font(.caption).foregroundStyle(.secondary)
+                    Text(repo.name)
+                        .foregroundColor(.primary)     // ← chữ trắng, không cam
+                        .font(.body)
+                    if let c = themeCount {
+                        Text("\(c) themes").font(.caption).foregroundColor(.secondary)
                     } else {
-                        Text("Loading...").font(.caption).foregroundStyle(.secondary)
+                        Text("Loading...").font(.caption).foregroundColor(.secondary)
                     }
                 }
                 Spacer()
             }
         }
+        .buttonStyle(PlainButtonStyle())               // ← loại bỏ tint cam của Button
         .task { await fetchCount() }
     }
     
-    @ViewBuilder private var repoIcon: some View {
-        if let iconStr = repository.iconURL, let url = URL(string: iconStr) {
+    @ViewBuilder private var iconView: some View {
+        if let s = repo.iconURL, let url = URL(string: s) {
             AsyncImage(url: url) { phase in
-                if case .success(let image) = phase {
-                    image.resizable().aspectRatio(contentMode: .fill).clipShape(RoundedRectangle(cornerRadius: 8))
-                } else {
-                    Image(systemName: "folder.fill").font(.system(size: 22)).foregroundStyle(.secondary).frame(width: 40, height: 40)
-                }
+                if case .success(let img) = phase {
+                    img.resizable().aspectRatio(contentMode: .fill)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else { fallback }
             }
-        } else {
-            Image(systemName: "folder.fill").font(.system(size: 22)).foregroundStyle(.secondary).frame(width: 40, height: 40)
-        }
+        } else { fallback }
+    }
+    
+    private var fallback: some View {
+        Image(systemName: "folder.fill")
+            .font(.system(size: 22))
+            .foregroundColor(.secondary)               // ← xám
+            .frame(width: 40, height: 40)
     }
     
     private func fetchCount() async {
-        guard let url = repository.jsonURL else { return }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            if let json = try? JSONSerialization.jsonObject(with: data) {
-                if let arr = json as? [[String: Any]], arr.contains(where: { $0["baseURL"] != nil }) {
-                    themeCount = nil // Is index
-                } else if let dict = json as? [String: Any] {
-                    themeCount = (dict["themes"] as? [[String: Any]] ?? dict["packages"] as? [[String: Any]])?.count
-                } else if let arr = json as? [[String: Any]] {
-                    themeCount = arr.count
-                }
-            }
-        } catch { }
-    }
-}
-
-// MARK: - Indexed Sub-repos List
-
-struct IndexedRepositoriesListView: View {
-    @ObservedObject var storeManager: ThemeStoreManager
-    @ObservedObject var themeStore: PasscodeThemeStore
-    
-    var body: some View {
-        Form {
-            if storeManager.isLoading {
-                Section { HStack { Spacer(); ProgressView(); Spacer() }.padding(.vertical, 20) }
-            } else if storeManager.indexedRepositories.isEmpty {
-                Section { Text("No sub-repos found.").foregroundStyle(.secondary) }
-            } else {
-                Section {
-                    ForEach(storeManager.indexedRepositories) { indexed in
-                        Button {
-                            Task { await storeManager.fetchThemes(from: indexed) }
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "folder.fill").font(.system(size: 22)).foregroundStyle(.secondary).frame(width: 40, height: 40)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(indexed.name).foregroundStyle(.primary)
-                                    Text("Tap to open").font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .navigationTitle(storeManager.selectedRepository?.name ?? "Repos")
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button { storeManager.backToRepositories() } label: {
-                    HStack(spacing: 4) { Image(systemName: "chevron.left"); Text("Theme Store") }
-                }
-            }
+        guard let url = repo.jsonURL else { return }
+        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return }
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return }
+        if let d = json as? [String: Any] {
+            themeCount = (d["themes"] as? [[String: Any]] ?? d["packages"] as? [[String: Any]])?.count
+        } else if let a = json as? [[String: Any]] {
+            themeCount = a.count
         }
     }
 }
 
-// MARK: - Themes Grid List
+// MARK: - Themes Grid
 
 struct ThemesListView: View {
     let title: String
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var storeManager: ThemeStoreManager
     let backAction: () -> Void
-    let backLabel: String
     
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
     
     var body: some View {
         ScrollView {
             if storeManager.isLoading {
-                ProgressView("Loading...").frame(maxWidth: .infinity).padding(.top, 60)
+                ProgressView().frame(maxWidth: .infinity).padding(.top, 60)
+            } else if let error = storeManager.errorMessage {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle").font(.system(size: 48)).foregroundStyle(.red)
+                    Text(error).foregroundColor(.secondary).multilineTextAlignment(.center)
+                    Button("Retry") {
+                        if let r = storeManager.selectedRepository {
+                            Task { await storeManager.fetchThemes(from: r) }
+                        }
+                    }
+                }.padding(.top, 60)
             } else if storeManager.remoteThemes.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "photo.on.rectangle.angled").font(.system(size: 48)).foregroundStyle(.secondary)
-                    Text("No themes found.").foregroundStyle(.secondary)
+                    Text("No themes found.").foregroundColor(.secondary)
                 }.padding(.top, 60)
             } else {
                 LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(storeManager.remoteThemes) { theme in
-                        RemoteThemeCardView(theme: theme, themeStore: themeStore, storeManager: storeManager)
+                        ThemeCard(theme: theme, themeStore: themeStore, storeManager: storeManager)
                     }
                 }.padding(16)
             }
@@ -218,50 +165,49 @@ struct ThemesListView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button(action: backAction) {
-                    HStack(spacing: 4) { Image(systemName: "chevron.left"); Text(backLabel) }
+                    HStack(spacing: 4) { Image(systemName: "chevron.left"); Text("Theme Store") }
                 }
             }
         }
     }
 }
 
-// MARK: - Theme Card
-
-struct RemoteThemeCardView: View {
+struct ThemeCard: View {
     let theme: RemoteTheme
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var storeManager: ThemeStoreManager
     @State private var previewImage: UIImage?
     @State private var isDownloading = false
-    @State private var showErrorAlert = false
-    @State private var errorMessage = ""
+    @State private var showError = false
+    @State private var errorMsg = ""
     
     private var isDownloaded: Bool { themeStore.themes.contains { $0.name == theme.name } }
     
     var body: some View {
         VStack(spacing: 8) {
             if let img = previewImage {
-                Image(uiImage: img).resizable().aspectRatio(contentMode: .fill).frame(height: 120).clipped().cornerRadius(10)
+                Image(uiImage: img).resizable().aspectRatio(contentMode: .fill)
+                    .frame(height: 120).clipped().cornerRadius(10)
             } else {
-                RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.15)).frame(height: 120).overlay(ProgressView())
+                RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.15))
+                    .frame(height: 120).overlay(ProgressView())
             }
-            
             VStack(alignment: .leading, spacing: 2) {
-                Text(theme.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
-                Text("by \(theme.authors)").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(theme.name).font(.subheadline.weight(.semibold)).foregroundColor(.primary).lineLimit(1)
+                Text("by \(theme.authors)").font(.caption2).foregroundColor(.secondary).lineLimit(1)
             }.frame(maxWidth: .infinity, alignment: .leading)
             
             if isDownloaded {
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark.circle.fill").font(.caption2)
                     Text("Downloaded").font(.caption2.weight(.semibold))
-                }.foregroundStyle(.green).frame(maxWidth: .infinity).frame(height: 32)
+                }.foregroundColor(.green).frame(maxWidth: .infinity).frame(height: 32)
             } else {
-                Button { downloadTheme() } label: {
+                Button { download() } label: {
                     HStack(spacing: 4) {
                         if isDownloading { ProgressView().controlSize(.mini) }
                         else { Image(systemName: "arrow.down.circle.fill").font(.caption2) }
-                        Text(isDownloading ? "Downloading..." : "Download").font(.caption2.weight(.semibold))
+                        Text(isDownloading ? "Downloading" : "Download").font(.caption2.weight(.semibold))
                     }
                     .frame(maxWidth: .infinity).frame(height: 32)
                     .background(AppTheme.accent).foregroundColor(.white)
@@ -271,7 +217,7 @@ struct RemoteThemeCardView: View {
         }
         .padding(10).background(Color(.secondarySystemGroupedBackground)).cornerRadius(14)
         .task { await loadPreview() }
-        .alert("Error", isPresented: $showErrorAlert) { Button("OK") {} } message: { Text(errorMessage) }
+        .alert("Error", isPresented: $showError) { Button("OK") {} } message: { Text(errorMsg) }
     }
     
     private func loadPreview() async {
@@ -281,14 +227,14 @@ struct RemoteThemeCardView: View {
         }
     }
     
-    private func downloadTheme() {
+    private func download() {
         isDownloading = true
         Task {
             do {
                 try await storeManager.downloadAndImportTheme(theme, themeStore: themeStore)
                 await MainActor.run { isDownloading = false }
             } catch {
-                await MainActor.run { isDownloading = false; errorMessage = error.localizedDescription; showErrorAlert = true }
+                await MainActor.run { isDownloading = false; errorMsg = error.localizedDescription; showError = true }
             }
         }
     }
@@ -310,14 +256,11 @@ struct AddRepoSheet: View {
                     TextField("https://...", text: $urlText)
                         .autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
                         .font(.system(.body, design: .monospaced))
-                } header: { Text("Repo JSON URL") } footer: {
-                    Text("Supports index files or direct theme JSONs. Auto-detects name & icon.")
+                } header: { Text("JSON URL") } footer: {
+                    Text("Paste a direct themes JSON or an index. Index auto-flattens into separate repos.")
                 }
-                
                 if let err = errorText {
-                    Section {
-                        Text(err).foregroundStyle(.red).font(.footnote)
-                    }
+                    Section { Text(err).foregroundColor(.red).font(.footnote) }
                 }
             }
             .navigationTitle("Add Repo").navigationBarTitleDisplayMode(.inline)
