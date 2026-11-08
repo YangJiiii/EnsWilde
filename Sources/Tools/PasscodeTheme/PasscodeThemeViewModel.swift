@@ -122,7 +122,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return md as Data
     }
 
-    // MARK: - Stage (Hard Link + Parallelism 6)
+    // MARK: - Stage (GHI TỪNG FILE THỰC, KHÔNG HARD LINK)
     nonisolated private func stageFiles(theme: PasscodeTheme, language: PasscodeTheme.PrefixLanguage, boldMode: PasscodeTheme.BoldMode, into dir: URL) throws -> Int {
         let images = theme.getImageFiles()
         guard !images.isEmpty else { throw PasscodeThemeError.noImagesFound }
@@ -135,43 +135,37 @@ class PasscodeThemeViewModel: ObservableObject {
         let ukSubs: [String: String] = ["2": "А Б В Г", "3": "Д Е Ж З", "4": "І Ї Й К", "5": "Л М Н О", "6": "П Р С Т", "7": "У Ф Х Ц", "8": "Ч Ш Щ Ь", "9": "Ю Я"]
         let bold: [String] = (boldMode == .both) ? ["", "-bold"] : (boldMode == .bold ? ["-bold"] : [""])
         
-        struct T { let master: String; let data: Data; let links: [String] }
-        var tasks: [T] = []
+        // Sử dụng FileHandle để ghi song song, mỗi file là 1 inode vật lý thực
+        var fileCount = 0
+        let lock = NSLock()
+        
         for f in images {
             let u = theme.themeFolderURL.appendingPathComponent(f)
             guard let d = PasscodeThemeViewModel.extractDigitStatic(from: f), let data = fastEncode(at: u, targetSize: theme.keySize) else { continue }
             let stdSub = subs[d] ?? ""; let ruSub = ruSubs[d]; let ukSub = ukSubs[d]
-            var names: [String] = []
+            
             for l in locales {
                 for b in bold {
-                    names.append("\(l)-\(d)---white\(b).png")
-                    if !stdSub.isEmpty {
-                        // Bỏ variant noSpace (iOS fallback về file có space hoặc file gốc)
-                        names.append("\(l)-\(d)-\(stdSub)--white\(b).png")
+                    // Ghi từng file thực (không hard link)
+                    let names: [String] = {
+                        var ns = ["\(l)-\(d)---white\(b).png"]
+                        if !stdSub.isEmpty { ns.append("\(l)-\(d)-\(stdSub)--white\(b).png") }
+                        if l == "ru" || language == .universal, let s = ruSub { ns.append("\(l)-\(d)-\(s)--white\(b).png") }
+                        if l == "uk" || language == .universal, let s = ukSub { ns.append("\(l)-\(d)-\(s)--white\(b).png") }
+                        return ns
+                    }()
+                    
+                    for n in names {
+                        let dst = dir.appendingPathComponent(n)
+                        try? data.write(to: dst, options: .atomic)
+                        lock.lock(); fileCount += 1; lock.unlock()
                     }
-                    if l == "ru" || language == .universal, let s = ruSub { names.append("\(l)-\(d)-\(s)--white\(b).png") }
-                    if l == "uk" || language == .universal, let s = ukSub { names.append("\(l)-\(d)-\(s)--white\(b).png") }
                 }
             }
-            guard let m = names.first else { continue }
-            tasks.append(T(master: m, data: data, links: Array(names.dropFirst())))
         }
         
-        var total = 0; let lock = NSLock()
-        // Parallelism 6
-        DispatchQueue.concurrentPerform(iterations: tasks.count) { i in
-            let t = tasks[i]
-            let masterURL = dir.appendingPathComponent(t.master)
-            try? t.data.write(to: masterURL)
-            for n in t.links {
-                let u = dir.appendingPathComponent(n)
-                do { try FileManager.default.linkItem(at: masterURL, to: u) }
-                catch { try? FileManager.default.copyItem(at: masterURL, to: u) }
-            }
-            lock.lock(); total += 1 + t.links.count; lock.unlock()
-        }
         try? Data().write(to: dir.appendingPathComponent("_big"))
-        return total + 1
+        return fileCount + 1
     }
 
     // MARK: - Airlift write
@@ -205,6 +199,18 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
+    nonisolated private func verifyFile(pairingPath: String, iosPath: String) async -> Bool {
+        await withCheckedContinuation { c in
+            DispatchQueue.global(qos: .utility).async {
+                var data: UnsafeMutablePointer<UInt8>? = nil; var len = 0; var err: UnsafeMutablePointer<CChar>? = nil
+                let r = pairingPath.withCString { p in iosPath.withCString { i in al_exploit_read_file(p, i, nil, nil, &data, &len, &err) } }
+                if let p = data, len > 0 { al_bytes_free(p, len) }
+                if let e = err { al_string_free(e) }
+                c.resume(returning: r == 0 && len > 0)
+            }
+        }
+    }
+
     // MARK: - Apply
     func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         isProcessing = true
@@ -229,7 +235,14 @@ class PasscodeThemeViewModel: ObservableObject {
         let tStage = Date()
         let count = try stageFiles(theme: theme, language: lang, boldMode: boldMode, into: stage)
         guard count > 0 else { throw PasscodeThemeError.noImagesProcessed }
-        onLogUpdate("📊 Staged \(count) files in \(Int(Date().timeIntervalSince(tStage)))s.")
+        
+        // VERIFY: Đếm file thực tế trong stage
+        let actualStaged = (try? FileManager.default.contentsOfDirectory(atPath: stage.path))?.count ?? 0
+        onLogUpdate("📊 Staged \(actualStaged) files in \(Int(Date().timeIntervalSince(tStage)))s (expected: \(count)).")
+        
+        if actualStaged < count / 2 {
+            throw NSError(domain: "AirLift", code: -30, userInfo: [NSLocalizedDescriptionKey: "Staged file count mismatch: \(actualStaged) < expected \(count)"])
+        }
 
         onLogUpdate("Đang dò tunnel...")
         guard await AirliftHostResolver.bestAvailable(log: onLogUpdate) != nil else {
@@ -248,6 +261,7 @@ class PasscodeThemeViewModel: ObservableObject {
                 try? FileManager.default.removeItem(atPath: target)
             }
 
+            var mode = "inject_folder"
             var done = false
             do {
                 try await injectFolder(pairingPath: pairingURL.path, srcDir: stage.path, parentDir: parent, name: v, onLogUpdate: onLogUpdate)
@@ -257,9 +271,20 @@ class PasscodeThemeViewModel: ObservableObject {
             }
 
             if !done {
+                mode = "write_dir"
                 try? FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: true)
                 try await writeDir(pairingPath: pairingURL.path, srcDir: stage.path, targetDir: target, onLogUpdate: onLogUpdate)
                 onLogUpdate("  ✅ write_dir: \(Int(Date().timeIntervalSince(tVer)))s")
+            }
+
+            // VERIFY: Đọc lại 1 file mẫu từ device
+            let verifyFile = (try? FileManager.default.contentsOfDirectory(atPath: stage.path))?.first ?? "en-1---white.png"
+            let verifyPath = "\(target)/\(verifyFile)"
+            let ok = await verifyFile(pairingPath: pairingURL.path, iosPath: verifyPath)
+            if ok {
+                onLogUpdate("  🔍 Verify OK: đọc lại được \(verifyFile) (\(mode))")
+            } else {
+                throw NSError(domain: "AirLift", code: -31, userInfo: [NSLocalizedDescriptionKey: "Verify failed: \(verifyFile) not on device. Ghi báo thành công nhưng device không có file (fail silent)."])
             }
         }
         onLogUpdate("🎉 Done in \(Int(Date().timeIntervalSince(start)))s.")
