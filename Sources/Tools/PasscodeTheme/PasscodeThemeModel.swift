@@ -27,7 +27,7 @@ struct PasscodeTheme: Identifiable, Codable {
 
     // MARK: - PrefixLanguage (giữ nguyên như cũ)
     enum PrefixLanguage: String, Codable, CaseIterable {
-        case af = "af", ar = "ar", az = "az", bg = "bg", bn = "bn", ca = "ca", cs = "cs", da = "da", de = "de", el = "el", en = "en", es = "es", et = "et", eu = "eu", fa = "fa", fi = "fi", fil = "fil", fr = "fr", gl = "gl", he = "he", hi = "hi", hr = "hr", hu = "hu", hy = "hy", id = "id", `is` = "is", it = "it", ja = "ja", ka = "ka", kk = "kk", ko = "ko", lt = "lt", lv = "lv", mk = "mk", ml = "ml", mr = "mr", ms = "ms", nb = "nb", nl = "nl", nn = "nn", no = "no", pl = "pl", pt = "pt", ro = "ro", ru = "ru", sk = "sk", sl = "sl", sq = "sq", sr = "sr", sv = "sv", sw = "sw", ta = "ta", te = "te", th = "th", tr = "tr", uk = "uk", ur = "ur", vi = "vi", zh = "zh", other = "other"
+        case af = "af", ar = "ar", az = "az", bg = "bg", bn = "bn", ca = "ca", cs = "cs", da = "da", de = "de", el = "el", en = "en", es = "es", et = "et", eu = "eu", fa = "fa", fi = "fi", fil = "fil", fr = "fr", gl = "gl", he = "he", hi = "hi", hr = "hr", hu = "hu", hy = "hy", id = "id", `is` = "is", it = "it", ja = "ja", ka = "ka", kk = "kk", ko = "ko", lt = "lt", lv = "lv", mk = "mk", ml = "ml", mr = "mr", ms = "ms", nb = "nb", nl = "nl", nn = "nn", no = "no", pl = "pl", pt = "pt", ro = "ro", ru = "ru", sk = "sk", sl = "sl", sq = "sq", sr = "sr", sv = "sv", sw = "sw", ta = "ta", te = "te", th = "th", tr = "tr", uk = "uk", ur = "ur", vi = "vi", zh = "zh", other = "other", universal = "universal"
 
         var displayName: String {
             switch self {
@@ -51,6 +51,7 @@ struct PasscodeTheme: Identifiable, Codable {
             case .ta: return "Tamil"; case .te: return "Telugu"; case .th: return "Thai"
             case .tr: return "Turkish"; case .uk: return "Ukrainian"; case .ur: return "Urdu"
             case .vi: return "Vietnamese"; case .zh: return "Chinese"; case .other: return "Other"
+            case .universal: return "Universal (All Languages)"
             }
         }
     }
