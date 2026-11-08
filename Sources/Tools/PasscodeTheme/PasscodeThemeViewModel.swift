@@ -1,3 +1,13 @@
+//
+//  PasscodeThemeViewModel.swift
+//  EnsWilde
+//
+//  Đã chuyển từ BadQuery → WorseQuery.
+//  Yêu cầu: Các file WorseQueryHelper.swift, WorseQueryWrapper.swift,
+//  WorseQueryManager.swift, worse_query.h, worse_query.m phải có trong
+//  Build Phases → Compile Sources của target EnsWilde.
+//
+
 import Foundation
 import SwiftUI
 import UIKit
@@ -482,7 +492,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return n + 1
     }
 
-    // MARK: - writeOneVersion ⚡ (đổi BadQuery → WorseQuery)
+    // MARK: - writeOneVersion ⚡ (WorseQuery)
     nonisolated private func writeOneVersion(
         versionName: String,
         targetPath: String,
@@ -491,7 +501,7 @@ class PasscodeThemeViewModel: ObservableObject {
         sampleFile: String,
         totalPerVersion: Int,
         shouldVerify: Bool,
-        bq: WorseQuery,
+        bq: WorseQuery,                         // ← Đã đổi từ BadQuery → WorseQuery
         onLogUpdate: @escaping (String) -> Void
     ) async throws {
         if bq.grantAccess(atPath: targetPath).0 {
@@ -629,7 +639,7 @@ class PasscodeThemeViewModel: ObservableObject {
         let stagePath = stageDir.path
         let sampleFile = processedFiles.first!.filename
 
-        // ⚡ ĐÃ ĐỔI: WorseQuery
+        // ⚡ WorseQuery
         let bq = WorseQuery()
         var perVersionTimes: [(String, Int)] = []
         let tWrite = Date()
@@ -676,7 +686,7 @@ class PasscodeThemeViewModel: ObservableObject {
         onLogUpdate("[6/6] Reset Theme & Reboot để áp dụng")
     }
 
-    // MARK: - Reset ⚡ (đổi BadQuery → WorseQuery)
+    // MARK: - Reset ⚡ (WorseQuery)
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
