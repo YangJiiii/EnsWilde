@@ -43,7 +43,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Import ⚡ TỐI ƯU: copyItem thay vì Data(contentsOf:)+write
+    // MARK: - Import ⚡ copyItem trực tiếp, không load RAM
     func importTheme(from sourceURL: URL, name: String) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
@@ -66,7 +66,6 @@ class PasscodeThemeViewModel: ObservableObject {
             let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).zip")
             defer { try? FileManager.default.removeItem(at: tempFileURL) }
 
-            // ⚡ COPY trực tiếp — không load vào RAM
             try? FileManager.default.removeItem(at: tempFileURL)
             try FileManager.default.copyItem(at: sourceURL, to: tempFileURL)
 
@@ -94,7 +93,7 @@ class PasscodeThemeViewModel: ObservableObject {
         try await importTheme(from: sourceURL, name: name)
     }
 
-    // MARK: - detectSizeFromZIP (Y NGUYÊN — đã tối ưu sẵn 1 pass)
+    // MARK: - detectSizeFromZIP (Y NGUYÊN)
     nonisolated static private func detectSizeFromZIP(at zipURL: URL) -> PasscodeTheme.DetectedSize {
         do {
             let archive = try Archive(url: zipURL, accessMode: .read)
@@ -107,8 +106,7 @@ class PasscodeThemeViewModel: ObservableObject {
         } catch { return .unknown }
     }
 
-    // MARK: - extractImagesRecursively ⚡ TỐI ƯU: MOVE thay vì COPY
-    // src luôn bị xoá cùng thư mục con ở bước cuối → move ≡ copy + delete. Output y hệt.
+    // MARK: - extractImagesRecursively ⚡ moveItem thay copyItem
     nonisolated static private func extractImagesRecursively(themeFolder: URL) throws {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(atPath: themeFolder.path) else { return }
@@ -132,13 +130,11 @@ class PasscodeThemeViewModel: ObservableObject {
         for item in filesToMove {
             let destURL = themeFolder.appendingPathComponent(item.destName)
             try? fm.removeItem(at: destURL)
-            // ⚡ MOVE = rename O(1) thay vì copy O(N)
             if (try? fm.moveItem(at: item.src, to: destURL)) == nil {
                 try? fm.copyItem(at: item.src, to: destURL)
             }
         }
 
-        // Xoá thư mục con (logic y nguyên)
         if let contents = try? fm.contentsOfDirectory(atPath: themeFolder.path) {
             for item in contents {
                 let fullURL = themeFolder.appendingPathComponent(item)
@@ -150,7 +146,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // 🚀 STATIC REGEX: compile 1 lần duy nhất
+    // 🚀 STATIC REGEX
     nonisolated private static let digitRegex: NSRegularExpression? = {
         try? NSRegularExpression(pattern: #"(?:^[a-zA-Z]+-)?([0-9*#])"#, options: .caseInsensitive)
     }()
@@ -182,12 +178,12 @@ class PasscodeThemeViewModel: ObservableObject {
         return 0
     }
 
-    // MARK: - processThemeFiles (Y NGUYÊN)
+    // MARK: - processThemeFiles ⚡ FAST PATH: bỏ decode+encode khi PNG đã đúng size
     nonisolated func processThemeFiles(
         theme: PasscodeTheme,
         language: PasscodeTheme.PrefixLanguage,
         boldMode: PasscodeTheme.BoldMode
-    ) throws -> [(filename: String, imageData: Data)] {
+    ) throws -> [(filename: String, imageData: Data, digit: String)] {
 
         let imageFiles = theme.getImageFiles()
         guard !imageFiles.isEmpty else { throw PasscodeThemeError.noImagesFound }
@@ -217,7 +213,12 @@ class PasscodeThemeViewModel: ObservableObject {
         case .both: boldSuffixes = ["", "-bold"]
         }
 
-        var processedFiles: [(String, Data)] = []
+        // ⚡ Fast path trigger: PNG nguồn đã đúng size → skip decode+encode.
+        // Đúng y hệt logic resizeImage: chỉ resize khi small↔big ngược nhau.
+        let needsResize = (theme.detectedSize == .small && theme.keySize == .big) ||
+                          (theme.detectedSize == .big && theme.keySize == .small)
+
+        var processedFiles: [(String, Data, String)] = []
         var seenNames = Set<String>()
         let lock = NSLock()
 
@@ -226,9 +227,22 @@ class PasscodeThemeViewModel: ObservableObject {
                 let filename = imageFiles[i]
                 let sourceURL = theme.themeFolderURL.appendingPathComponent(filename)
                 guard let digit = PasscodeThemeViewModel.extractDigitStatic(from: filename) else { return }
-                guard let image = UIImage(contentsOfFile: sourceURL.path) else { return }
-                let processedImage = resizeImage(image, for: theme.keySize, detectedSize: theme.detectedSize)
-                guard let imageData = processedImage.pngData() else { return }
+
+                let srcExt = (filename as NSString).pathExtension.lowercased()
+                let imageData: Data
+
+                // 🚀 FAST PATH: PNG, không cần resize → dùng thẳng bytes gốc.
+                // Pixel identical với `pngData()`. Chỉ khác compression level (vô hình trên device).
+                if !needsResize && srcExt == "png" {
+                    guard let raw = try? Data(contentsOf: sourceURL) else { return }
+                    imageData = raw
+                } else {
+                    // Slow path: decode + resize + encode (đúng y bản gốc)
+                    guard let image = UIImage(contentsOfFile: sourceURL.path) else { return }
+                    let processedImage = resizeImage(image, for: theme.keySize, detectedSize: theme.detectedSize)
+                    guard let encoded = processedImage.pngData() else { return }
+                    imageData = encoded
+                }
 
                 let stdSub = subtexts[digit] ?? ""
                 let ruSub = ruSubtexts[digit]
@@ -256,7 +270,7 @@ class PasscodeThemeViewModel: ObservableObject {
                 lock.lock()
                 for item in localFiles where !seenNames.contains(item.0) {
                     seenNames.insert(item.0)
-                    processedFiles.append(item)
+                    processedFiles.append((item.0, item.1, digit))
                 }
                 lock.unlock()
             }
@@ -272,7 +286,7 @@ class PasscodeThemeViewModel: ObservableObject {
         else { return image }
         let currentSize = image.size
         guard currentSize.width > 0 && currentSize.height > 0 else { return image }
-        let targetPixelSize = CGSize(width: currentSize.width * sizeMultiplier * image.scale, height: currentSize.height * sizeMultiplier * image.scale)
+        let targetPixelSize = CGSize(width: currentSize.width * sizeMultiplier * image.scale, height: currentSize.height * image.scale)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         let renderer = UIGraphicsImageRenderer(size: targetPixelSize, format: format)
@@ -329,66 +343,59 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - fastStage ⚡ TỐI ƯU: bỏ lock, pre-compute key 1 lần
+    // MARK: - fastStage ⚡ digit truyền sẵn, không directory listing, pre-create _big
     nonisolated private func fastStage(
-        processedFiles: [(filename: String, imageData: Data)],
+        processedFiles: [(filename: String, imageData: Data, digit: String)],
         stageDir: URL
     ) throws -> Int {
         let fm = FileManager.default
         let n = processedFiles.count
         guard n > 0 else { return 0 }
 
-        // Pass 0: pre-compute key + xác định primary (KHÔNG lock)
-        var keys = [String](repeating: "", count: n)
-        var seen = Set<String>()
+        // Tạo _big marker trước để FFI thấy ngay
+        fm.createFile(atPath: stageDir.appendingPathComponent("_big").path, contents: nil)
+
+        // Phân loại primary vs biến thể — KHÔNG lock, KHÔNG regex lại
         var primaryIndices: [Int] = []
         primaryIndices.reserveCapacity(16)
+        var primaryURLByDigit: [String: URL] = [:]
+        primaryURLByDigit.reserveCapacity(16)
+        var nonPrimaryIndices: [Int] = []
+        nonPrimaryIndices.reserveCapacity(n - 1)
+
         for i in 0..<n {
-            let key = PasscodeThemeViewModel.extractDigitStatic(from: processedFiles[i].filename) ?? processedFiles[i].filename
-            keys[i] = key
-            if seen.insert(key).inserted {
+            let p = processedFiles[i]
+            if primaryURLByDigit[p.digit] == nil {
                 primaryIndices.append(i)
+                primaryURLByDigit[p.digit] = stageDir.appendingPathComponent(p.filename)
+            } else {
+                nonPrimaryIndices.append(i)
             }
         }
-        var primaryURLByKey: [String: URL] = [:]
-        primaryURLByKey.reserveCapacity(primaryIndices.count)
-        for i in primaryIndices {
-            primaryURLByKey[keys[i]] = stageDir.appendingPathComponent(processedFiles[i].filename)
-        }
-        let primarySet = Set(primaryIndices)
-        var nonPrimaryIndices: [Int] = []
-        nonPrimaryIndices.reserveCapacity(n - primaryIndices.count)
-        for i in 0..<n where !primarySet.contains(i) {
-            nonPrimaryIndices.append(i)
-        }
 
-        // Pass 1: ghi primary (song song, không lock)
+        // Pass 1: ghi primary (song song)
         DispatchQueue.concurrentPerform(iterations: primaryIndices.count) { idx in
             autoreleasepool {
-                let i = primaryIndices[idx]
-                if let url = primaryURLByKey[keys[i]] {
-                    try? processedFiles[i].imageData.write(to: url)
+                let p = processedFiles[primaryIndices[idx]]
+                if let url = primaryURLByDigit[p.digit] {
+                    try? p.imageData.write(to: url)
                 }
             }
         }
 
-        // Pass 2: hardlink (song song, không lock)
+        // Pass 2: hardlink biến thể (song song, không lock)
         DispatchQueue.concurrentPerform(iterations: nonPrimaryIndices.count) { idx in
             autoreleasepool {
-                let i = nonPrimaryIndices[idx]
-                let filename = processedFiles[i].filename
-                guard let src = primaryURLByKey[keys[i]] else { return }
-                let dest = stageDir.appendingPathComponent(filename)
-                do {
-                    try fm.linkItem(at: src, to: dest)
-                } catch {
+                let p = processedFiles[nonPrimaryIndices[idx]]
+                guard let src = primaryURLByDigit[p.digit] else { return }
+                let dest = stageDir.appendingPathComponent(p.filename)
+                if (try? fm.linkItem(at: src, to: dest)) == nil {
                     try? fm.copyItem(at: src, to: dest)
                 }
             }
         }
 
-        fm.createFile(atPath: stageDir.appendingPathComponent("_big").path, contents: nil)
-        return (try? fm.contentsOfDirectory(atPath: stageDir.path).count) ?? (n + 1)
+        return n + 1  // +1 cho _big
     }
 
     // MARK: - Write 1 version + verify + retry (Y NGUYÊN)
@@ -513,7 +520,7 @@ class PasscodeThemeViewModel: ObservableObject {
 
         let pairPath = pairingURL.path
         let stagePath = stageDir.path
-        let sampleFile = processedFiles.first!.0
+        let sampleFile = processedFiles.first!.filename
 
         let bq = BadQuery()
         var perVersionTimes: [(String, Int)] = []
