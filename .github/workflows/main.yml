@@ -26,9 +26,11 @@ jobs:
           chmod +x ./scripts/build-ipa.sh
           bash ./scripts/build-ipa.sh Release
 
-      - name: Upload Artifact
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: EnsWilde-Unsigned
-          path: build/EnsWilde.ipa
+          name: EnsWilde-Build
+          path: |
+            build/EnsWilde.ipa
+            build/EnsWilde.entitlements
           if-no-files-found: error
