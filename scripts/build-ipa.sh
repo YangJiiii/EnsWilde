@@ -21,7 +21,6 @@ echo "==> Đang tìm file thư viện (.a) DEVICE slice và header (.h)..."
 LIB_PATH=$(find . -type f -name "*airlift*.a" \
   ! -path "*simulator*" ! -path "*x86_64*" 2>/dev/null | head -n 1 || true)
 
-# Fallback: bất kỳ .a nào không phải simulator
 if [ -z "$LIB_PATH" ]; then
   LIB_PATH=$(find . -type f -name "*.a" \
     ! -path "*simulator*" ! -path "*x86_64*" 2>/dev/null | head -n 1 || true)
@@ -29,15 +28,6 @@ fi
 
 if [ -z "$LIB_PATH" ]; then
   echo "❌ LỖI: Không tìm thấy slice iOS-device (.a) nào (đã loại trừ simulator)."
-  echo "Danh sách .a hiện có:"
-  find . -name "*.a" 2>/dev/null || true
-  echo ""
-  echo "👉 Nếu chỉ có ios-arm64-simulator, bạn phải build lại lib cho DEVICE:"
-  echo "   cargo build --release --target aarch64-apple-ios"
-  echo "   xcodebuild -create-xcframework \\"
-  echo "     -library ios-arm64/libairlift_ffi.a         -headers ios-arm64/Headers \\"
-  echo "     -library ios-arm64-simulator/libairlift_ffi.a -headers ios-arm64-simulator/Headers \\"
-  echo "     -output AirliftFFI.xcframework"
   exit 1
 fi
 LIB_DIR=$(dirname "$LIB_PATH")
@@ -48,8 +38,6 @@ HEADER_FILE=$(find . -type f -name "airlift.h" \
 
 if [ -z "$HEADER_FILE" ]; then
   echo "❌ LỖI: Không tìm thấy airlift.h cho device slice."
-  echo "Danh sách airlift.h hiện có:"
-  find . -name "airlift.h" 2>/dev/null || true
   exit 1
 fi
 HEADER_DIR=$(dirname "$HEADER_FILE")
@@ -57,30 +45,19 @@ echo "✅ Tìm thấy Header (device): $HEADER_FILE"
 # ==============================================================================
 
 # ==============================================================================
-# FIX DUPLICATE SYMBOL: _rust_eh_personality (và toàn bộ _rust_*) giữa
-# libairlift_ffi.a và libidevice_ffi.a.
-#
-# Cả 2 đều là Rust static lib, mỗi bên nhúng 1 bản Rust std -> trùng định nghĩa
-# _rust_eh_personality. Ta weaken toàn bộ symbol bắt đầu bằng _rust_* trong
-# libairlift_ffi.a để linker chọn bản strong từ libidevice_ffi.a.
+# FIX DUPLICATE SYMBOL: _rust_eh_personality
 # ==============================================================================
 echo "==> Fix duplicate symbol: weaken Rust std symbols trong libairlift_ffi.a..."
 
 AIRLIFT_LIB_ABS="$(cd "$LIB_DIR" && pwd)/$(basename "$LIB_PATH")"
-
-# --- Tìm hoặc CÀI ĐẶT llvm-objcopy ---
 LLVM_OBJCOPY="$(xcrun -f llvm-objcopy 2>/dev/null || true)"
 
-# Nếu chưa có, thử tìm trong Homebrew (cả Intel lẫn Apple Silicon)
 if [ -z "$LLVM_OBJCOPY" ] || [ ! -x "$LLVM_OBJCOPY" ]; then
-  for c in \
-    /opt/homebrew/opt/llvm/bin/llvm-objcopy \
-    /usr/local/opt/llvm/bin/llvm-objcopy; do
+  for c in /opt/homebrew/opt/llvm/bin/llvm-objcopy /usr/local/opt/llvm/bin/llvm-objcopy; do
     if [ -x "$c" ]; then LLVM_OBJCOPY="$c"; break; fi
   done
 fi
 
-# Nếu vẫn chưa có, CÀI qua Homebrew (dành cho runner CI)
 if [ -z "$LLVM_OBJCOPY" ] || [ ! -x "$LLVM_OBJCOPY" ]; then
   echo "    → Không tìm thấy llvm-objcopy. Đang cài đặt qua Homebrew..."
   if command -v brew >/dev/null 2>&1; then
@@ -90,38 +67,19 @@ if [ -z "$LLVM_OBJCOPY" ] || [ ! -x "$LLVM_OBJCOPY" ]; then
   fi
 fi
 
-# Kiểm tra lần cuối
 if [ -z "$LLVM_OBJCOPY" ] || [ ! -x "$LLVM_OBJCOPY" ]; then
   echo "❌ Vẫn không tìm thấy llvm-objcopy sau khi cài đặt."
-  echo "   Vui lòng chạy thủ công: brew install llvm"
   exit 1
 fi
 echo "    → llvm-objcopy: $LLVM_OBJCOPY"
 
-# --- Backup 1 lần (idempotent cho lần chạy lại) ---
 if [ ! -f "${AIRLIFT_LIB_ABS}.orig" ]; then
   cp "$AIRLIFT_LIB_ABS" "${AIRLIFT_LIB_ABS}.orig"
-  echo "    → Đã backup: ${AIRLIFT_LIB_ABS}.orig"
 else
-  # Khôi phục từ backup trước khi weaken (để chạy lại sạch)
   cp "${AIRLIFT_LIB_ABS}.orig" "$AIRLIFT_LIB_ABS"
 fi
 
-# --- Weaken toàn bộ _rust_* (bao gồm _rust_eh_personality) ---
 "$LLVM_OBJCOPY" --wildcard --weaken-symbol='_rust_*' "$AIRLIFT_LIB_ABS"
-
-# --- Verify: _rust_eh_personality phải là 'W' (weak) hoặc 'w' ---
-echo "    → Kiểm tra sau weaken:"
-VERIFY="$(nm -g "$AIRLIFT_LIB_ABS" 2>/dev/null | grep ' _rust_eh_personality$' | head -3 || true)"
-if [ -z "$VERIFY" ]; then
-  echo "    ⚠️  Không thấy _rust_eh_personality trong global symbol table (có thể đã ổn)"
-elif echo "$VERIFY" | grep -qE ' [Ww] _rust_eh_personality$'; then
-  echo "    ✅ _rust_eh_personality đã là WEAK:"
-  echo "$VERIFY" | sed 's/^/       /'
-else
-  echo "    ⚠️  Cảnh báo: _rust_eh_personality vẫn chưa chắc là weak:"
-  echo "$VERIFY" | sed 's/^/       /'
-fi
 echo "✅ Hoàn tất fix duplicate symbol."
 # ==============================================================================
 
@@ -146,7 +104,6 @@ ruby -e '
   abs_hdr_dir  = File.expand_path(ENV["HEADER_DIR"])
   lib_name     = File.basename(abs_lib_path).gsub(/^lib/, "").gsub(/\.a$/, "")
 
-  # ---- 1) Link file .a (device) ----
   unless target.frameworks_build_phase.files.any? { |f|
     f.file_ref && f.file_ref.path && f.file_ref.path.include?(File.basename(abs_lib_path))
   }
@@ -154,7 +111,6 @@ ruby -e '
     target.frameworks_build_phase.add_file_reference(lib_ref)
   end
 
-  # ---- 2) GrappaHelper.m: dedupe + set -fvisibility=default ----
   grappa_m_path = Dir.glob("**/GrappaHelper.m").first
   if grappa_m_path
     abs_grappa = File.expand_path(grappa_m_path)
@@ -164,35 +120,29 @@ ruby -e '
       next unless path && path.include?("GrappaHelper.m")
       if seen
         bf.remove_from_project
-        puts "🧹 Đã xoá GrappaHelper.m trùng lặp khỏi build phase"
       else
         seen = true
         bf.settings = { "COMPILER_FLAGS" => "-fvisibility=default" }
       end
     end
     unless seen
-      file_ref = project.files.find { |f| f.path && f.path.include?("GrappaHelper.m") } \
-                 || project.new_file(abs_grappa)
+      file_ref = project.files.find { |f| f.path && f.path.include?("GrappaHelper.m") } || project.new_file(abs_grappa)
       bf = target.source_build_phase.add_file_reference(file_ref, true)
       bf.settings = { "COMPILER_FLAGS" => "-fvisibility=default" }
     end
   end
 
-  # ---- 3) Build settings: RESET path để không còn dính simulator ----
   target.build_configurations.each do |config|
-    # LIBRARY_SEARCH_PATHS: bỏ mọi path simulator + airlift simulator, rồi thêm device
     lib_paths = Array(config.build_settings["LIBRARY_SEARCH_PATHS"] || ["$(inherited)"])
     lib_paths = lib_paths.reject { |p| p.to_s =~ /simulator/i }
     lib_paths << abs_lib_dir
     config.build_settings["LIBRARY_SEARCH_PATHS"] = lib_paths.uniq
 
-    # HEADER_SEARCH_PATHS: tương tự
     hdr_paths = Array(config.build_settings["HEADER_SEARCH_PATHS"] || ["$(inherited)"])
     hdr_paths = hdr_paths.reject { |p| p.to_s =~ /simulator/i }
     hdr_paths << abs_hdr_dir
     config.build_settings["HEADER_SEARCH_PATHS"] = hdr_paths.uniq
 
-    # LINKER FLAGS
     ldflags = ["$(inherited)"]
     ldflags << "-l#{lib_name}"
     ldflags << "-ObjC"
@@ -210,7 +160,6 @@ ruby -e '
   end
 
   project.save
-  puts "✅ Đã cấu hình build settings (device slice, không còn simulator)"
 '
 
 echo "==> Bắt đầu Archive..."
@@ -234,12 +183,10 @@ cp -R "$APP_PATH" "$BUILD_DIR/Payload/"
 rm -rf "$BUILD_DIR/Payload/${APP_BASENAME}/_CodeSignature"
 (cd "$BUILD_DIR" && zip -qry "$IPA_PATH" Payload)
 
-# Copy file entitlements ra thư mục build
+# Copy file entitlements ra ngoài
 if [ -f "EnsWilde.entitlements" ]; then
     cp "EnsWilde.entitlements" "$BUILD_DIR/"
     echo "✅ Đã copy EnsWilde.entitlements ra thư mục build"
-else
-    echo "⚠️ Cảnh báo: Không tìm thấy file EnsWilde.entitlements ở thư mục gốc!"
 fi
 
 echo "🔥 Done: $IPA_PATH"
