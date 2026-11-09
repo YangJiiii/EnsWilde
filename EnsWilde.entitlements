@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Để trống array này. ESign/Sideloadly sẽ tự động điền App Group của người dùng vào đây khi ký -->
+    <!-- Để trống mảng này. Công cụ ký (như ESign) sẽ tự động điền App Group của người dùng vào đây. -->
     <key>com.apple.security.application-groups</key>
     <array>
     </array>
