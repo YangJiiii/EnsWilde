@@ -2,11 +2,6 @@
 //  PasscodeThemeViewModel.swift
 //  EnsWilde
 //
-//  Đã chuyển từ BadQuery → WorseQuery.
-//  Yêu cầu: Các file WorseQueryHelper.swift, WorseQueryWrapper.swift,
-//  WorseQueryManager.swift, worse_query.h, worse_query.m phải có trong
-//  Build Phases → Compile Sources của target EnsWilde.
-//
 
 import Foundation
 import SwiftUI
@@ -17,11 +12,11 @@ import Network
 
 // MARK: - Preset tốc độ
 enum SpeedPreset: String, CaseIterable {
-    case safe       // ~14.8s — verify cả 3 version, reboot 800ms
-    case balanced   // ~13.8s — verify version cuối, reboot 500ms
-    case fast       // ~13.2s — verify cuối, reboot 400ms (DEFAULT)
-    case turbo      // ~12.6s — không verify, reboot 300ms
-    case ferrari    // ~12.0s — không verify, reboot 200ms, log im lặng, retry 1
+    case safe
+    case balanced
+    case fast
+    case turbo
+    case ferrari
 
     var displayName: String {
         switch self {
@@ -43,7 +38,6 @@ enum SpeedPreset: String, CaseIterable {
         }
     }
 
-    // (verify, verifyAll, rebootMs, retries, logLevel)
     var config: (verify: Bool, verifyAll: Bool, rebootMs: Int, retries: Int, logLevel: LogLevel) {
         switch self {
         case .safe:     return (true,  true,  800, 3, .normal)
@@ -79,7 +73,7 @@ class PasscodeThemeViewModel: ObservableObject {
     private var activeTaskID: UUID?
     private let store: PasscodeThemeStore
 
-    // MARK: - 🎛 KNOBS
+    // MARK: - KNOBS
     var speedPreset: SpeedPreset = .fast {
         didSet { applyPreset(speedPreset) }
     }
@@ -137,7 +131,7 @@ class PasscodeThemeViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Import ⚡ copyItem trực tiếp
+    // MARK: - Import
     func importTheme(from sourceURL: URL, name: String) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
@@ -178,6 +172,7 @@ class PasscodeThemeViewModel: ObservableObject {
             try PasscodeThemeViewModel.extractImagesRecursively(themeFolder: themeFolder)
             return (newTheme, detectedSize)
         }.value
+        
         var themeWithSize = result.0
         themeWithSize.detectedSize = result.1
         if result.1 == .big { themeWithSize.keySize = .big }
@@ -492,9 +487,7 @@ class PasscodeThemeViewModel: ObservableObject {
         return n + 1
     }
 
-    // MARK: - writeOneVersion ⚡ (WorseQuery)
-    // ✅ FIX: nhận logLevel & retryAttempts qua tham số để tránh truy cập
-    //         MainActor-isolated property từ nonisolated context.
+    // MARK: - writeOneVersion
     nonisolated private func writeOneVersion(
         versionName: String,
         targetPath: String,
@@ -546,7 +539,6 @@ class PasscodeThemeViewModel: ObservableObject {
                 let ok = await verifyFileExists(pairingPath: pairPath, remotePath: "\(targetPath)/\(sampleFile)")
                 if ok { return }
 
-                // ✅ FIX: log phải bọc main.async vì writeOneVersion chạy off-main
                 DispatchQueue.main.async {
                     onLogUpdate("  ⚠️ Attempt \(attempt)/\(maxAttempts) verify FAIL, retry...")
                 }
@@ -612,7 +604,6 @@ class PasscodeThemeViewModel: ObservableObject {
             throw NSError(domain: "AirLift", code: -10, userInfo: [NSLocalizedDescriptionKey: "VPN chưa bật."])
         }
 
-        // Tunnel detect song song
         onLogUpdate("[3/6] Dò tunnel (song song với process)...")
         let logCb = onLogUpdate
         let tunnelTask = Task.detached(priority: .userInitiated) {
@@ -648,7 +639,6 @@ class PasscodeThemeViewModel: ObservableObject {
         let stagePath = stageDir.path
         let sampleFile = processedFiles.first!.filename
 
-        // ⚡ WorseQuery
         let bq = WorseQuery()
         var perVersionTimes: [(String, Int)] = []
         let tWrite = Date()
@@ -660,7 +650,6 @@ class PasscodeThemeViewModel: ObservableObject {
             let shouldVerify = verifyAfterWrite && (verifyAllVersions || isLastVersion)
             onLogUpdate("[4/6] Version \(idx+1)/\(totalVersions): \(versionName)\(shouldVerify ? " (verify)" : "")")
 
-            // ✅ FIX: truyền logLevel & retryAttempts vào writeOneVersion
             try await writeOneVersion(
                 versionName: versionName,
                 targetPath: targetPath,
@@ -698,7 +687,7 @@ class PasscodeThemeViewModel: ObservableObject {
         onLogUpdate("[6/6] Reset Theme & Reboot để áp dụng")
     }
 
-    // MARK: - Reset ⚡ (WorseQuery)
+    // MARK: - Reset
     func resetTheme(store: ToolStore, onLogUpdate: @escaping (String) -> Void) async throws {
         guard activeTaskID == nil else { return }
         let myID = UUID()
