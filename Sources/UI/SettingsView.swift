@@ -51,6 +51,11 @@ struct SettingsView: View {
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
     
+    // MARK: - State cho Run Test
+    @State private var isTestingWrite = false
+    @State private var writeTestLog = ""
+    @State private var writeTestSuccess: Bool? = nil
+    
     private var tintOptions: [(name: String, hex: String)] {
         [
             (L("color_orange"), "#ef9f76"),
@@ -64,6 +69,31 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            // MARK: - Run Test Section
+            Section(header: Text("Run Test (WQ Access)")) {
+                Button(action: runMobileGestaltTest) {
+                    HStack {
+                        Label("Test ghi file MobileGestalt", systemImage: "doc.badge.plus")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if isTestingWrite {
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(isTestingWrite)
+                
+                if !writeTestLog.isEmpty {
+                    ScrollView {
+                        Text(writeTestLog)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(writeTestSuccess == true ? .green : (writeTestSuccess == false ? .red : .primary))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 150)
+                }
+            }
+
             Section(header: Text(L("connection_status"))) {
                 statusRow(title: L("pairing_file"), subtitle: pairingFile != nil ? L("status_ready") : L("status_not_ready"), ok: pairingFile != nil)
                 statusRow(title: "LocalDevVPN", subtitle: vpnActive ? L("status_ready") : L("status_not_ready"), ok: vpnActive)
@@ -176,6 +206,71 @@ struct SettingsView: View {
             Button(L("alert_ok"), role: .cancel) { }
         } message: {
             Text(errorMessage)
+        }
+    }
+
+    // MARK: - Logic Test WQ
+    private func runMobileGestaltTest() {
+        isTestingWrite = true
+        writeTestSuccess = nil
+        writeTestLog = "[*] Bắt đầu quá trình test...\n"
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Đường dẫn gốc chuẩn của iOS
+            let targetDir = "/var/mobile/Containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
+            let testFile = "\(targetDir)/enswilde_write_test.txt"
+            
+            // 1. Khởi tạo WorseQuery
+            DispatchQueue.main.async { self.writeTestLog += "[*] Khởi tạo WorseQuery...\n" }
+            let bq = WorseQuery()
+            
+            // 2. Xin quyền grant access
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang xin quyền (grantAccess) vào thư mục:\n    \(targetDir)\n" }
+            let (granted, errorMsg) = bq.grantAccess(atPath: targetDir)
+            
+            if !granted {
+                let msg = errorMsg ?? "Không rõ nguyên nhân"
+                DispatchQueue.main.async {
+                    self.writeTestLog += "\n❌ THẤT BẠI: WorseQuery không thể grant access.\n"
+                    self.writeTestLog += "Chi tiết: \(msg)\n\n"
+                    self.writeTestLog += "👉 HƯỚNG DẪN SỬA:\n1. Chứng chỉ/App Group chưa được ký đúng.\n2. Hoặc chưa bật VPN/Airlift Tunnel."
+                    self.writeTestSuccess = false
+                    self.isTestingWrite = false
+                }
+                return
+            }
+            
+            DispatchQueue.main.async { self.writeTestLog += "✅ Grant access thành công!\n" }
+            
+            // 3. Thử ghi file
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi file test...\n" }
+            let content = "EnsWilde Test Write - \(Date())"
+            
+            do {
+                try content.write(toFile: testFile, atomically: true, encoding: .utf8)
+                
+                // Đọc lại xem có đúng không
+                let readBack = try String(contentsOfFile: testFile, encoding: .utf8)
+                
+                // Dọn dẹp file test
+                try? FileManager.default.removeItem(atPath: testFile)
+                
+                DispatchQueue.main.async {
+                    self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
+                    self.writeTestLog += "   (Đã đọc lại: \(readBack))\n\n"
+                    self.writeTestLog += "🎉 App Group & WorseQuery hoạt động hoàn hảo!\nBạn có thể chuyển sang tab Apply và dùng bình thường."
+                    self.writeTestSuccess = true
+                    self.isTestingWrite = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.writeTestLog += "\n❌ GHI FILE THẤT BẠI!\n"
+                    self.writeTestLog += "Chi tiết: \(error.localizedDescription)\n\n"
+                    self.writeTestLog += "👉 Đã grant access nhưng bị từ chối ghi. Có thể do Sandbox của iOS chặn hoặc thiếu quyền file."
+                    self.writeTestSuccess = false
+                    self.isTestingWrite = false
+                }
+            }
         }
     }
 
