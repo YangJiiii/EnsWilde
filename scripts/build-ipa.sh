@@ -233,4 +233,13 @@ rm -rf "$BUILD_DIR/Payload" && mkdir -p "$BUILD_DIR/Payload"
 cp -R "$APP_PATH" "$BUILD_DIR/Payload/"
 rm -rf "$BUILD_DIR/Payload/${APP_BASENAME}/_CodeSignature"
 (cd "$BUILD_DIR" && zip -qry "$IPA_PATH" Payload)
+
+# Copy file entitlements ra thư mục build
+if [ -f "EnsWilde.entitlements" ]; then
+    cp "EnsWilde.entitlements" "$BUILD_DIR/"
+    echo "✅ Đã copy EnsWilde.entitlements ra thư mục build"
+else
+    echo "⚠️ Cảnh báo: Không tìm thấy file EnsWilde.entitlements ở thư mục gốc!"
+fi
+
 echo "🔥 Done: $IPA_PATH"
