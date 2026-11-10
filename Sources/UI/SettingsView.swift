@@ -200,15 +200,16 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ  (⚠️ CHỈ HÀM NÀY ĐỔI — wrap bằng DispatchWorkItem)
+    // MARK: - Logic Test WQ (Đã Fix Lỗi Ghi File)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
-        writeTestLog = "[*] Bắt đầu test...\n"
+        writeTestLog = "[*] Bắt đầu test quyền...\n"
 
         let work = DispatchWorkItem {
             let targetDir = "/var/mobile/Containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
-            let testFile = "\(targetDir)/enswilde_test_write.txt"
+            // Test trên chính file plist thật (đã tồn tại) để tránh lỗi không thể tạo file mới
+            let testFile = "\(targetDir)/com.apple.MobileGestalt.plist"
 
             DispatchQueue.main.async { self.writeTestLog += "[*] Khởi tạo WorseQuery...\n" }
             let bq = WorseQuery()
@@ -229,17 +230,31 @@ struct SettingsView: View {
             }
 
             DispatchQueue.main.async { self.writeTestLog += "✅ grantAccess thành công!\n" }
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi file...\n" }
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử đọc file thật...\n" }
 
+            // Test Đọc (Read)
+            guard FileManager.default.isReadableFile(atPath: testFile) else {
+                DispatchQueue.main.async {
+                    self.writeTestLog += "❌ LỖI: Không thể ĐỌC file. Grant access không có tác dụng.\n"
+                    self.writeTestSuccess = false
+                    self.isTestingWrite = false
+                }
+                return
+            }
+
+            DispatchQueue.main.async { self.writeTestLog += "✅ Đọc file thành công!\n" }
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè file thật...\n" }
+
+            // Test Ghi (Write) - Ghi đè lại y nguyên dữ liệu cũ
             do {
-                try "EnsWilde Test - \(Date())".write(toFile: testFile, atomically: true, encoding: .utf8)
-                let readBack = try String(contentsOfFile: testFile, encoding: .utf8)
-                try? FileManager.default.removeItem(atPath: testFile)
+                let originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
+
+                // Cố tình bỏ "atomically: true" để ghi trực tiếp, tránh lỗi tạo file tạm
+                try originalData.write(to: URL(fileURLWithPath: testFile), options: [])
 
                 DispatchQueue.main.async {
                     self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
-                    self.writeTestLog += "   Nội dung đọc lại: \(readBack)\n\n"
-                    self.writeTestLog += "🎉 App Group & WorseQuery đã hoạt động!\nBạn có thể dùng Apply bình thường."
+                    self.writeTestLog += "🎉 App Group & WorseQuery hoạt động hoàn hảo!\nBạn có thể dùng Apply bình thường."
                     self.writeTestSuccess = true
                     self.isTestingWrite = false
                 }
@@ -247,7 +262,7 @@ struct SettingsView: View {
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ GHI FILE THẤT BẠI!\n"
                     self.writeTestLog += "Chi tiết: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Đã grant access nhưng bị từ chối ghi. Có thể do Sandbox hoặc thiếu quyền file."
+                    self.writeTestLog += "👉 Nguyên nhân: Chứng chỉ chỉ cho phép Read mà không cho Write, hoặc file đang bị hệ thống khóa."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
