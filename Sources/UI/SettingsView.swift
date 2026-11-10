@@ -37,9 +37,9 @@ struct SettingsView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
     @AppStorage("PairingFile") private var pairingFile: String?
     @State private var showPairingPicker = false
-    
+
     @State private var showOnDevicePairing = false
-    
+
     @State private var vpnActive: Bool = false
     @State private var monitor: NWPathMonitor?
     @AppStorage("isAirLiftMode") private var isAirLiftMode: Bool = false
@@ -47,15 +47,15 @@ struct SettingsView: View {
     @State private var backupInfo: MobileGestaltBackupManager.BackupInfo?
     @AppStorage("EnsWilde.userTintColor") private var userTintColorHex: String = "#ef9f76"
     @State private var showImportBackupPicker = false
-    
+
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
-    
+
     // MARK: - State cho Run Test
     @State private var isTestingWrite = false
     @State private var writeTestLog = ""
     @State private var writeTestSuccess: Bool? = nil
-    
+
     private var tintOptions: [(name: String, hex: String)] {
         [
             (L("color_orange"), "#ef9f76"),
@@ -82,7 +82,7 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(isTestingWrite)
-                
+
                 if !writeTestLog.isEmpty {
                     ScrollView {
                         Text(writeTestLog)
@@ -108,7 +108,7 @@ struct SettingsView: View {
                     } label: { Label(L("button_reset_pairing"), systemImage: "trash") }
                 } else {
                     Button { showPairingPicker = true } label: { Label(L("import_pairing"), systemImage: "doc.badge.plus") }
-                    
+
                     if #available(iOS 27.0, *) {
                         Button { showOnDevicePairing = true } label: {
                             Label(L("pair_on_device"), systemImage: "iphone.radiowaves.left.and.right")
@@ -138,17 +138,17 @@ struct SettingsView: View {
                         }
                     }.padding(.vertical, 4)
                 }
-                
+
                 Button { createBackupNow() } label: {
                     Label(L("backup_now"), systemImage: "square.and.arrow.down")
                         .foregroundStyle(.primary)
                 }
-                
+
                 Button { showImportBackupPicker = true } label: {
                     Label(L("backup_import"), systemImage: "square.and.arrow.down")
                         .foregroundStyle(.primary)
                 }
-                
+
                 if hasBackup {
                     Button(role: .destructive) { deleteBackup() } label: {
                         Label(L("backup_delete"), systemImage: "trash")
@@ -161,7 +161,7 @@ struct SettingsView: View {
                     Label(L("settings_language"), systemImage: "globe")
                 }
             }
-            
+
             Section(header: Text(L("settings_accent_color"))) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
@@ -172,7 +172,7 @@ struct SettingsView: View {
                     .padding(.vertical, 8)
                 }
             }
-            
+
             Section(header: Text(L("settings_app_info"))) {
                 HStack { Label("EnsWilde", systemImage: "sparkles"); Spacer(); Text("v\(appVersion)").font(.footnote).foregroundStyle(.secondary) }
                 HStack { Label(L("app_ios"), systemImage: "iphone"); Spacer(); Text(UIDevice.current.systemVersion).font(.footnote).foregroundStyle(.secondary) }
@@ -214,63 +214,50 @@ struct SettingsView: View {
         isTestingWrite = true
         writeTestSuccess = nil
         writeTestLog = "[*] Bắt đầu quá trình test...\n"
-        
-        DispatchQueue.global(qos: .userInitiated).async {
-            // Đường dẫn gốc chuẩn của iOS
-            let targetDir = "/var/mobile/Containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
-            let testFile = "\(targetDir)/enswilde_write_test.txt"
-            
-            // 1. Khởi tạo WorseQuery
-            DispatchQueue.main.async { self.writeTestLog += "[*] Khởi tạo WorseQuery...\n" }
-            let bq = WorseQuery()
-            
-            // 2. Xin quyền grant access
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang xin quyền (grantAccess) vào thư mục:\n    \(targetDir)\n" }
-            let (granted, errorMsg) = bq.grantAccess(atPath: targetDir)
-            
-            if !granted {
-                let msg = errorMsg ?? "Không rõ nguyên nhân"
-                DispatchQueue.main.async {
-                    self.writeTestLog += "\n❌ THẤT BẠI: WorseQuery không thể grant access.\n"
-                    self.writeTestLog += "Chi tiết: \(msg)\n\n"
-                    self.writeTestLog += "👉 HƯỚNG DẪN SỬA:\n1. Chứng chỉ/App Group chưa được ký đúng.\n2. Hoặc chưa bật VPN/Airlift Tunnel."
-                    self.writeTestSuccess = false
-                    self.isTestingWrite = false
+
+        let targetDir = "/var/mobile/Containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
+        let testFile = "\(targetDir)/enswilde_write_test.txt"
+        let content = "EnsWilde Test Write - \(Date())"
+
+        Task {
+            let result: (success: Bool, log: String) = await Task.detached(priority: .userInitiated) {
+                var log = "[*] Khởi tạo WorseQuery...\n"
+                let bq = WorseQuery()
+
+                log += "[*] Đang xin quyền (grantAccess) vào thư mục:\n    \(targetDir)\n"
+                let (granted, errorMsg) = bq.grantAccess(atPath: targetDir)
+
+                if !granted {
+                    let msg = errorMsg ?? "Không rõ nguyên nhân"
+                    log += "\n❌ THẤT BẠI: WorseQuery không thể grant access.\n"
+                    log += "Chi tiết: \(msg)\n\n"
+                    log += "👉 HƯỚNG DẪN SỬA:\n1. Chứng chỉ/App Group chưa được ký đúng.\n2. Hoặc chưa bật VPN/Airlift Tunnel."
+                    return (false, log)
                 }
-                return
-            }
-            
-            DispatchQueue.main.async { self.writeTestLog += "✅ Grant access thành công!\n" }
-            
-            // 3. Thử ghi file
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi file test...\n" }
-            let content = "EnsWilde Test Write - \(Date())"
-            
-            do {
-                try content.write(toFile: testFile, atomically: true, encoding: .utf8)
-                
-                // Đọc lại xem có đúng không
-                let readBack = try String(contentsOfFile: testFile, encoding: .utf8)
-                
-                // Dọn dẹp file test
-                try? FileManager.default.removeItem(atPath: testFile)
-                
-                DispatchQueue.main.async {
-                    self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
-                    self.writeTestLog += "   (Đã đọc lại: \(readBack))\n\n"
-                    self.writeTestLog += "🎉 App Group & WorseQuery hoạt động hoàn hảo!\nBạn có thể chuyển sang tab Apply và dùng bình thường."
-                    self.writeTestSuccess = true
-                    self.isTestingWrite = false
+
+                log += "✅ Grant access thành công!\n"
+                log += "[*] Đang thử ghi file test...\n"
+
+                do {
+                    try content.write(toFile: testFile, atomically: true, encoding: .utf8)
+                    let readBack = try String(contentsOfFile: testFile, encoding: .utf8)
+                    try? FileManager.default.removeItem(atPath: testFile)
+
+                    log += "✅ GHI FILE THÀNH CÔNG!\n"
+                    log += "   (Đã đọc lại: \(readBack))\n\n"
+                    log += "🎉 App Group & WorseQuery hoạt động hoàn hảo!\nBạn có thể chuyển sang tab Apply và dùng bình thường."
+                    return (true, log)
+                } catch {
+                    log += "\n❌ GHI FILE THẤT BẠI!\n"
+                    log += "Chi tiết: \(error.localizedDescription)\n\n"
+                    log += "👉 Đã grant access nhưng bị từ chối ghi. Có thể do Sandbox của iOS chặn hoặc thiếu quyền file."
+                    return (false, log)
                 }
-            } catch {
-                DispatchQueue.main.async {
-                    self.writeTestLog += "\n❌ GHI FILE THẤT BẠI!\n"
-                    self.writeTestLog += "Chi tiết: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Đã grant access nhưng bị từ chối ghi. Có thể do Sandbox của iOS chặn hoặc thiếu quyền file."
-                    self.writeTestSuccess = false
-                    self.isTestingWrite = false
-                }
-            }
+            }.value
+
+            self.writeTestLog += result.log
+            self.writeTestSuccess = result.success
+            self.isTestingWrite = false
         }
     }
 
@@ -302,7 +289,7 @@ struct SettingsView: View {
     private func handlePairingImport(_ url: URL) {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
-        
+
         do {
             _ = try RPPairingParser.parse(url: url)
             let data = try Data(contentsOf: url)
@@ -314,7 +301,7 @@ struct SettingsView: View {
             showErrorAlert = true
         }
     }
-    
+
     private func handleBackupImport(_ url: URL) {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
