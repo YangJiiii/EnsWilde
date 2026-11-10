@@ -4,7 +4,7 @@
 
 # EnsWilde (Mobile)
 
-**EnsWilde** is a tool utilizing `Bad_query` & `Airlift` exploits, designed for iPhone and iPad running the  **Bad_query iOS Version 27 Developer Beta 1-4 / Public Beta 1-2 Airlift iOS Version : 26.0-27.2 Beta 2**.
+**EnsWilde** is a tool utilizing `Worse_query` & `Airlift` exploits, designed for iPhone and iPad running the  **Worse_query iOS Version 27.0-27.3 (24C5370i) Airlift iOS Version : 26.0-27.2 Beta 2**.
 
 It operates as a standalone on-device application, functioning independently like modern apps. It leverages the `Bad_query` exploit to write data to files situated outside of the intended restore location.
 
@@ -32,6 +32,10 @@ It operates as a standalone on-device application, functioning independently lik
 2. Enable the VPN inside the app.
 3. Launch **EnsWilde**.
 4. import Pairing File to setting page . iOS 26 using iloader , iOS 27 on device StikPair . Pairing directly in app on iOS 27 soon
+## Need to know before continue
+1.You need a cert that have  App Group capabilities 
+2.Worse_query now using app group to get sandbox escape so need a cert that support 
+3.Need Cert? Just buy at [Cert YangJiii](https://cc.dangdi.dev)
 
 ---
 
@@ -41,7 +45,7 @@ Special thanks to the following for their contributions and support:
 
 * **YangJiii**: [For supporting me during development](https://x.com/duongduong0908)
 * **YangJiii**: [Original Developer of EnsWilde](https://github.com/yangjiiii/EnsWilde)
-* **@forcequitOS**: [Bad_query](https://github.com/forcequitOS/bad_query/tree/main)
+* **@forcequitOS**: [Worse_query](https://github.com/forcequitOS/worse_query/)
 * **0xjohnnydev**: [Airlift](https://github.com/0xjohnnydev/airlift)
 * **mak5er**: [Airlift-on-device Method](https://github.com/Mak5er/AirCard-iOS)
 * **@StikDebug team**: [`StikPair`Get Pairing File](https://github.com/StikDebug)
