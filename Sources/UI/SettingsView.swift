@@ -4,13 +4,9 @@ import UniformTypeIdentifiers
 import Network
 import AirliftFFI
 import Darwin
-import Security // Cần import Security để đọc App Group từ Entitlements
+import Security
 
 // MARK: - Private Security Framework APIs
-// Hai hàm dưới đây là private API của Security.framework (không có trong public header).
-// Khai báo @_silgen_name để Swift link tới symbol thật trong framework.
-// "Create"/"Copy" ⇒ trả về +1 retained, nên dùng CFTypeRef? để ARC quản lý đúng.
-
 @_silgen_name("SecTaskCreateFromSelf")
 private func SecTaskCreateFromSelf(_ allocator: UnsafeRawPointer?) -> CFTypeRef?
 
@@ -217,7 +213,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ (Đọc App Group + pwrite + O_RDWR)
+    // MARK: - Logic Test WQ (chflags + O_RDWR | O_NOFOLLOW)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
@@ -226,7 +222,7 @@ struct SettingsView: View {
         let work = DispatchWorkItem {
             let testFile = MobileGestaltApplyTask.onDeviceMGPath
 
-            // 1. Đọc App Group từ Entitlements (Giống Erosion)
+            // 1. Đọc App Group
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang kiểm tra App Group...\n" }
             if let appGroup = self.getAppGroupFromEntitlements() {
                 DispatchQueue.main.async { self.writeTestLog += " (wq) Using app group:\n \(appGroup)\n" }
@@ -238,7 +234,7 @@ struct SettingsView: View {
             let bq = WorseQuery()
 
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang xin quyền vào FILE:\n    \(testFile)\n" }
-            let (granted, _, errorMsg) = bq.grantAccess(atPath: testFile)
+            let (granted, handle, errorMsg) = bq.grantAccess(atPath: testFile)
 
             if !granted {
                 let msg = errorMsg.isEmpty ? "Không rõ nguyên nhân" : errorMsg
@@ -248,6 +244,12 @@ struct SettingsView: View {
                     self.isTestingWrite = false
                 }
                 return
+            }
+
+            // Nếu grantAccess trả về handle (token), cần đảm bảo token đã được consume
+            // (Trong hầu hết các bản worse_query, grantAccess đã tự consume token)
+            if handle > 0 {
+                DispatchQueue.main.async { self.writeTestLog += "[*] Đã nhận sandbox token (handle: \(handle)).\n" }
             }
 
             DispatchQueue.main.async { self.writeTestLog += "✅ grantAccess thành công!\n" }
@@ -267,11 +269,26 @@ struct SettingsView: View {
                 return
             }
 
-            // Bước 2: Ghi đè "tại chỗ" (in-place) bằng pwrite + O_RDWR
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR)...\n" }
+            // Bước 2: Gỡ cờ bất biến (UF_IMMUTABLE) nếu có
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang kiểm tra và gỡ cờ UF_IMMUTABLE...\n" }
+            var st = stat()
+            if stat(testFile, &st) == 0 {
+                if (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
+                    if chflags(testFile, st.st_flags & ~UInt32(UF_IMMUTABLE)) == 0 {
+                        DispatchQueue.main.async { self.writeTestLog += "✅ Đã gỡ cờ UF_IMMUTABLE thành công!\n" }
+                    } else {
+                        DispatchQueue.main.async { self.writeTestLog += "⚠️ Không thể gỡ cờ UF_IMMUTABLE (errno: \(errno))\n" }
+                    }
+                } else {
+                    DispatchQueue.main.async { self.writeTestLog += " (Không có cờ UF_IMMUTABLE)\n" }
+                }
+            }
+
+            // Bước 3: Ghi đè "tại chỗ" (in-place) bằng pwrite + O_RDWR | O_NOFOLLOW
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR | O_NOFOLLOW)...\n" }
             do {
-                // SỬA LỖI EPERM: Dùng O_RDWR thay vì O_WRONLY
-                let fd = open(testFile, O_RDWR)
+                // Mở với O_NOFOLLOW để tránh bị chuyển hướng bởi symlink
+                let fd = open(testFile, O_RDWR | O_NOFOLLOW)
                 guard fd >= 0 else {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
                 }
@@ -299,7 +316,7 @@ struct SettingsView: View {
             } catch {
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân: Đã dùng O_RDWR nhưng kernel vẫn từ chối. Hãy chắc chắn file không bị lock, và App Group đã được consume đúng cách."
+                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã gỡ cờ bất biến và dùng O_RDWR | O_NOFOLLOW. Có thể do sandbox token chưa được áp dụng đúng cách, hoặc file đang bị lock bởi tiến trình hệ thống."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
