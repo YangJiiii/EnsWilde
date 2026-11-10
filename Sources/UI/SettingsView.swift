@@ -37,9 +37,7 @@ struct SettingsView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
     @AppStorage("PairingFile") private var pairingFile: String?
     @State private var showPairingPicker = false
-    
     @State private var showOnDevicePairing = false
-    
     @State private var vpnActive: Bool = false
     @State private var monitor: NWPathMonitor?
     @AppStorage("isAirLiftMode") private var isAirLiftMode: Bool = false
@@ -47,7 +45,6 @@ struct SettingsView: View {
     @State private var backupInfo: MobileGestaltBackupManager.BackupInfo?
     @AppStorage("EnsWilde.userTintColor") private var userTintColorHex: String = "#ef9f76"
     @State private var showImportBackupPicker = false
-    
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
     
@@ -140,13 +137,11 @@ struct SettingsView: View {
                 }
                 
                 Button { createBackupNow() } label: {
-                    Label(L("backup_now"), systemImage: "square.and.arrow.down")
-                        .foregroundStyle(.primary)
+                    Label(L("backup_now"), systemImage: "square.and.arrow.down").foregroundStyle(.primary)
                 }
                 
                 Button { showImportBackupPicker = true } label: {
-                    Label(L("backup_import"), systemImage: "square.and.arrow.down")
-                        .foregroundStyle(.primary)
+                    Label(L("backup_import"), systemImage: "square.and.arrow.down").foregroundStyle(.primary)
                 }
                 
                 if hasBackup {
@@ -184,19 +179,15 @@ struct SettingsView: View {
         .onAppear { startMonitoringVPN(); refreshBackupInfo() }
         .onDisappear { monitor?.cancel() }
         .sheet(isPresented: $showPairingPicker) {
-            DocumentPickerView(allowedContentTypes: [
-                .propertyList,
-                UTType(filenameExtension: "mobiledevicepairing") ?? .data
-            ]) { url in handlePairingImport(url) }
+            DocumentPickerView(allowedContentTypes: [.propertyList, UTType(filenameExtension: "mobiledevicepairing") ?? .data]) { url in handlePairingImport(url) }
         }
         .sheet(isPresented: $showOnDevicePairing) {
             NavigationStack {
-                OnDevicePairingView()
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button(L("alert_close")) { showOnDevicePairing = false }
-                        }
+                OnDevicePairingView().toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(L("alert_close")) { showOnDevicePairing = false }
                     }
+                }
             }
         }
         .sheet(isPresented: $showImportBackupPicker) {
@@ -230,10 +221,7 @@ struct SettingsView: View {
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ THẤT BẠI: grantAccess trả về false.\n"
                     self.writeTestLog += "Chi tiết: \(msg)\n\n"
-                    self.writeTestLog += "👉 HƯỚNG DẪN SỬA:\n"
-                    self.writeTestLog += "1. Kiểm tra chứng chỉ đã có App Group chưa.\n"
-                    self.writeTestLog += "2. Kiểm tra đã bật VPN/Airlift Tunnel chưa.\n"
-                    self.writeTestLog += "3. Thử ký lại bằng SideStore/AltStore."
+                    self.writeTestLog += "👉 HƯỚNG DẪN: Hãy dùng SideStore/AltStore hoặc ESign (không import file entitlements) để ký lại app."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
@@ -275,14 +263,10 @@ struct SettingsView: View {
         let color = Color(hex: option.hex)
         let isSelected = userTintColorHex.lowercased() == option.hex.lowercased()
         VStack(spacing: 6) {
-            Circle()
-                .fill(color)
-                .frame(width: 36, height: 36)
+            Circle().fill(color).frame(width: 36, height: 36)
                 .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
                 .overlay(Image(systemName: "checkmark").font(.system(size: 14, weight: .bold)).foregroundColor(.white).opacity(isSelected ? 1 : 0))
-            Text(option.name)
-                .font(.caption)
-                .foregroundColor(isSelected ? .primary : .secondary)
+            Text(option.name).font(.caption).foregroundColor(isSelected ? .primary : .secondary)
         }
         .onTapGesture {
             userTintColorHex = option.hex
@@ -295,7 +279,6 @@ struct SettingsView: View {
     private func handlePairingImport(_ url: URL) {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
-        
         do {
             _ = try RPPairingParser.parse(url: url)
             let data = try Data(contentsOf: url)
@@ -312,12 +295,7 @@ struct SettingsView: View {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
         if let data = try? Data(contentsOf: url) {
-            do {
-                try MobileGestaltBackupManager.shared.importBackup(from: data)
-                refreshBackupInfo()
-            } catch {
-                print("Failed to import backup: \(error)")
-            }
+            do { try MobileGestaltBackupManager.shared.importBackup(from: data); refreshBackupInfo() } catch { print("Failed to import backup: \(error)") }
         }
     }
 
@@ -359,84 +337,5 @@ struct SettingsView: View {
             return id + String(UnicodeScalar(UInt8(value)))
         }
         return "\(UIDevice.current.model) (\(identifier))"
-    }
-}
-
-// MARK: - About View
-struct AboutView: View {
-    @ObservedObject private var languageManager = LanguageManager.shared
-    var body: some View {
-        Form {
-            Section {
-                VStack(spacing: 12) {
-                    Image(systemName: "heart.fill").font(.system(size: 32)).foregroundStyle(.pink)
-                    Text(L("about_desc")).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button {
-                        if let url = URL(string: "https://dangdi.dev/donate") { UIApplication.shared.open(url) }
-                    } label: {
-                        Text(L("button_donate"))
-                            .font(.headline.bold())
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
-                            .background(AppTheme.accent)
-                            .foregroundColor(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            Section {
-                Button(action: { if let url = URL(string: "https://t.me/yangjiiidibo") { UIApplication.shared.open(url) } }) {
-                    Label(L("about_group_yang"), systemImage: "safari")
-                }
-                Button(action: { if let url = URL(string: "https://t.me/lsnguyengr") { UIApplication.shared.open(url) } }) {
-                    Label(L("about_group_ls"), systemImage: "safari")
-                }
-                Button(action: { if let url = URL(string: "https://t.me/lsnguyyniu") { UIApplication.shared.open(url) } }) {
-                    Label(L("about_contact"), systemImage: "paperplane.fill")
-                }
-            }
-            Section(header: Text(L("settings_thanks_to"))) {
-                creditRow(name: "@YangJiii", desc: L("credit_yang_support"))
-                creditRow(name: "@YangJiii", desc: L("credit_yang_original"))
-                creditRow(name: "@LSNguyen", desc: L("credit_ls_new"))
-                creditRow(name: "@forcequitOS", desc: L("credit_forcequit_badquery"))
-                creditRow(name: "@0xjohnnydev", desc: L("credit_johnny_airlift"))
-                creditRow(name: "@mak5er", desc: L("credit_mak5er_aod"))
-                creditRow(name: "@jailbreakdotparty", desc: L("credit_jailbreak_config"))
-                creditRow(name: "@LikePass888", desc: L("credit_likepass_sound"))
-                creditRow(name: "@YiHoooong", desc: L("credit_yihooong_silent"))
-                creditRow(name: "@Cộng đồng LSNguyen & YangJiii và những người bạn chat ⚡️", desc: L("credit_community"))
-            }
-            Section(header: Text(L("settings_translators"))) {
-                ForEach(languageManager.availableLanguages.filter { $0.translator != nil && !($0.translator?.isEmpty ?? true) }) { langInfo in
-                    creditRow(
-                        name: langInfo.translator ?? "",
-                        desc: L("translation_by")
-                            .replacingOccurrences(of: "{native}", with: langInfo.nativeName)
-                            .replacingOccurrences(of: "{name}", with: langInfo.name)
-                    )
-                }
-            }
-        }
-        .navigationTitle(L("nav_about"))
-        .onAppear {
-            if languageManager.availableLanguages.isEmpty {
-                Task { await languageManager.fetchAvailableLanguages() }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func creditRow(name: String, desc: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "person.circle.fill")
-                .font(.system(size: 32))
-                .foregroundStyle(.secondary.opacity(0.5))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(.subheadline).fontWeight(.semibold)
-                Text(desc).font(.caption).foregroundStyle(.secondary)
-            }
-        }
     }
 }
