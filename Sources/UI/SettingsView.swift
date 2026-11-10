@@ -214,10 +214,10 @@ struct SettingsView: View {
             let bq = WorseQuery()
 
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang xin quyền vào thư mục:\n    \(targetDir)\n" }
-            let (granted, errorMsg) = bq.grantAccess(atPath: targetDir)
+            let (granted, _, errorMsg) = bq.grantAccess(atPath: targetDir)
 
             if !granted {
-                let msg = errorMsg ?? "Không rõ nguyên nhân"
+                let msg = errorMsg.isEmpty ? "Không rõ nguyên nhân" : errorMsg
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ THẤT BẠI: grantAccess trả về false.\n"
                     self.writeTestLog += "Chi tiết: \(msg)\n\n"
