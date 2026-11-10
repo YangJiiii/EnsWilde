@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 import Network
 import AirliftFFI
 import Darwin
+import Security // Cần import Security để đọc App Group từ Entitlements
 
 struct DocumentPickerView: UIViewControllerRepresentable {
     var allowedContentTypes: [UTType] = [.data, .item]
@@ -201,7 +202,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ (pwrite + O_RDWR + F_FULLFSYNC)
+    // MARK: - Logic Test WQ (Đọc App Group + pwrite + O_RDWR)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
@@ -209,6 +210,14 @@ struct SettingsView: View {
 
         let work = DispatchWorkItem {
             let testFile = MobileGestaltApplyTask.onDeviceMGPath
+
+            // 1. Đọc App Group từ Entitlements (Giống Erosion)
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang kiểm tra App Group...\n" }
+            if let appGroup = self.getAppGroupFromEntitlements() {
+                DispatchQueue.main.async { self.writeTestLog += " (wq) Using app group:\n \(appGroup)\n" }
+            } else {
+                DispatchQueue.main.async { self.writeTestLog += " ⚠️ Không tìm thấy App Group trong chữ ký!\n" }
+            }
 
             DispatchQueue.main.async { self.writeTestLog += "[*] Khởi tạo WorseQuery...\n" }
             let bq = WorseQuery()
@@ -243,28 +252,22 @@ struct SettingsView: View {
                 return
             }
 
-            // Bước 2: Ghi đè "tại chỗ" (in-place) bằng pwrite + F_FULLFSYNC
+            // Bước 2: Ghi đè "tại chỗ" (in-place) bằng pwrite + O_RDWR
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR)...\n" }
             do {
-                // SỬA LỖI EPERM: Mở file bằng O_RDWR (Đọc + Ghi) thay vì O_WRONLY
+                // SỬA LỖI EPERM: Dùng O_RDWR thay vì O_WRONLY
                 let fd = open(testFile, O_RDWR)
                 guard fd >= 0 else {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
                 }
                 defer { close(fd) }
 
-                // Ghi dữ liệu tại offset 0 (in-place)
+                // Ghi dữ liệu tại offset 0
                 let bytesWritten = originalData.withUnsafeBytes { buffer in
                     pwrite(fd, buffer.baseAddress, buffer.count, 0)
                 }
                 guard bytesWritten == originalData.count else {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Ghi file thất bại. errno: \(errno)"])
-                }
-
-                // Cắt bớt phần dư nếu file gốc dài hơn dữ liệu mới
-                let fileSize = lseek(fd, 0, SEEK_END)
-                if fileSize > off_t(originalData.count) {
-                    ftruncate(fd, off_t(originalData.count))
                 }
 
                 // Đồng bộ hóa dữ liệu xuống đĩa vật lý
@@ -281,13 +284,21 @@ struct SettingsView: View {
             } catch {
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân: Đã dùng O_RDWR nhưng kernel vẫn từ chối. Hãy chắc chắn file không bị tiến trình khác lock, và token sandbox đã được consume đúng cách."
+                    self.writeTestLog += "👉 Nguyên nhân: Đã dùng O_RDWR nhưng kernel vẫn từ chối. Hãy chắc chắn file không bị lock, và App Group đã được consume đúng cách."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
             }
         }
         DispatchQueue.global(qos: .userInitiated).async(execute: work)
+    }
+
+    // Hàm lấy App Group từ Entitlements (Giống Erosion)
+    private func getAppGroupFromEntitlements() -> String? {
+        guard let task = SecTaskCreateFromSelf(nil) else { return nil }
+        guard let entitlements = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil) else { return nil }
+        let groups = entitlements as? [String]
+        return groups?.first
     }
 
     @ViewBuilder private func statusRow(title: String, subtitle: String, ok: Bool) -> some View {
