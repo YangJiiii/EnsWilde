@@ -220,7 +220,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ (chown + chmod + chflags + O_RDWR + pwrite + F_FULLFSYNC)
+    // MARK: - Logic Test WQ (Consume Token + pwrite + O_RDWR + F_FULLFSYNC)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
@@ -241,7 +241,7 @@ struct SettingsView: View {
             DispatchQueue.main.async { self.writeTestLog += "[*] Khởi tạo WorseQuery...\n" }
             let bq = WorseQuery()
 
-            // 2. Grant access trên thư mục cha (quan trọng)
+            // 2. Grant access
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang xin quyền vào DIR:\n    \(targetDir)\n" }
             let (granted, handle, errorMsg) = bq.grantAccess(atPath: targetDir)
 
@@ -255,7 +255,7 @@ struct SettingsView: View {
                 return
             }
 
-            // 3. Consume token nếu có
+            // 3. Consume sandbox token (Kích hoạt quyền vào process)
             var consumedHandle: Int64 = -1
             if handle > 0 {
                 DispatchQueue.main.async { self.writeTestLog += "[*] Đang consume sandbox token (handle: \(handle))...\n" }
@@ -264,20 +264,21 @@ struct SettingsView: View {
                     if consumedHandle < 0 {
                         DispatchQueue.main.async { self.writeTestLog += " ⚠️ Consume token thất bại (errno: \(errno))\n" }
                     } else {
-                        DispatchQueue.main.async { self.writeTestLog += " ✅ Consume token thành công!\n" }
+                        DispatchQueue.main.async { self.writeTestLog += " ✅ Consume token thành công! Quyền đã được kích hoạt.\n" }
                     }
                 }
+            } else {
+                DispatchQueue.main.async { self.writeTestLog += " ✅ grantAccess thành công (không cần consume).\n" }
             }
 
-            DispatchQueue.main.async { self.writeTestLog += "✅ grantAccess thành công!\n" }
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử đọc file thật...\n" }
-
             // 4. Đọc dữ liệu gốc
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang đọc file thật...\n" }
             let originalData: Data
             do {
                 originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
                 DispatchQueue.main.async { self.writeTestLog += "✅ Đọc file thành công (\(originalData.count) bytes)!\n" }
             } catch {
+                if consumedHandle > 0 { sandbox_extension_release(consumedHandle) }
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI ĐỌC FILE: \(error.localizedDescription)\n"
                     self.writeTestSuccess = false
@@ -286,37 +287,19 @@ struct SettingsView: View {
                 return
             }
 
-            // 5. Kiểm tra quyền file (debug)
+            // 5. Gỡ cờ bất biến nếu có
             var st = stat()
             if stat(testFile, &st) == 0 {
-                DispatchQueue.main.async {
-                    self.writeTestLog += "[*] File permissions: uid=\(st.st_uid), gid=\(st.st_gid), mode=\(String(st.st_mode, radix: 8))\n"
-                }
-                // Thử gỡ cờ bất biến
                 if (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
                     if chflags(testFile, st.st_flags & ~UInt32(UF_IMMUTABLE)) == 0 {
                         DispatchQueue.main.async { self.writeTestLog += "✅ Đã gỡ cờ UF_IMMUTABLE!\n" }
+                    } else {
+                        DispatchQueue.main.async { self.writeTestLog += "⚠️ Không thể gỡ cờ UF_IMMUTABLE (errno: \(errno))\n" }
                     }
                 }
             }
 
-            // 6. Thử thay đổi quyền sở hữu (chown) và quyền (chmod) nếu cần
-            // Điều này có thể yêu cầu quyền root, nhưng thử vẫn hơn.
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử thay đổi quyền sở hữu (chown) và quyền (chmod)...\n" }
-            let uid = getuid()
-            let gid = getgid()
-            if chown(testFile, uid, gid) == 0 {
-                DispatchQueue.main.async { self.writeTestLog += "✅ chown thành công (uid=\(uid), gid=\(gid))\n" }
-            } else {
-                DispatchQueue.main.async { self.writeTestLog += " ⚠️ chown thất bại (errno: \(errno))\n" }
-            }
-            if chmod(testFile, 0o644) == 0 {
-                DispatchQueue.main.async { self.writeTestLog += "✅ chmod thành công (644)\n" }
-            } else {
-                DispatchQueue.main.async { self.writeTestLog += " ⚠️ chmod thất bại (errno: \(errno))\n" }
-            }
-
-            // 7. Ghi đè "tại chỗ" (in-place) bằng pwrite + O_RDWR
+            // 6. Ghi đè "tại chỗ" (pwrite + O_RDWR + F_FULLFSYNC)
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR)...\n" }
             do {
                 let fd = open(testFile, O_RDWR)
@@ -341,9 +324,7 @@ struct SettingsView: View {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "F_FULLFSYNC thất bại. errno: \(errno)"])
                 }
 
-                if consumedHandle > 0 {
-                    sandbox_extension_release(consumedHandle)
-                }
+                if consumedHandle > 0 { sandbox_extension_release(consumedHandle) }
 
                 DispatchQueue.main.async {
                     self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
@@ -352,13 +333,10 @@ struct SettingsView: View {
                     self.isTestingWrite = false
                 }
             } catch {
-                if consumedHandle > 0 {
-                    sandbox_extension_release(consumedHandle)
-                }
-
+                if consumedHandle > 0 { sandbox_extension_release(consumedHandle) }
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã chown/chmod. Có thể do file thuộc sở hữu của root/_mobilegestalt và bạn không có quyền thay đổi quyền sở hữu, hoặc sandbox extension không cho phép ghi trực tiếp."
+                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã consume token và dùng O_RDWR. Hãy kiểm tra lại App Group và chắc chắn token được consume đúng."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
