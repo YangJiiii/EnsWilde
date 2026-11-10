@@ -17,6 +17,13 @@ private func SecTaskCopyValueForEntitlement(
     _ error: UnsafeMutablePointer<Unmanaged<CFError>?>?
 ) -> CFTypeRef?
 
+// MARK: - Private Sandbox APIs
+@_silgen_name("sandbox_extension_consume")
+private func sandbox_extension_consume(_ token: UnsafePointer<CChar>) -> Int64
+
+@_silgen_name("sandbox_extension_release")
+private func sandbox_extension_release(_ handle: Int64) -> Int
+
 struct DocumentPickerView: UIViewControllerRepresentable {
     var allowedContentTypes: [UTType] = [.data, .item]
     let onPick: (URL) -> Void
@@ -213,7 +220,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ (chflags + O_RDWR | O_NOFOLLOW)
+    // MARK: - Logic Test WQ (Consume Token + pwrite + O_RDWR)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
@@ -246,10 +253,18 @@ struct SettingsView: View {
                 return
             }
 
-            // Nếu grantAccess trả về handle (token), cần đảm bảo token đã được consume
-            // (Trong hầu hết các bản worse_query, grantAccess đã tự consume token)
+            // 2. Consume sandbox token nếu có trả về handle
+            var consumedHandle: Int64 = -1
             if handle > 0 {
-                DispatchQueue.main.async { self.writeTestLog += "[*] Đã nhận sandbox token (handle: \(handle)).\n" }
+                DispatchQueue.main.async { self.writeTestLog += "[*] Đang consume sandbox token (handle: \(handle))...\n" }
+                if let ptr = UnsafePointer<CChar>(bitPattern: UInt(handle)) {
+                    consumedHandle = sandbox_extension_consume(ptr)
+                    if consumedHandle < 0 {
+                        DispatchQueue.main.async { self.writeTestLog += " ⚠️ Consume token thất bại (errno: \(errno))\n" }
+                    } else {
+                        DispatchQueue.main.async { self.writeTestLog += " ✅ Consume token thành công!\n" }
+                    }
+                }
             }
 
             DispatchQueue.main.async { self.writeTestLog += "✅ grantAccess thành công!\n" }
@@ -269,32 +284,27 @@ struct SettingsView: View {
                 return
             }
 
-            // Bước 2: Gỡ cờ bất biến (UF_IMMUTABLE) nếu có
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang kiểm tra và gỡ cờ UF_IMMUTABLE...\n" }
+            // Bước 2: Gỡ cờ bất biến (UF_IMMUTABLE)
             var st = stat()
             if stat(testFile, &st) == 0 {
                 if (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
                     if chflags(testFile, st.st_flags & ~UInt32(UF_IMMUTABLE)) == 0 {
-                        DispatchQueue.main.async { self.writeTestLog += "✅ Đã gỡ cờ UF_IMMUTABLE thành công!\n" }
+                        DispatchQueue.main.async { self.writeTestLog += "✅ Đã gỡ cờ UF_IMMUTABLE!\n" }
                     } else {
                         DispatchQueue.main.async { self.writeTestLog += "⚠️ Không thể gỡ cờ UF_IMMUTABLE (errno: \(errno))\n" }
                     }
-                } else {
-                    DispatchQueue.main.async { self.writeTestLog += " (Không có cờ UF_IMMUTABLE)\n" }
                 }
             }
 
-            // Bước 3: Ghi đè "tại chỗ" (in-place) bằng pwrite + O_RDWR | O_NOFOLLOW
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR | O_NOFOLLOW)...\n" }
+            // Bước 3: Ghi đè "tại chỗ" (in-place) bằng pwrite + O_RDWR
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR)...\n" }
             do {
-                // Mở với O_NOFOLLOW để tránh bị chuyển hướng bởi symlink
-                let fd = open(testFile, O_RDWR | O_NOFOLLOW)
+                let fd = open(testFile, O_RDWR)
                 guard fd >= 0 else {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
                 }
                 defer { close(fd) }
 
-                // Ghi dữ liệu tại offset 0
                 let bytesWritten = originalData.withUnsafeBytes { buffer in
                     pwrite(fd, buffer.baseAddress, buffer.count, 0)
                 }
@@ -302,9 +312,17 @@ struct SettingsView: View {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Ghi file thất bại. errno: \(errno)"])
                 }
 
-                // Đồng bộ hóa dữ liệu xuống đĩa vật lý
+                let fileSize = lseek(fd, 0, SEEK_END)
+                if fileSize > off_t(originalData.count) {
+                    ftruncate(fd, off_t(originalData.count))
+                }
+
                 if fcntl(fd, F_FULLFSYNC) == -1 {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "F_FULLFSYNC thất bại. errno: \(errno)"])
+                }
+
+                if consumedHandle > 0 {
+                    sandbox_extension_release(consumedHandle)
                 }
 
                 DispatchQueue.main.async {
@@ -314,9 +332,13 @@ struct SettingsView: View {
                     self.isTestingWrite = false
                 }
             } catch {
+                if consumedHandle > 0 {
+                    sandbox_extension_release(consumedHandle)
+                }
+                
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã gỡ cờ bất biến và dùng O_RDWR | O_NOFOLLOW. Có thể do sandbox token chưa được áp dụng đúng cách, hoặc file đang bị lock bởi tiến trình hệ thống."
+                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã consume token và dùng O_RDWR. Có thể do file đang bị lock bởi tiến trình hệ thống."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
@@ -325,7 +347,7 @@ struct SettingsView: View {
         DispatchQueue.global(qos: .userInitiated).async(execute: work)
     }
 
-    // Hàm lấy App Group từ Entitlements (Giống Erosion)
+    // Hàm lấy App Group từ Entitlements
     private func getAppGroupFromEntitlements() -> String? {
         guard let task = SecTaskCreateFromSelf(nil) else { return nil }
         guard let entitlements = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil) else { return nil }
