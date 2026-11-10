@@ -24,6 +24,40 @@ private func sandbox_extension_consume(_ token: UnsafePointer<CChar>) -> Int64
 @_silgen_name("sandbox_extension_release")
 private func sandbox_extension_release(_ handle: Int64) -> Int
 
+// MARK: - WorseQuery Bridge (Chuẩn chỉnh token & handle)
+final class WorseQueryBridge {
+    static let shared = WorseQueryBridge()
+    private var activeHandles: [Int64] = []
+    
+    func grantAccess(forPath path: String) -> Int64 {
+        let wq = WorseQuery()
+        // Giả định hàm trả về (granted: Bool, handle: Int64, errorMsg: String)
+        let (granted, handle, _) = wq.grantAccess(atPath: path)
+        guard granted, handle > 0 else { return -1 }
+        return handle
+    }
+    
+    func consumeToken(fromHandle handle: Int64) -> Bool {
+        // Handle number thực chất là địa chỉ bộ nhớ của chuỗi token
+        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else { return false }
+        let result = sandbox_extension_consume(tokenPtr)
+        if result < 0 {
+            print("⚠️ Consume token thất bại (errno: \(errno))")
+            return false
+        }
+        activeHandles.append(result)
+        return true
+    }
+    
+    func releaseAll() {
+        for h in activeHandles {
+            _ = sandbox_extension_release(h)
+        }
+        activeHandles.removeAll()
+    }
+}
+
+// MARK: - Document Picker
 struct DocumentPickerView: UIViewControllerRepresentable {
     var allowedContentTypes: [UTType] = [.data, .item]
     let onPick: (URL) -> Void
@@ -52,6 +86,7 @@ struct DocumentPickerView: UIViewControllerRepresentable {
     }
 }
 
+// MARK: - Main Settings View
 struct SettingsView: View {
     @ObservedObject var toolStore: ToolStore
     @ObservedObject private var localizationManager = LocalizationManager.shared
@@ -220,55 +255,57 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ (Ghi đè tại chỗ - In-place Overwrite)
+    // MARK: - Logic Test WQ (Đã fix full)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
-        writeTestLog = "[*] Bắt đầu test quyền...\n"
+        writeTestLog = "[*] Bắt đầu test quyền (In-place Overwrite Protocol)...\n"
 
         let work = DispatchWorkItem {
             let testFile = MobileGestaltApplyTask.onDeviceMGPath
             let targetDir = (testFile as NSString).deletingLastPathComponent
+            let bridge = WorseQueryBridge.shared
 
-            // 1. Đọc App Group
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang kiểm tra App Group...\n" }
-            if let appGroup = self.getAppGroupFromEntitlements() {
+            // 1. Quét TẤT CẢ App Group
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang quét App Group...\n" }
+            if let appGroup = self.getFirstValidAppGroup() {
                 DispatchQueue.main.async { self.writeTestLog += " (wq) Using app group:\n \(appGroup)\n" }
             } else {
-                DispatchQueue.main.async { self.writeTestLog += " ⚠️ Không tìm thấy App Group trong chữ ký!\n" }
+                DispatchQueue.main.async { self.writeTestLog += " ⚠️ Không tìm thấy App Group hợp lệ trong chữ ký!\n" }
             }
-
-            DispatchQueue.main.async { self.writeTestLog += "[*] Khởi tạo WorseQuery...\n" }
-            let bq = WorseQuery()
 
             // 2. Grant access trên thư mục cha
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang xin quyền vào DIR:\n    \(targetDir)\n" }
-            let (granted, handle, errorMsg) = bq.grantAccess(atPath: targetDir)
-
-            if !granted {
-                let msg = errorMsg.isEmpty ? "Không rõ nguyên nhân" : errorMsg
+            let handle = bridge.grantAccess(forPath: targetDir)
+            guard handle > 0 else {
                 DispatchQueue.main.async {
-                    self.writeTestLog += "\n❌ THẤT BẠI: grantAccess trả về false.\nChi tiết: \(msg)\n"
+                    self.writeTestLog += "\n❌ THẤT BẠI: grantAccess trả về handle không hợp lệ.\n"
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
                 return
             }
 
-            // 3. Consume sandbox token
-            var consumedHandle: Int64 = -1
-            if handle > 0 {
-                DispatchQueue.main.async { self.writeTestLog += "[*] Đang consume sandbox token (handle: \(handle))...\n" }
-                if let ptr = UnsafePointer<CChar>(bitPattern: UInt(handle)) {
-                    consumedHandle = sandbox_extension_consume(ptr)
-                    if consumedHandle < 0 {
-                        DispatchQueue.main.async { self.writeTestLog += " ⚠️ Consume token thất bại (errno: \(errno))\n" }
-                    } else {
-                        DispatchQueue.main.async { self.writeTestLog += " ✅ Consume token thành công! Quyền đã được kích hoạt.\n" }
+            // 3. Consume token TỪ HANDLE NUMBER
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang consume sandbox token (handle: \(handle))...\n" }
+            let consumed = bridge.consumeToken(fromHandle: handle)
+            
+            if !consumed {
+                // Fallback: nếu consume thất bại, thử grant access trực tiếp trên file
+                DispatchQueue.main.async { self.writeTestLog += " ⚠️ Consume từ handle thất bại, thử grant trực tiếp trên file...\n" }
+                let fileHandle = bridge.grantAccess(forPath: testFile)
+                if fileHandle > 0, bridge.consumeToken(fromHandle: fileHandle) {
+                    DispatchQueue.main.async { self.writeTestLog += " ✅ Consume token trực tiếp trên file thành công.\n" }
+                } else {
+                    DispatchQueue.main.async {
+                        self.writeTestLog += "\n❌ THẤT BẠI: Không thể consume token từ cả DIR lẫn FILE.\n"
+                        self.writeTestSuccess = false
+                        self.isTestingWrite = false
                     }
+                    return
                 }
             } else {
-                DispatchQueue.main.async { self.writeTestLog += " ✅ grantAccess thành công (không cần consume).\n" }
+                DispatchQueue.main.async { self.writeTestLog += " ✅ Consume token thành công!\n" }
             }
 
             // 4. Đọc dữ liệu gốc
@@ -278,7 +315,7 @@ struct SettingsView: View {
                 originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
                 DispatchQueue.main.async { self.writeTestLog += "✅ Đọc file thành công (\(originalData.count) bytes)!\n" }
             } catch {
-                if consumedHandle > 0 { sandbox_extension_release(consumedHandle) }
+                bridge.releaseAll()
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI ĐỌC FILE: \(error.localizedDescription)\n"
                     self.writeTestSuccess = false
@@ -287,7 +324,7 @@ struct SettingsView: View {
                 return
             }
 
-            // 5. Gỡ cờ bất biến (UF_IMMUTABLE) nếu có
+            // 5. Gỡ cờ bất biến (UF_IMMUTABLE)
             var st = stat()
             if stat(testFile, &st) == 0 {
                 if (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
@@ -299,13 +336,13 @@ struct SettingsView: View {
                 }
             }
 
-            // 6. Ghi đè "tại chỗ" (In-place Overwrite) với O_RDWR | O_CLOEXEC | O_NOFOLLOW
+            // 6. GHI ĐÈ TẠI CHỖ (IN-PLACE OVERWRITE) - KHÔNG DÙNG replaceItemAt
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR | O_CLOEXEC | O_NOFOLLOW)...\n" }
             do {
-                // Mở file với các cờ cần thiết để tránh bị chặn bởi symlink và các vấn đề khác
                 let fd = open(testFile, O_RDWR | O_CLOEXEC | O_NOFOLLOW)
                 guard fd >= 0 else {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                                  userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
                 }
                 defer { close(fd) }
 
@@ -314,7 +351,8 @@ struct SettingsView: View {
                     pwrite(fd, buffer.baseAddress, buffer.count, 0)
                 }
                 guard bytesWritten == originalData.count else {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Ghi file thất bại. errno: \(errno)"])
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                                  userInfo: [NSLocalizedDescriptionKey: "Ghi file thất bại. errno: \(errno)"])
                 }
 
                 // Cắt bớt phần dư nếu file gốc dài hơn dữ liệu mới
@@ -325,10 +363,11 @@ struct SettingsView: View {
 
                 // Đồng bộ hóa dữ liệu xuống đĩa vật lý
                 if fcntl(fd, F_FULLFSYNC) == -1 {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "F_FULLFSYNC thất bại. errno: \(errno)"])
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                                  userInfo: [NSLocalizedDescriptionKey: "F_FULLFSYNC thất bại. errno: \(errno)"])
                 }
 
-                if consumedHandle > 0 { sandbox_extension_release(consumedHandle) }
+                bridge.releaseAll()
 
                 DispatchQueue.main.async {
                     self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
@@ -337,10 +376,12 @@ struct SettingsView: View {
                     self.isTestingWrite = false
                 }
             } catch {
-                if consumedHandle > 0 { sandbox_extension_release(consumedHandle) }
+                bridge.releaseAll()
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã consume token và dùng O_RDWR | O_CLOEXEC | O_NOFOLLOW. Hãy kiểm tra lại App Group và chắc chắn token được consume đúng."
+                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã consume token. " +
+                    "Hãy kiểm tra lại App Group (cert có thể thiếu entitlement) " +
+                    "và chắc chắn WorseQuery framework đang dùng đúng phiên bản hỗ trợ iOS 27."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
@@ -349,12 +390,18 @@ struct SettingsView: View {
         DispatchQueue.global(qos: .userInitiated).async(execute: work)
     }
 
-    // Hàm lấy App Group từ Entitlements
-    private func getAppGroupFromEntitlements() -> String? {
+    // Hàm fallback lấy App Group xịn nhất
+    private func getFirstValidAppGroup() -> String? {
         guard let task = SecTaskCreateFromSelf(nil) else { return nil }
         guard let entitlements = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil) else { return nil }
-        let groups = entitlements as? [String]
-        return groups?.first
+        guard let groups = entitlements as? [String] else { return nil }
+        
+        for g in groups {
+            if g.contains("mobilegestalt") || g.hasPrefix("group.") {
+                return g
+            }
+        }
+        return groups.first
     }
 
     @ViewBuilder private func statusRow(title: String, subtitle: String, ok: Bool) -> some View {
