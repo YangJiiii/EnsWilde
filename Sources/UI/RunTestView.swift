@@ -44,7 +44,8 @@ struct RunTestSectionView: View {
         Task {
             let result: (isError: Bool, message: String) = await Task.detached(priority: .userInitiated) {
                 let bq = WorseQuery()
-                let (granted, _) = bq.grantAccess(atPath: targetDir)
+                // ✅ FIX: grantAccess trả về (Bool, Int64, String) — bỏ qua errno ở index 1
+                let (granted, _, _) = bq.grantAccess(atPath: targetDir)
 
                 if !granted {
                     return (true, "❌ LỖI: WorseQuery không thể grant access. App Group chưa được ký đúng hoặc chứng chỉ không có quyền.")
