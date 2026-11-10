@@ -225,10 +225,11 @@ struct SettingsView: View {
                 let bq = WorseQuery()
 
                 log += "[*] Đang xin quyền (grantAccess) vào thư mục:\n    \(targetDir)\n"
-                let (granted, errorMsg) = bq.grantAccess(atPath: targetDir)
+                // ✅ FIX: grantAccess trả về (Bool, Int64, String) — String là message ở index 2
+                let (granted, _, errorMsgRaw) = bq.grantAccess(atPath: targetDir)
 
                 if !granted {
-                    let msg = errorMsg ?? "Không rõ nguyên nhân"
+                    let msg = errorMsgRaw.isEmpty ? "Không rõ nguyên nhân" : errorMsgRaw
                     log += "\n❌ THẤT BẠI: WorseQuery không thể grant access.\n"
                     log += "Chi tiết: \(msg)\n\n"
                     log += "👉 HƯỚNG DẪN SỬA:\n1. Chứng chỉ/App Group chưa được ký đúng.\n2. Hoặc chưa bật VPN/Airlift Tunnel."
