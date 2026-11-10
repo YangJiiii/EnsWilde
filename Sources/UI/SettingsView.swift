@@ -200,29 +200,25 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ (Đã Fix Lỗi Đọc/Ghi)
+    // MARK: - Logic Test WQ (Đã Fix Lỗi Ghi File - In-place Write)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
         writeTestLog = "[*] Bắt đầu test quyền...\n"
 
         let work = DispatchWorkItem {
-            // Sử dụng đường dẫn chuẩn từ app của bạn
             let testFile = MobileGestaltApplyTask.onDeviceMGPath
 
             DispatchQueue.main.async { self.writeTestLog += "[*] Khởi tạo WorseQuery...\n" }
             let bq = WorseQuery()
 
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang xin quyền vào FILE:\n    \(testFile)\n" }
-            
-            // Cấp quyền trực tiếp trên FILE thay vì thư mục
             let (granted, _, errorMsg) = bq.grantAccess(atPath: testFile)
 
             if !granted {
                 let msg = errorMsg.isEmpty ? "Không rõ nguyên nhân" : errorMsg
                 DispatchQueue.main.async {
-                    self.writeTestLog += "\n❌ THẤT BẠI: grantAccess trả về false.\n"
-                    self.writeTestLog += "Chi tiết: \(msg)\n"
+                    self.writeTestLog += "\n❌ THẤT BẠI: grantAccess trả về false.\nChi tiết: \(msg)\n"
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
@@ -230,16 +226,41 @@ struct SettingsView: View {
             }
 
             DispatchQueue.main.async { self.writeTestLog += "✅ grantAccess thành công!\n" }
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử đọc file thật (Bỏ qua isReadableFile)...\n" }
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử đọc file thật...\n" }
 
-            // Thử đọc trực tiếp
+            // Bước 1: Đọc dữ liệu gốc
+            let originalData: Data
             do {
-                let originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
+                originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
                 DispatchQueue.main.async { self.writeTestLog += "✅ Đọc file thành công (\(originalData.count) bytes)!\n" }
-                DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè file thật...\n" }
+            } catch {
+                DispatchQueue.main.async {
+                    self.writeTestLog += "\n❌ LỖI ĐỌC FILE: \(error.localizedDescription)\n"
+                    self.writeTestSuccess = false
+                    self.isTestingWrite = false
+                }
+                return
+            }
 
-                // Ghi đè lại y nguyên nội dung cũ
-                try originalData.write(to: URL(fileURLWithPath: testFile), options: [])
+            // Bước 2: Ghi đè "tại chỗ" (in-place) để duy trì inode và quyền sở hữu
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (in-place)...\n" }
+            do {
+                let fileHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: testFile))
+                defer { try? fileHandle.close() }
+
+                // Di chuyển con trỏ về đầu file và ghi đè
+                try fileHandle.seek(toOffset: 0)
+                try fileHandle.write(contentsOf: originalData)
+
+                // Nếu dữ liệu mới ngắn hơn dữ liệu cũ, cắt bớt phần dư
+                let currentOffset = try fileHandle.offset()
+                let endOffset = try fileHandle.seekToEnd()
+                if currentOffset < endOffset {
+                    try fileHandle.truncate(atOffset: currentOffset)
+                }
+
+                // Đồng bộ hóa dữ liệu xuống đĩa
+                try fileHandle.synchronize()
 
                 DispatchQueue.main.async {
                     self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
@@ -249,11 +270,8 @@ struct SettingsView: View {
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.writeTestLog += "\n❌ LỖI: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân có thể do:\n"
-                    self.writeTestLog += "1. Đường dẫn file không tồn tại.\n"
-                    self.writeTestLog += "2. Grant access thành công nhưng extension không áp dụng được cho file này.\n"
-                    self.writeTestLog += "3. Chứng chỉ chỉ cho phép Read mà không cho Write."
+                    self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
+                    self.writeTestLog += "👉 Nguyên nhân: Phương thức ghi 'in-place' bị từ chối. Điều này có thể do file đang bị hệ thống khóa hoặc sandbox extension không cho phép thao tác này."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
