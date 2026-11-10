@@ -47,12 +47,12 @@ struct SettingsView: View {
     @State private var showImportBackupPicker = false
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
-    
+
     // MARK: - State cho Run Test
     @State private var isTestingWrite = false
     @State private var writeTestLog = ""
     @State private var writeTestSuccess: Bool? = nil
-    
+
     private var tintOptions: [(name: String, hex: String)] {
         [
             (L("color_orange"), "#ef9f76"),
@@ -79,7 +79,7 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(isTestingWrite)
-                
+
                 if !writeTestLog.isEmpty {
                     ScrollView {
                         Text(writeTestLog)
@@ -105,7 +105,7 @@ struct SettingsView: View {
                     } label: { Label(L("button_reset_pairing"), systemImage: "trash") }
                 } else {
                     Button { showPairingPicker = true } label: { Label(L("import_pairing"), systemImage: "doc.badge.plus") }
-                    
+
                     if #available(iOS 27.0, *) {
                         Button { showOnDevicePairing = true } label: {
                             Label(L("pair_on_device"), systemImage: "iphone.radiowaves.left.and.right")
@@ -135,15 +135,15 @@ struct SettingsView: View {
                         }
                     }.padding(.vertical, 4)
                 }
-                
+
                 Button { createBackupNow() } label: {
                     Label(L("backup_now"), systemImage: "square.and.arrow.down").foregroundStyle(.primary)
                 }
-                
+
                 Button { showImportBackupPicker = true } label: {
                     Label(L("backup_import"), systemImage: "square.and.arrow.down").foregroundStyle(.primary)
                 }
-                
+
                 if hasBackup {
                     Button(role: .destructive) { deleteBackup() } label: {
                         Label(L("backup_delete"), systemImage: "trash")
@@ -156,7 +156,7 @@ struct SettingsView: View {
                     Label(L("settings_language"), systemImage: "globe")
                 }
             }
-            
+
             Section(header: Text(L("settings_accent_color"))) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
@@ -167,7 +167,7 @@ struct SettingsView: View {
                     .padding(.vertical, 8)
                 }
             }
-            
+
             Section(header: Text(L("settings_app_info"))) {
                 HStack { Label("EnsWilde", systemImage: "sparkles"); Spacer(); Text("v\(appVersion)").font(.footnote).foregroundStyle(.secondary) }
                 HStack { Label(L("app_ios"), systemImage: "iphone"); Spacer(); Text(UIDevice.current.systemVersion).font(.footnote).foregroundStyle(.secondary) }
@@ -200,22 +200,22 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ
+    // MARK: - Logic Test WQ  (⚠️ CHỈ HÀM NÀY ĐỔI — wrap bằng DispatchWorkItem)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
         writeTestLog = "[*] Bắt đầu test...\n"
-        
-        DispatchQueue.global(qos: .userInitiated).async {
+
+        let work = DispatchWorkItem {
             let targetDir = "/var/mobile/Containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
             let testFile = "\(targetDir)/enswilde_test_write.txt"
-            
+
             DispatchQueue.main.async { self.writeTestLog += "[*] Khởi tạo WorseQuery...\n" }
             let bq = WorseQuery()
-            
+
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang xin quyền vào thư mục:\n    \(targetDir)\n" }
             let (granted, errorMsg) = bq.grantAccess(atPath: targetDir)
-            
+
             if !granted {
                 let msg = errorMsg ?? "Không rõ nguyên nhân"
                 DispatchQueue.main.async {
@@ -227,15 +227,15 @@ struct SettingsView: View {
                 }
                 return
             }
-            
+
             DispatchQueue.main.async { self.writeTestLog += "✅ grantAccess thành công!\n" }
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi file...\n" }
-            
+
             do {
                 try "EnsWilde Test - \(Date())".write(toFile: testFile, atomically: true, encoding: .utf8)
                 let readBack = try String(contentsOfFile: testFile, encoding: .utf8)
                 try? FileManager.default.removeItem(atPath: testFile)
-                
+
                 DispatchQueue.main.async {
                     self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
                     self.writeTestLog += "   Nội dung đọc lại: \(readBack)\n\n"
@@ -253,6 +253,7 @@ struct SettingsView: View {
                 }
             }
         }
+        DispatchQueue.global(qos: .userInitiated).async(execute: work)
     }
 
     @ViewBuilder private func statusRow(title: String, subtitle: String, ok: Bool) -> some View {
@@ -290,7 +291,7 @@ struct SettingsView: View {
             showErrorAlert = true
         }
     }
-    
+
     private func handleBackupImport(_ url: URL) {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
