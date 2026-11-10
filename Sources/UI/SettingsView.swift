@@ -201,7 +201,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ (pwrite + F_FULLFSYNC)
+    // MARK: - Logic Test WQ (pwrite + O_RDWR + F_FULLFSYNC)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
@@ -244,10 +244,10 @@ struct SettingsView: View {
             }
 
             // Bước 2: Ghi đè "tại chỗ" (in-place) bằng pwrite + F_FULLFSYNC
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite)...\n" }
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR)...\n" }
             do {
-                // Mở file descriptor với quyền ghi
-                let fd = open(testFile, O_WRONLY)
+                // SỬA LỖI EPERM: Mở file bằng O_RDWR (Đọc + Ghi) thay vì O_WRONLY
+                let fd = open(testFile, O_RDWR)
                 guard fd >= 0 else {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
                 }
@@ -281,7 +281,7 @@ struct SettingsView: View {
             } catch {
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân: Phương thức ghi 'pwrite' bị từ chối. Có thể do file đang bị hệ thống khóa hoặc sandbox extension không cho phép ghi trực tiếp."
+                    self.writeTestLog += "👉 Nguyên nhân: Đã dùng O_RDWR nhưng kernel vẫn từ chối. Hãy chắc chắn file không bị tiến trình khác lock, và token sandbox đã được consume đúng cách."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
