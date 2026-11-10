@@ -3,6 +3,7 @@ import UIKit
 import UniformTypeIdentifiers
 import Network
 import AirliftFFI
+import Darwin
 
 struct DocumentPickerView: UIViewControllerRepresentable {
     var allowedContentTypes: [UTType] = [.data, .item]
@@ -200,7 +201,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ (Đã Fix Lỗi Ghi File - In-place Write)
+    // MARK: - Logic Test WQ (pwrite + F_FULLFSYNC)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
@@ -242,23 +243,34 @@ struct SettingsView: View {
                 return
             }
 
-            // Bước 2: Ghi đè "tại chỗ" (in-place) bằng FileHandle để giữ nguyên inode
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (in-place)...\n" }
+            // Bước 2: Ghi đè "tại chỗ" (in-place) bằng pwrite + F_FULLFSYNC
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite)...\n" }
             do {
-                let fileHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: testFile))
-                defer { try? fileHandle.close() }
+                // Mở file descriptor với quyền ghi
+                let fd = open(testFile, O_WRONLY)
+                guard fd >= 0 else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
+                }
+                defer { close(fd) }
 
-                // Di chuyển con trỏ về đầu file
-                try fileHandle.seek(toOffset: 0)
-                
-                // Ghi dữ liệu gốc trở lại
-                try fileHandle.write(contentsOf: originalData)
+                // Ghi dữ liệu tại offset 0 (in-place)
+                let bytesWritten = originalData.withUnsafeBytes { buffer in
+                    pwrite(fd, buffer.baseAddress, buffer.count, 0)
+                }
+                guard bytesWritten == originalData.count else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Ghi file thất bại. errno: \(errno)"])
+                }
 
-                // Đảm bảo kích thước file khớp chính xác (truncate nếu cần)
-                try fileHandle.truncate(atOffset: UInt64(originalData.count))
+                // Cắt bớt phần dư nếu file gốc dài hơn dữ liệu mới
+                let fileSize = lseek(fd, 0, SEEK_END)
+                if fileSize > off_t(originalData.count) {
+                    ftruncate(fd, off_t(originalData.count))
+                }
 
                 // Đồng bộ hóa dữ liệu xuống đĩa vật lý
-                try fileHandle.synchronize()
+                if fcntl(fd, F_FULLFSYNC) == -1 {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "F_FULLFSYNC thất bại. errno: \(errno)"])
+                }
 
                 DispatchQueue.main.async {
                     self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
@@ -269,7 +281,7 @@ struct SettingsView: View {
             } catch {
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân: Phương thức ghi 'in-place' bị từ chối. Điều này có thể do file đang bị hệ thống khóa hoặc sandbox extension không cho phép thao tác này."
+                    self.writeTestLog += "👉 Nguyên nhân: Phương thức ghi 'pwrite' bị từ chối. Có thể do file đang bị hệ thống khóa hoặc sandbox extension không cho phép ghi trực tiếp."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
