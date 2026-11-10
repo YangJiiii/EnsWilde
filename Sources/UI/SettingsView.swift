@@ -220,7 +220,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ (Consume Token + pwrite + O_RDWR + F_FULLFSYNC)
+    // MARK: - Logic Test WQ (Ghi đè tại chỗ - In-place Overwrite)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
@@ -241,7 +241,7 @@ struct SettingsView: View {
             DispatchQueue.main.async { self.writeTestLog += "[*] Khởi tạo WorseQuery...\n" }
             let bq = WorseQuery()
 
-            // 2. Grant access
+            // 2. Grant access trên thư mục cha
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang xin quyền vào DIR:\n    \(targetDir)\n" }
             let (granted, handle, errorMsg) = bq.grantAccess(atPath: targetDir)
 
@@ -255,7 +255,7 @@ struct SettingsView: View {
                 return
             }
 
-            // 3. Consume sandbox token (Kích hoạt quyền vào process)
+            // 3. Consume sandbox token
             var consumedHandle: Int64 = -1
             if handle > 0 {
                 DispatchQueue.main.async { self.writeTestLog += "[*] Đang consume sandbox token (handle: \(handle))...\n" }
@@ -287,7 +287,7 @@ struct SettingsView: View {
                 return
             }
 
-            // 5. Gỡ cờ bất biến nếu có
+            // 5. Gỡ cờ bất biến (UF_IMMUTABLE) nếu có
             var st = stat()
             if stat(testFile, &st) == 0 {
                 if (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
@@ -299,15 +299,17 @@ struct SettingsView: View {
                 }
             }
 
-            // 6. Ghi đè "tại chỗ" (pwrite + O_RDWR + F_FULLFSYNC)
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR)...\n" }
+            // 6. Ghi đè "tại chỗ" (In-place Overwrite) với O_RDWR | O_CLOEXEC | O_NOFOLLOW
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR | O_CLOEXEC | O_NOFOLLOW)...\n" }
             do {
-                let fd = open(testFile, O_RDWR)
+                // Mở file với các cờ cần thiết để tránh bị chặn bởi symlink và các vấn đề khác
+                let fd = open(testFile, O_RDWR | O_CLOEXEC | O_NOFOLLOW)
                 guard fd >= 0 else {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
                 }
                 defer { close(fd) }
 
+                // Ghi đè dữ liệu tại offset 0
                 let bytesWritten = originalData.withUnsafeBytes { buffer in
                     pwrite(fd, buffer.baseAddress, buffer.count, 0)
                 }
@@ -315,11 +317,13 @@ struct SettingsView: View {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Ghi file thất bại. errno: \(errno)"])
                 }
 
+                // Cắt bớt phần dư nếu file gốc dài hơn dữ liệu mới
                 let fileSize = lseek(fd, 0, SEEK_END)
                 if fileSize > off_t(originalData.count) {
                     ftruncate(fd, off_t(originalData.count))
                 }
 
+                // Đồng bộ hóa dữ liệu xuống đĩa vật lý
                 if fcntl(fd, F_FULLFSYNC) == -1 {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "F_FULLFSYNC thất bại. errno: \(errno)"])
                 }
@@ -336,7 +340,7 @@ struct SettingsView: View {
                 if consumedHandle > 0 { sandbox_extension_release(consumedHandle) }
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã consume token và dùng O_RDWR. Hãy kiểm tra lại App Group và chắc chắn token được consume đúng."
+                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã consume token và dùng O_RDWR | O_CLOEXEC | O_NOFOLLOW. Hãy kiểm tra lại App Group và chắc chắn token được consume đúng."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
