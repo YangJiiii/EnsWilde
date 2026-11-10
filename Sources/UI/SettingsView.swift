@@ -242,24 +242,22 @@ struct SettingsView: View {
                 return
             }
 
-            // Bước 2: Ghi đè "tại chỗ" (in-place) để duy trì inode và quyền sở hữu
+            // Bước 2: Ghi đè "tại chỗ" (in-place) bằng FileHandle để giữ nguyên inode
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (in-place)...\n" }
             do {
                 let fileHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: testFile))
                 defer { try? fileHandle.close() }
 
-                // Di chuyển con trỏ về đầu file và ghi đè
+                // Di chuyển con trỏ về đầu file
                 try fileHandle.seek(toOffset: 0)
+                
+                // Ghi dữ liệu gốc trở lại
                 try fileHandle.write(contentsOf: originalData)
 
-                // Nếu dữ liệu mới ngắn hơn dữ liệu cũ, cắt bớt phần dư
-                let currentOffset = try fileHandle.offset()
-                let endOffset = try fileHandle.seekToEnd()
-                if currentOffset < endOffset {
-                    try fileHandle.truncate(atOffset: currentOffset)
-                }
+                // Đảm bảo kích thước file khớp chính xác (truncate nếu cần)
+                try fileHandle.truncate(atOffset: UInt64(originalData.count))
 
-                // Đồng bộ hóa dữ liệu xuống đĩa
+                // Đồng bộ hóa dữ liệu xuống đĩa vật lý
                 try fileHandle.synchronize()
 
                 DispatchQueue.main.async {
