@@ -6,6 +6,21 @@ import AirliftFFI
 import Darwin
 import Security // Cần import Security để đọc App Group từ Entitlements
 
+// MARK: - Private Security Framework APIs
+// Hai hàm dưới đây là private API của Security.framework (không có trong public header).
+// Khai báo @_silgen_name để Swift link tới symbol thật trong framework.
+// "Create"/"Copy" ⇒ trả về +1 retained, nên dùng CFTypeRef? để ARC quản lý đúng.
+
+@_silgen_name("SecTaskCreateFromSelf")
+private func SecTaskCreateFromSelf(_ allocator: UnsafeRawPointer?) -> CFTypeRef?
+
+@_silgen_name("SecTaskCopyValueForEntitlement")
+private func SecTaskCopyValueForEntitlement(
+    _ task: CFTypeRef,
+    _ entitlement: CFString,
+    _ error: UnsafeMutablePointer<Unmanaged<CFError>?>?
+) -> CFTypeRef?
+
 struct DocumentPickerView: UIViewControllerRepresentable {
     var allowedContentTypes: [UTType] = [.data, .item]
     let onPick: (URL) -> Void
