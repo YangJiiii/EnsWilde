@@ -220,7 +220,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Logic Test WQ (Consume Token + chown/chmod + pwrite + O_RDWR)
+    // MARK: - Logic Test WQ (chown + chmod + chflags + O_RDWR + pwrite + F_FULLFSYNC)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
@@ -255,13 +255,18 @@ struct SettingsView: View {
                 return
             }
 
-            // 3. Consume token nếu có (worse_query trả về handle, nhưng vẫn thử consume nếu handle > 0)
+            // 3. Consume token nếu có
             var consumedHandle: Int64 = -1
             if handle > 0 {
                 DispatchQueue.main.async { self.writeTestLog += "[*] Đang consume sandbox token (handle: \(handle))...\n" }
-                // Nếu handle thực chất là con trỏ tới chuỗi token, ta có thể thử consume.
-                // Tuy nhiên, theo tài liệu, worse_query trả về handle đã consume sẵn.
-                // Bỏ qua bước này để tránh lỗi.
+                if let ptr = UnsafePointer<CChar>(bitPattern: UInt(handle)) {
+                    consumedHandle = sandbox_extension_consume(ptr)
+                    if consumedHandle < 0 {
+                        DispatchQueue.main.async { self.writeTestLog += " ⚠️ Consume token thất bại (errno: \(errno))\n" }
+                    } else {
+                        DispatchQueue.main.async { self.writeTestLog += " ✅ Consume token thành công!\n" }
+                    }
+                }
             }
 
             DispatchQueue.main.async { self.writeTestLog += "✅ grantAccess thành công!\n" }
@@ -295,7 +300,23 @@ struct SettingsView: View {
                 }
             }
 
-            // 6. Ghi đè "tại chỗ" (in-place) bằng pwrite + O_RDWR
+            // 6. Thử thay đổi quyền sở hữu (chown) và quyền (chmod) nếu cần
+            // Điều này có thể yêu cầu quyền root, nhưng thử vẫn hơn.
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử thay đổi quyền sở hữu (chown) và quyền (chmod)...\n" }
+            let uid = getuid()
+            let gid = getgid()
+            if chown(testFile, uid, gid) == 0 {
+                DispatchQueue.main.async { self.writeTestLog += "✅ chown thành công (uid=\(uid), gid=\(gid))\n" }
+            } else {
+                DispatchQueue.main.async { self.writeTestLog += " ⚠️ chown thất bại (errno: \(errno))\n" }
+            }
+            if chmod(testFile, 0o644) == 0 {
+                DispatchQueue.main.async { self.writeTestLog += "✅ chmod thành công (644)\n" }
+            } else {
+                DispatchQueue.main.async { self.writeTestLog += " ⚠️ chmod thất bại (errno: \(errno))\n" }
+            }
+
+            // 7. Ghi đè "tại chỗ" (in-place) bằng pwrite + O_RDWR
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR)...\n" }
             do {
                 let fd = open(testFile, O_RDWR)
@@ -303,10 +324,6 @@ struct SettingsView: View {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
                 }
                 defer { close(fd) }
-
-                // Thử thay đổi quyền sở hữu (nếu cần) — có thể thất bại nếu không có quyền root
-                // fchown(fd, 501, 501) // user mobile
-                // fchmod(fd, 0o644)
 
                 let bytesWritten = originalData.withUnsafeBytes { buffer in
                     pwrite(fd, buffer.baseAddress, buffer.count, 0)
@@ -341,7 +358,7 @@ struct SettingsView: View {
 
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã dùng O_RDWR và consume token. Có thể do file thuộc sở hữu của root/_mobilegestalt và bạn không có quyền thay đổi quyền sở hữu."
+                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã chown/chmod. Có thể do file thuộc sở hữu của root/_mobilegestalt và bạn không có quyền thay đổi quyền sở hữu, hoặc sandbox extension không cho phép ghi trực tiếp."
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
