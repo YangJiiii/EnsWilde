@@ -27,7 +27,7 @@ private func sandbox_extension_release(_ handle: Int64) -> Int
 @_silgen_name("fsgetpath")
 private func fsgetpath(_ buf: UnsafeMutablePointer<CChar>, _ buflen: Int, _ fsid: UnsafePointer<fsid_t>, _ objid: UInt64) -> Int
 
-// MARK: - WorseQuery Bridge (Direct API - Chuẩn WQFiles)
+// MARK: - WorseQuery Bridge (Direct fsgetpath Inode Traversal)
 final class WorseQueryBridge {
     static let shared = WorseQueryBridge()
     private var activeHandles: [Int64] = []
@@ -61,60 +61,36 @@ final class WorseQueryBridge {
     }
 
     func grantAccessToMobileGestalt(appGroupID: String) -> (Int64, String) {
-        let fm = FileManager.default
-        guard let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
-            return (-1, "Không lấy được App Group container")
-        }
-        
-        let cachesPath = appGroupURL.appendingPathComponent("Library/Caches").path
-        let libraryPath = appGroupURL.appendingPathComponent("Library").path
-        let backupCachesPath = appGroupURL.appendingPathComponent("Library/Caches.bqtool").path
-        
-        let targetDir = "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
-        let testFile = MobileGestaltApplyTask.onDeviceMGPath
-
         let wq = WorseQuery()
+        let testFile = MobileGestaltApplyTask.onDeviceMGPath
+        let targetDir = (testFile as NSString).deletingLastPathComponent
 
-        // 1. Thử Symlink (Nhanh nhất, chuẩn Airlift)
-        if fm.fileExists(atPath: cachesPath) {
-            try? fm.removeItem(atPath: backupCachesPath)
-            try? fm.moveItem(atPath: cachesPath, toPath: backupCachesPath)
-        }
-        try? fm.createDirectory(atPath: libraryPath, withIntermediateDirectories: true)
-        try? fm.createSymbolicLink(atPath: cachesPath, withDestinationPath: targetDir)
-        
-        let (granted, handleSymlink, errorSymlink) = wq.grantAccess(atPath: cachesPath)
-        
-        // Dọn dẹp symlink
-        try? fm.removeItem(atPath: cachesPath)
-        if fm.fileExists(atPath: backupCachesPath) {
-            try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
-        }
-        
-        if granted, handleSymlink > 0 {
-            let res = consumeToken(handle: handleSymlink)
-            if res.0 > 0 { return res }
-        }
-
-        // 2. Thử fsgetpath (Chuẩn KAMUI/WQFiles cho iOS 27+)
+        // 1. Quét inode trong thư mục MobileGestalt cache
         let inodes = scanInodes(in: targetDir)
+        
         for inode in inodes {
             guard let realPath = getPathFromInode(inode) else { continue }
-            let (granted2, handle2, _) = wq.grantAccess(atPath: realPath)
-            if granted2, handle2 > 0 {
-                let res = consumeToken(handle: handle2)
-                if res.0 > 0 { return res }
+            
+            // 2. Xin quyền trên đường dẫn thật lấy được từ kernel
+            let (granted, handle, _) = wq.grantAccess(atPath: realPath)
+            if granted, handle > 0 {
+                let res = consumeToken(handle: handle)
+                if res.0 > 0 {
+                    return (res.0, "Thành công qua fsgetpath: \(realPath)")
+                }
             }
         }
 
-        // 3. Thử trực tiếp
-        let (granted3, handle3, error3) = wq.grantAccess(atPath: testFile)
-        if granted3, handle3 > 0 {
-            let res = consumeToken(handle: handle3)
-            if res.0 > 0 { return res }
+        // 3. Fallback cuối cùng: thử trực tiếp trên file
+        let (grantedDirect, handleDirect, errorDirect) = wq.grantAccess(atPath: testFile)
+        if grantedDirect, handleDirect > 0 {
+            let res = consumeToken(handle: handleDirect)
+            if res.0 > 0 {
+                return res
+            }
         }
 
-        return (-1, "XPC Error. Lỗi: \(errorSymlink.isEmpty ? error3 : errorSymlink)")
+        return (-1, "XPC Error. Lỗi cuối: \(errorDirect)")
     }
 
     private func consumeToken(handle: Int64) -> (Int64, String) {
@@ -330,12 +306,13 @@ struct SettingsView: View {
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
-        writeTestLog = "[*] Bắt đầu test quyền (Direct WorseQuery)...\n"
+        writeTestLog = "[*] Bắt đầu test quyền (fsgetpath inode traversal)...\n"
 
         let work = DispatchWorkItem {
+            let testFile = MobileGestaltApplyTask.onDeviceMGPath
             let bridge = WorseQueryBridge.shared
             let runtimeGroups = self.getAllRuntimeAppGroups()
-            
+
             DispatchQueue.main.async { self.writeTestLog += "📱 Runtime Groups: \(runtimeGroups.joined(separator: ", "))\n" }
 
             var finalHandle: Int64 = -1
@@ -362,7 +339,8 @@ struct SettingsView: View {
                     self.writeTestLog += "\n❌ TẤT CẢ PHƯƠNG PHÁP ĐỀU THẤT BẠI!\n"
                     self.writeTestLog += "👉 Lỗi cuối cùng: \(lastError)\n"
                     self.writeTestLog += "👉 CHẨN ĐOÁN:\n"
-                    self.writeTestLog += "   - Cert sign fake hoặc framework AirliftFFI bị lỗi XPC.\n"
+                    self.writeTestLog += "   - fsgetpath trả về path nhưng grantAccess vẫn từ chối (XPC Error).\n"
+                    self.writeTestLog += "   - Có thể do signer đã drop App Group hoặc cert không hợp lệ.\n"
                     self.writeTestSuccess = false; self.isTestingWrite = false
                 }
                 return
@@ -370,7 +348,6 @@ struct SettingsView: View {
 
             DispatchQueue.main.async { self.writeTestLog += "✅ Đã có token! Đang test ghi file...\n" }
             do {
-                let testFile = MobileGestaltApplyTask.onDeviceMGPath
                 let originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
                 var st = stat()
                 if stat(testFile, &st) == 0, (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
