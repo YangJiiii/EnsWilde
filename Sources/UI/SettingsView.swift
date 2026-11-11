@@ -45,10 +45,10 @@ typealias XPCReleaseFn = @convention(c) (xpc_object_t) -> Void
 final class NativeWorseQuery {
     static let shared = NativeWorseQuery()
     private var activeHandles: [Int64] = []
-    
+
     // Fix cho Xcode 26.6: RTLD_DEFAULT là ((void *) -2)
     private let RTLD_DEFAULT_HANDLE = UnsafeMutableRawPointer(bitPattern: -2)
-    
+
     private var mcmHandle: UnsafeMutableRawPointer?
     private var queryCreate: ContainerQueryCreateFn?
     private var querySetClass: ContainerQuerySetClassFn?
@@ -62,20 +62,20 @@ final class NativeWorseQuery {
     private var sandboxRelease: SandboxExtensionReleaseFn?
     private var xpcStringCreate: XPCStringCreateFn?
     private var xpcRelease: XPCReleaseFn?
-    
+
     init() {
         loadMCM()
     }
-    
+
     private func loadMCM() {
         mcmHandle = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL)
         guard let handle = mcmHandle else { return }
-        
+
         func sym<T>(_ name: String) -> T? {
             guard let ptr = dlsym(handle, name) else { return nil }
             return unsafeBitCast(ptr, to: T.self)
         }
-        
+
         queryCreate = sym("container_query_create")
         querySetClass = sym("container_query_set_class")
         querySetGroupIds = sym("container_query_set_group_identifiers")
@@ -84,18 +84,18 @@ final class NativeWorseQuery {
         queryGetSingleResult = sym("container_query_get_single_result")
         queryFree = sym("container_query_free")
         copySandboxToken = sym("container_copy_sandbox_token")
-        
+
         sandboxConsume = unsafeBitCast(dlsym(RTLD_DEFAULT_HANDLE, "sandbox_extension_consume"), to: SandboxExtensionConsumeFn.self)
         sandboxRelease = unsafeBitCast(dlsym(RTLD_DEFAULT_HANDLE, "sandbox_extension_release"), to: SandboxExtensionReleaseFn.self)
         xpcStringCreate = unsafeBitCast(dlsym(RTLD_DEFAULT_HANDLE, "xpc_string_create"), to: XPCStringCreateFn.self)
         xpcRelease = unsafeBitCast(dlsym(RTLD_DEFAULT_HANDLE, "xpc_release"), to: XPCReleaseFn.self)
     }
-    
+
     private func getPathFromInode(_ inode: UInt64, volumePath: String = "/private/var") -> String? {
         var sfs = statfs()
         if statfs(volumePath, &sfs) != 0 { return nil }
         var fsid = sfs.f_fsid
-        
+
         var pathBuffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         let result = pathBuffer.withUnsafeMutableBufferPointer { buffer -> Int in
             guard let base = buffer.baseAddress else { return 0 }
@@ -104,7 +104,7 @@ final class NativeWorseQuery {
         guard result > 0 else { return nil }
         return String(cString: pathBuffer)
     }
-    
+
     private func scanInodes(in directory: String) -> [UInt64] {
         var inodes: [UInt64] = []
         let fm = FileManager.default
@@ -116,7 +116,7 @@ final class NativeWorseQuery {
         }
         return inodes
     }
-    
+
     func grantAccess(targetPath: String, appGroupID: String) -> (Int64, String) {
         guard let create = queryCreate, let setClass = querySetClass, let setGroupIds = querySetGroupIds,
               let setFlags = querySetFlags, let setPart = querySetPart, let getResult = queryGetSingleResult,
@@ -124,57 +124,57 @@ final class NativeWorseQuery {
               let strCreate = xpcStringCreate, let xpcRel = xpcRelease else {
             return (-1, "Không load được MCM APIs")
         }
-        
+
         let fm = FileManager.default
         guard let groupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
             return (-1, "Không lấy được App Group URL cho \(appGroupID)")
         }
-        
+
         let cachesPath = groupURL.appendingPathComponent("Library/Caches").path
         let libPath = groupURL.appendingPathComponent("Library").path
         let backupCaches = groupURL.appendingPathComponent("Library/Caches.bqtool").path
-        
+
         // 1. Tạo symlink
         try? fm.createDirectory(atPath: libPath, withIntermediateDirectories: true)
         try? fm.removeItem(atPath: backupCaches)
         if fm.fileExists(atPath: cachesPath) { try? fm.moveItem(atPath: cachesPath, toPath: backupCaches) }
-        
+
         do {
             try fm.createSymbolicLink(atPath: cachesPath, withDestinationPath: targetPath)
         } catch {
             return (-1, "Tạo symlink thất bại: \(error.localizedDescription)")
         }
-        
+
         // 2. Setup Query
         guard let query = create() else {
             cleanup(cachesPath, backupCaches)
             return (-2, "Tạo query thất bại")
         }
-        
+
         setClass(query, 7) // 7 = App Group
         let ident = appGroupID.withCString { strCreate($0) }
         setGroupIds(query, ident)
         setPart(query, 3) // 3 = Library/Caches
-        
+
         var result: OpaquePointer? = nil
-        
+
         // Thử flag iOS 27 trước (từ WQFiles/KAMUI)
         setFlags(query, 0x8100000000)
         result = getResult(query)
-        
+
         // Fallback flag iOS 26/27.0.1 (từ worse_query.m gốc)
         if result == nil {
             setFlags(query, 0x8000000000)
             result = getResult(query)
         }
-        
+
         guard result != nil else {
             qFree(query)
             xpcRel(ident)
             cleanup(cachesPath, backupCaches)
             return (-3, "XPC Error: containermanagerd từ chối cấp token.")
         }
-        
+
         // 3. Lấy token
         guard let tokenPtr = copyToken(result) else {
             qFree(query)
@@ -182,23 +182,23 @@ final class NativeWorseQuery {
             cleanup(cachesPath, backupCaches)
             return (-4, "Kernel từ chối cấp token")
         }
-        
+
         let consumed = consume(tokenPtr)
         free(tokenPtr)
         qFree(query)
         xpcRel(ident)
         cleanup(cachesPath, backupCaches)
-        
+
         if consumed < 0 { return (-5, "Consume token thất bại (errno: \(errno))") }
-        
+
         activeHandles.append(consumed)
         return (consumed, "Thành công qua MCM Symlink")
     }
-    
+
     func grantViaFsgetpath(targetFile: String) -> (Int64, String) {
         let targetDir = (targetFile as NSString).deletingLastPathComponent
         let inodes = scanInodes(in: targetDir)
-        
+
         let wq = WorseQuery()
         for inode in inodes {
             guard let realPath = getPathFromInode(inode) else { continue }
@@ -210,7 +210,7 @@ final class NativeWorseQuery {
         }
         return (-1, "fsgetpath thất bại")
     }
-    
+
     private func consumeToken(handle: Int64) -> (Int64, String) {
         guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else { return (-1, "Pointer error") }
         let consumed = sandboxConsume?(tokenPtr) ?? -1
@@ -218,13 +218,13 @@ final class NativeWorseQuery {
         activeHandles.append(consumed)
         return (consumed, "OK")
     }
-    
+
     private func cleanup(_ cachesPath: String, _ backupCaches: String) {
         let fm = FileManager.default
         try? fm.removeItem(atPath: cachesPath)
         if fm.fileExists(atPath: backupCaches) { try? fm.moveItem(atPath: backupCaches, toPath: cachesPath) }
     }
-    
+
     func releaseAll() {
         if let release = sandboxRelease {
             for h in activeHandles { _ = release(h) }
@@ -448,7 +448,7 @@ struct SettingsView: View {
                 if FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) == nil { continue }
 
                 DispatchQueue.main.async { self.writeTestLog += "[*] Thử xin quyền qua group: \(group)...\n" }
-                
+
                 // Logic mới: Native MCM Symlink
                 let (handle, error) = bridge.grantAccess(targetPath: targetDir, appGroupID: group)
 
@@ -608,5 +608,81 @@ struct SettingsView: View {
             return id + String(UnicodeScalar(UInt8(value)))
         }
         return "\(UIDevice.current.model) (\(identifier))"
+    }
+}
+
+// MARK: - About View (FIXED)
+struct AboutView: View {
+    @ObservedObject private var localizationManager = LocalizationManager.shared
+    @AppStorage("EnsWilde.userTintColor") private var userTintColorHex: String = "#ef9f76"
+
+    var body: some View {
+        Form {
+            Section {
+                VStack(spacing: 12) {
+                    Image(systemName: "heart.fill").font(.system(size: 32)).foregroundStyle(.pink)
+                    Text(L("about_desc")).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Button {
+                        if let url = URL(string: "https://dangdi.dev/donate") { UIApplication.shared.open(url) }
+                    } label: {
+                        Text(L("button_donate"))
+                            .font(.headline.bold())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
+                            .background(Color(hex: userTintColorHex))
+                            .foregroundColor(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Section {
+                Button(action: { if let url = URL(string: "https://t.me/yangjiiidibo") { UIApplication.shared.open(url) } }) {
+                    Label(L("about_group_yang"), systemImage: "safari")
+                }
+                Button(action: { if let url = URL(string: "https://t.me/lsnguyengr") { UIApplication.shared.open(url) } }) {
+                    Label(L("about_group_ls"), systemImage: "safari")
+                }
+                Button(action: { if let url = URL(string: "https://t.me/lsnguyyniu") { UIApplication.shared.open(url) } }) {
+                    Label(L("about_contact"), systemImage: "paperplane.fill")
+                }
+            }
+            Section(header: Text(L("settings_thanks_to"))) {
+                creditRow(name: "@YangJiii", desc: "For supporting me during development")
+                creditRow(name: "@YangJiii", desc: "Original developer of EnsWilde")
+                creditRow(name: "@LSNguyen", desc: "Developer of new EnsWilde")
+                creditRow(name: "@forcequitOS", desc: "Bad_query exploit")
+                creditRow(name: "@0xjohnnydev", desc: "Airlift exploit")
+                creditRow(name: "@mak5er", desc: "Airlift-On-Device")
+                creditRow(name: "@jailbreakdotparty", desc: "Config tweak , new logic mobilegestalt")
+                creditRow(name: "@LikePass888", desc: "Disable Call Recording Sound (iOS 27)")
+                creditRow(name: "@YiHoooong", desc: "For the silent tone assets and replacement research.")
+                creditRow(name: "@Cộng đồng LSNguyen & YangJiii và những người bạn chat ⚡️", desc: "For support my project.")
+            }
+            Section(header: Text(L("settings_translators"))) {
+                ForEach(localizationManager.availableLanguages.filter { $0.translator != nil && !($0.translator?.isEmpty ?? true) }) { langInfo in
+                    creditRow(name: langInfo.translator ?? "", desc: "\(langInfo.nativeName) (\(langInfo.name)) translation")
+                }
+            }
+        }
+        .navigationTitle(L("nav_about"))
+        .onAppear {
+            if localizationManager.availableLanguages.isEmpty {
+                Task { await localizationManager.fetchAvailableLanguages() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func creditRow(name: String, desc: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "person.circle.fill")
+                .font(.system(size: 32))
+                .foregroundStyle(.secondary.opacity(0.5))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.subheadline).fontWeight(.semibold)
+                Text(desc).font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 }
