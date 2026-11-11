@@ -296,111 +296,13 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section(header: Text("RUN TEST (WorseQuery Access)")) {
-                Button(action: runMobileGestaltTest) {
-                    HStack {
-                        Label("Test quyền đọc/ghi MobileGestalt", systemImage: "doc.badge.plus")
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        if isTestingWrite { ProgressView() }
-                    }
-                }
-                .disabled(isTestingWrite)
-
-                if !writeTestLog.isEmpty {
-                    ScrollView {
-                        Text(writeTestLog)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(writeTestSuccess == true ? .green : (writeTestSuccess == false ? .red : .primary))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 250)
-                }
-            }
-
-            Section(header: Text(L("connection_status"))) {
-                statusRow(title: L("pairing_file"), subtitle: pairingFile != nil ? L("status_ready") : L("status_not_ready"), ok: pairingFile != nil)
-                statusRow(title: "LocalDevVPN", subtitle: vpnActive ? L("status_ready") : L("status_not_ready"), ok: vpnActive)
-                if isAirLiftMode { statusRow(title: L("airlift_mode"), subtitle: L("enabled"), ok: true) }
-            }
-
-            Section(header: Text(L("pairing_file"))) {
-                if pairingFile != nil {
-                    Button(role: .destructive) {
-                        pairingFile = nil
-                        try? FileManager.default.removeItem(at: URL.documentsDirectory.appendingPathComponent("pairingFile.plist"))
-                    } label: { Label(L("button_reset_pairing"), systemImage: "trash") }
-                } else {
-                    Button { showPairingPicker = true } label: { Label(L("import_pairing"), systemImage: "doc.badge.plus") }
-
-                    if #available(iOS 27.0, *) {
-                        Button { showOnDevicePairing = true } label: {
-                            Label(L("pair_on_device"), systemImage: "iphone.radiowaves.left.and.right")
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                }
-            }
-
-            Section(header: Text(L("backup_section_header"))) {
-                if hasBackup, let info = backupInfo {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)
-                            Text(L("backup_available")).font(.subheadline.bold())
-                            Spacer()
-                        }
-                        Text("\(L("backup_date")) \(info.createdAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
-                        Text("\(L("backup_size")) \(info.byteCount) bytes").font(.caption).foregroundStyle(.secondary)
-                    }.padding(.vertical, 4)
-                } else {
-                    HStack(spacing: 10) {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L("backup_none")).font(.subheadline.bold())
-                            Text(L("backup_none_desc")).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }.padding(.vertical, 4)
-                }
-
-                Button { createBackupNow() } label: {
-                    Label(L("backup_now"), systemImage: "square.and.arrow.down").foregroundStyle(.primary)
-                }
-
-                Button { showImportBackupPicker = true } label: {
-                    Label(L("backup_import"), systemImage: "square.and.arrow.down").foregroundStyle(.primary)
-                }
-
-                if hasBackup {
-                    Button(role: .destructive) { deleteBackup() } label: {
-                        Label(L("backup_delete"), systemImage: "trash")
-                    }
-                }
-            }
-
-            Section(header: Text(L("settings_language"))) {
-                NavigationLink(destination: LanguageSettingsView()) {
-                    Label(L("settings_language"), systemImage: "globe")
-                }
-            }
-
-            Section(header: Text(L("settings_accent_color"))) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 16) {
-                        ForEach(tintOptions, id: \.hex) { option in
-                            colorOptionView(option: option)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                }
-            }
-
-            Section(header: Text(L("settings_app_info"))) {
-                HStack { Label("EnsWilde", systemImage: "sparkles"); Spacer(); Text("v\(appVersion)").font(.footnote).foregroundStyle(.secondary) }
-                HStack { Label(L("app_ios"), systemImage: "iphone"); Spacer(); Text(UIDevice.current.systemVersion).font(.footnote).foregroundStyle(.secondary) }
-                HStack { Label(L("app_device"), systemImage: "apps.iphone"); Spacer(); Text(settingsDeviceModelName()).font(.footnote).foregroundStyle(.secondary) }
-                Text(L("app_info_footer")).font(.caption2).foregroundStyle(.secondary).padding(.top, 4)
-            }
+            runTestSection
+            connectionStatusSection
+            pairingFileSection
+            backupSection
+            languageSection
+            accentColorSection
+            appInfoSection
         }
         .navigationTitle(L("nav_settings"))
         .onAppear { startMonitoringVPN(); refreshBackupInfo() }
@@ -426,6 +328,130 @@ struct SettingsView: View {
             Text(errorMessage)
         }
     }
+
+    // MARK: - Extracted Sections (fix type-checker overload)
+
+    private var runTestSection: some View {
+        Section(header: Text("RUN TEST (WorseQuery Access)")) {
+            Button(action: runMobileGestaltTest) {
+                HStack {
+                    Label("Test quyền đọc/ghi MobileGestalt", systemImage: "doc.badge.plus")
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    if isTestingWrite { ProgressView() }
+                }
+            }
+            .disabled(isTestingWrite)
+
+            if !writeTestLog.isEmpty {
+                ScrollView {
+                    Text(writeTestLog)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(writeTestSuccess == true ? .green : (writeTestSuccess == false ? .red : .primary))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 250)
+            }
+        }
+    }
+
+    private var connectionStatusSection: some View {
+        Section(header: Text(L("connection_status"))) {
+            statusRow(title: L("pairing_file"), subtitle: pairingFile != nil ? L("status_ready") : L("status_not_ready"), ok: pairingFile != nil)
+            statusRow(title: "LocalDevVPN", subtitle: vpnActive ? L("status_ready") : L("status_not_ready"), ok: vpnActive)
+            if isAirLiftMode { statusRow(title: L("airlift_mode"), subtitle: L("enabled"), ok: true) }
+        }
+    }
+
+    private var pairingFileSection: some View {
+        Section(header: Text(L("pairing_file"))) {
+            if pairingFile != nil {
+                Button(role: .destructive) {
+                    pairingFile = nil
+                    try? FileManager.default.removeItem(at: URL.documentsDirectory.appendingPathComponent("pairingFile.plist"))
+                } label: { Label(L("button_reset_pairing"), systemImage: "trash") }
+            } else {
+                Button { showPairingPicker = true } label: { Label(L("import_pairing"), systemImage: "doc.badge.plus") }
+
+                if #available(iOS 27.0, *) {
+                    Button { showOnDevicePairing = true } label: {
+                        Label(L("pair_on_device"), systemImage: "iphone.radiowaves.left.and.right")
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+        }
+    }
+
+    private var backupSection: some View {
+        Section(header: Text(L("backup_section_header"))) {
+            if hasBackup, let info = backupInfo {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)
+                        Text(L("backup_available")).font(.subheadline.bold())
+                        Spacer()
+                    }
+                    Text("\(L("backup_date")) \(info.createdAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+                    Text("\(L("backup_size")) \(info.byteCount) bytes").font(.caption).foregroundStyle(.secondary)
+                }.padding(.vertical, 4)
+            } else {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L("backup_none")).font(.subheadline.bold())
+                        Text(L("backup_none_desc")).font(.caption).foregroundStyle(.secondary)
+                    }
+                }.padding(.vertical, 4)
+            }
+
+            Button { createBackupNow() } label: {
+                Label(L("backup_now"), systemImage: "square.and.arrow.down").foregroundStyle(.primary)
+            }
+
+            Button { showImportBackupPicker = true } label: {
+                Label(L("backup_import"), systemImage: "square.and.arrow.down").foregroundStyle(.primary)
+            }
+
+            if hasBackup {
+                Button(role: .destructive) { deleteBackup() } label: {
+                    Label(L("backup_delete"), systemImage: "trash")
+                }
+            }
+        }
+    }
+
+    private var languageSection: some View {
+        Section(header: Text(L("settings_language"))) {
+            NavigationLink(destination: LanguageSettingsView()) {
+                Label(L("settings_language"), systemImage: "globe")
+            }
+        }
+    }
+
+    private var accentColorSection: some View {
+        Section(header: Text(L("settings_accent_color"))) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(tintOptions, id: \.hex) { option in
+                        colorOptionView(option: option)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private var appInfoSection: some View {
+        Section(header: Text(L("settings_app_info"))) {
+            HStack { Label("EnsWilde", systemImage: "sparkles"); Spacer(); Text("v\(appVersion)").font(.footnote).foregroundStyle(.secondary) }
+            HStack { Label(L("app_ios"), systemImage: "iphone"); Spacer(); Text(UIDevice.current.systemVersion).font(.footnote).foregroundStyle(.secondary) }
+            HStack { Label(L("app_device"), systemImage: "apps.iphone"); Spacer(); Text(settingsDeviceModelName()).font(.footnote).foregroundStyle(.secondary) }
+            Text(L("app_info_footer")).font(.caption2).foregroundStyle(.secondary).padding(.top, 4)
+        }
+    }
+
+    // MARK: - Actions & Helpers
 
     private func runMobileGestaltTest() {
         isTestingWrite = true
@@ -618,58 +644,85 @@ struct AboutView: View {
 
     var body: some View {
         Form {
-            Section {
-                VStack(spacing: 12) {
-                    Image(systemName: "heart.fill").font(.system(size: 32)).foregroundStyle(.pink)
-                    Text(L("about_desc")).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button {
-                        if let url = URL(string: "https://dangdi.dev/donate") { UIApplication.shared.open(url) }
-                    } label: {
-                        Text(L("button_donate"))
-                            .font(.headline.bold())
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
-                            .background(Color(hex: userTintColorHex))
-                            .foregroundColor(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            Section {
-                Button(action: { if let url = URL(string: "https://t.me/yangjiiidibo") { UIApplication.shared.open(url) } }) {
-                    Label(L("about_group_yang"), systemImage: "safari")
-                }
-                Button(action: { if let url = URL(string: "https://t.me/lsnguyengr") { UIApplication.shared.open(url) } }) {
-                    Label(L("about_group_ls"), systemImage: "safari")
-                }
-                Button(action: { if let url = URL(string: "https://t.me/lsnguyyniu") { UIApplication.shared.open(url) } }) {
-                    Label(L("about_contact"), systemImage: "paperplane.fill")
-                }
-            }
-            Section(header: Text(L("settings_thanks_to"))) {
-                creditRow(name: "@YangJiii", desc: "For supporting me during development")
-                creditRow(name: "@YangJiii", desc: "Original developer of EnsWilde")
-                creditRow(name: "@LSNguyen", desc: "Developer of new EnsWilde")
-                creditRow(name: "@forcequitOS", desc: "Bad_query exploit")
-                creditRow(name: "@0xjohnnydev", desc: "Airlift exploit")
-                creditRow(name: "@mak5er", desc: "Airlift-On-Device")
-                creditRow(name: "@jailbreakdotparty", desc: "Config tweak , new logic mobilegestalt")
-                creditRow(name: "@LikePass888", desc: "Disable Call Recording Sound (iOS 27)")
-                creditRow(name: "@YiHoooong", desc: "For the silent tone assets and replacement research.")
-                creditRow(name: "@Cộng đồng LSNguyen & YangJiii và những người bạn chat ⚡️", desc: "For support my project.")
-            }
-            Section(header: Text(L("settings_translators"))) {
-                ForEach(localizationManager.availableLanguages.filter { $0.translator != nil && !($0.translator?.isEmpty ?? true) }) { langInfo in
-                    creditRow(name: langInfo.translator ?? "", desc: "\(langInfo.nativeName) (\(langInfo.name)) translation")
-                }
-            }
+            aboutHeroSection
+            aboutSocialSection
+            aboutThanksSection
+            aboutTranslatorsSection
         }
         .navigationTitle(L("nav_about"))
         .onAppear {
             if localizationManager.availableLanguages.isEmpty {
                 Task { await localizationManager.fetchAvailableLanguages() }
             }
+        }
+    }
+
+    // MARK: - Extracted Sections
+
+    private var aboutHeroSection: some View {
+        Section {
+            VStack(spacing: 12) {
+                Image(systemName: "heart.fill").font(.system(size: 32)).foregroundStyle(.pink)
+                Text(L("about_desc")).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button {
+                    if let url = URL(string: "https://dangdi.dev/donate") { UIApplication.shared.open(url) }
+                } label: {
+                    Text(L("button_donate"))
+                        .font(.headline.bold())
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(Color(hex: userTintColorHex))
+                        .foregroundColor(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var aboutSocialSection: some View {
+        Section {
+            Button(action: { if let url = URL(string: "https://t.me/yangjiiidibo") { UIApplication.shared.open(url) } }) {
+                Label(L("about_group_yang"), systemImage: "safari")
+            }
+            Button(action: { if let url = URL(string: "https://t.me/lsnguyengr") { UIApplication.shared.open(url) } }) {
+                Label(L("about_group_ls"), systemImage: "safari")
+            }
+            Button(action: { if let url = URL(string: "https://t.me/lsnguyyniu") { UIApplication.shared.open(url) } }) {
+                Label(L("about_contact"), systemImage: "paperplane.fill")
+            }
+        }
+    }
+
+    private var aboutThanksSection: some View {
+        Section(header: Text(L("settings_thanks_to"))) {
+            creditRow(name: "@YangJiii", desc: "For supporting me during development")
+            creditRow(name: "@YangJiii", desc: "Original developer of EnsWilde")
+            creditRow(name: "@LSNguyen", desc: "Developer of new EnsWilde")
+            creditRow(name: "@forcequitOS", desc: "Bad_query exploit")
+            creditRow(name: "@0xjohnnydev", desc: "Airlift exploit")
+            creditRow(name: "@mak5er", desc: "Airlift-On-Device")
+            creditRow(name: "@jailbreakdotparty", desc: "Config tweak , new logic mobilegestalt")
+            creditRow(name: "@LikePass888", desc: "Disable Call Recording Sound (iOS 27)")
+            creditRow(name: "@YiHoooong", desc: "For the silent tone assets and replacement research.")
+            creditRow(name: "@Cộng đồng LSNguyen & YangJiii và những người bạn chat ⚡️", desc: "For support my project.")
+        }
+    }
+
+    private var aboutTranslatorsSection: some View {
+        Section(header: Text(L("settings_translators"))) {
+            ForEach(translatorLanguages) { langInfo in
+                creditRow(name: langInfo.translator ?? "", desc: "\(langInfo.nativeName) (\(langInfo.name)) translation")
+            }
+        }
+    }
+
+    // Tách filter ra khỏi body — biểu thức boolean optional-chain phức tạp
+    // là "nghi phạm" chính khiến type-checker bị ngộp.
+    private var translatorLanguages: [LanguageInfo] {
+        localizationManager.availableLanguages.filter { (info: LanguageInfo) -> Bool in
+            guard let tr = info.translator else { return false }
+            return !tr.isEmpty
         }
     }
 
