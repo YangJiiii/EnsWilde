@@ -2,6 +2,30 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AirliftFFI
 
+// Custom Icon Style mỏng hơn, ít tròn hơn
+struct TweakRowIcon: View {
+    let systemImage: String
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 16, weight: .regular))
+            .frame(width: 30, height: 30)
+            .background(Color.secondary.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous)) // Giảm độ tròn, mỏng hơn
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
+    }
+}
+
+struct IconPickerLabel: View {
+    let title: String
+    let systemImage: String
+    var body: some View {
+        HStack(spacing: 12) {
+            TweakRowIcon(systemImage: systemImage)
+            Text(title)
+        }
+    }
+}
+
 struct MobileGestaltView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
     let origMGURL, modMGURL, featFlagsURL, resolutionURL: URL
@@ -23,6 +47,11 @@ struct MobileGestaltView: View {
     @State var initError: String?
     @State var lastError: String?
     @State var dynamicIslandType: Int = 0
+    
+    // Custom Subtype State
+    @State var enableCustomSubtype: Bool = false
+    @State var customSubtypeValue: String = ""
+    
     @State var enableModelName: Bool = false
     @State var modelName: String = ""
 
@@ -56,6 +85,15 @@ struct MobileGestaltView: View {
         }
         .onChange(of: enableModelName) { enabled in if enabled { applyModelName() } else { removeModelName() } }
         .onChange(of: modelName) { _ in if enableModelName && !modelName.isEmpty { applyModelName() } }
+        .onChange(of: enableCustomSubtype) { enabled in
+            if enabled {
+                dynamicIslandType = -1
+                applyCustomSubtype()
+            }
+        }
+        .onChange(of: customSubtypeValue) { _ in
+            if enableCustomSubtype { applyCustomSubtype() }
+        }
     }
 
     private func hydrateFromDict() {
@@ -70,7 +108,10 @@ struct MobileGestaltView: View {
                 case 2622: dynamicIslandType = 5
                 case 2868: dynamicIslandType = 6
                 case 2736: dynamicIslandType = 7
-                default: dynamicIslandType = 0
+                default:
+                    dynamicIslandType = -1
+                    enableCustomSubtype = true
+                    customSubtypeValue = "\(subtype)"
                 }
             }
             if let artwork = cacheExtra[MGKey.artwork] as? NSDictionary, let name = artwork["ArtworkDeviceProductDescription"] as? String, !name.isEmpty {
@@ -99,11 +140,28 @@ struct MobileGestaltView: View {
                 Text(L("mg_subtype_2622")).tag(5)
                 Text(L("mg_subtype_2868")).tag(6)
                 Text(L("mg_subtype_2736")).tag(7)
+                Text("Custom Subtype").tag(-1) // Thêm option custom
             } label: {
                 IconPickerLabel(title: L("mg_device_subtype_preset"), systemImage: "iphone")
             }
             .pickerStyle(.menu)
-            .onChange(of: dynamicIslandType) { newValue in _ = store.applyDynamicIsland(type: newValue) }
+            .onChange(of: dynamicIslandType) { newValue in
+                if newValue != -1 {
+                    enableCustomSubtype = false
+                    _ = store.applyDynamicIsland(type: newValue)
+                } else {
+                    enableCustomSubtype = true
+                }
+            }
+
+            // Custom Subtype UI
+            if enableCustomSubtype {
+                Toggle("Enable Custom Subtype", isOn: $enableCustomSubtype)
+                if enableCustomSubtype {
+                    TextField("Enter ArtworkDeviceSubType (e.g. 3000)", text: $customSubtypeValue)
+                        .keyboardType(.numberPad)
+                }
+            }
 
             Toggle(isOn: $enableModelName) {
                 Text(L("mg_change_model_name"))
@@ -199,6 +257,12 @@ struct MobileGestaltView: View {
             Button(role: .destructive, action: resetOriginal) {
                 Label("Reset Original", systemImage: "arrow.counterclockwise")
             }
+        }
+    }
+
+    private func applyCustomSubtype() {
+        if let val = Int(customSubtypeValue) {
+            _ = store.applyDynamicIsland(type: -1, customValue: val)
         }
     }
 
