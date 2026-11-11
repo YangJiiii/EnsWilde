@@ -24,33 +24,54 @@ private func sandbox_extension_consume(_ token: UnsafePointer<CChar>) -> Int64
 @_silgen_name("sandbox_extension_release")
 private func sandbox_extension_release(_ handle: Int64) -> Int
 
-// MARK: - WorseQuery Bridge (Kỹ thuật Symlink Part-Directory - Chuẩn KAMUI)
+// MARK: - WorseQuery Bridge (Full Check & Fallback)
 final class WorseQueryBridge {
     static let shared = WorseQueryBridge()
     private var activeHandles: [Int64] = []
     
+    // Hàm bóc tách file mobileprovision để xem App Group có thật không
+    func inspectProvisioningProfile() -> (groups: [String], isWildcard: Bool) {
+        guard let profilePath = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision") else {
+            return ([], false)
+        }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: profilePath)) else {
+            return ([], false)
+        }
+        
+        guard let dataString = String(data: data, encoding: .isoLatin1) else { return ([], false) }
+        guard let startRange = dataString.range(of: "<plist"),
+              let endRange = dataString.range(of: "</plist>") else { return ([], false) }
+              
+        let plistString = String(dataString[startRange.lowerBound..<endRange.upperBound])
+        guard let plistData = plistString.data(using: .isoLatin1) else { return ([], false) }
+        
+        var format = PropertyListSerialization.PropertyListFormat.xml
+        guard let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: &format) as? [String: Any],
+              let entitlements = plist["Entitlements"] as? [String: Any] else {
+            return ([], false)
+        }
+        
+        let groups = entitlements["com.apple.security.application-groups"] as? [String] ?? []
+        let appId = entitlements["application-identifier"] as? String ?? ""
+        let isWildcard = appId.contains("*")
+        
+        return (groups, isWildcard)
+    }
+    
     func grantAccessToMobileGestalt(appGroupID: String) -> Int64 {
         let fm = FileManager.default
-        
-        guard let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
-            print("❌ Không thể lấy App Group container: \(appGroupID)")
-            return -1
-        }
+        guard let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else { return -1 }
         
         let cachesPath = appGroupURL.appendingPathComponent("Library/Caches").path
         let libraryPath = appGroupURL.appendingPathComponent("Library").path
         let backupCachesPath = appGroupURL.appendingPathComponent("Library/Caches.bqtool").path
         
-        // 1. Backup và xóa Library/Caches hiện tại
         if fm.fileExists(atPath: cachesPath) {
             try? fm.removeItem(atPath: backupCachesPath)
             try? fm.moveItem(atPath: cachesPath, toPath: backupCachesPath)
         }
-        
-        // 2. Tạo thư mục Library nếu chưa có
         try? fm.createDirectory(atPath: libraryPath, withIntermediateDirectories: true)
         
-        // 3. Tạo symlink: Library/Caches -> thư mục MobileGestalt thật
         let targetDir = "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
         do {
             try fm.createSymbolicLink(atPath: cachesPath, withDestinationPath: targetDir)
@@ -62,54 +83,31 @@ final class WorseQueryBridge {
             return -1
         }
         
-        // 4. Query WorseQuery để lấy token cho symlink
+        var handle: Int64 = -1
         let wq = WorseQuery()
-        let (granted, handle, errorMsg) = wq.grantAccess(atPath: cachesPath)
+        let (granted, handleSwift, _) = wq.grantAccess(atPath: cachesPath)
         
-        guard granted, handle > 0 else {
-            print("❌ WorseQuery từ chối grantAccess trên symlink. Error: \(errorMsg)")
-            try? fm.removeItem(atPath: cachesPath)
-            if fm.fileExists(atPath: backupCachesPath) {
-                try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
-            }
-            return -1
+        if granted, handleSwift > 0 {
+            handle = handleSwift
         }
         
-        // 5. Consume token
-        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else {
-            try? fm.removeItem(atPath: cachesPath)
-            if fm.fileExists(atPath: backupCachesPath) {
-                try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
-            }
-            return -1
-        }
-        
-        let consumedHandle = sandbox_extension_consume(tokenPtr)
-        if consumedHandle < 0 {
-            print("⚠️ Consume token thất bại (errno: \(errno))")
-            try? fm.removeItem(atPath: cachesPath)
-            if fm.fileExists(atPath: backupCachesPath) {
-                try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
-            }
-            return -1
-        }
-        
-        activeHandles.append(consumedHandle)
-        
-        // 6. Xóa symlink và khôi phục Caches gốc
         try? fm.removeItem(atPath: cachesPath)
         if fm.fileExists(atPath: backupCachesPath) {
             try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
         }
         
-        print("✅ Symlink part-directory thành công! Handle: \(consumedHandle)")
+        guard handle > 0 else { return -1 }
+        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else { return -1 }
+        
+        let consumedHandle = sandbox_extension_consume(tokenPtr)
+        if consumedHandle > 0 {
+            activeHandles.append(consumedHandle)
+        }
         return consumedHandle
     }
     
     func releaseAll() {
-        for h in activeHandles {
-            _ = sandbox_extension_release(h)
-        }
+        for h in activeHandles { _ = sandbox_extension_release(h) }
         activeHandles.removeAll()
     }
 }
@@ -184,9 +182,7 @@ struct SettingsView: View {
                         Label("Test quyền đọc/ghi MobileGestalt", systemImage: "doc.badge.plus")
                             .foregroundStyle(.primary)
                         Spacer()
-                        if isTestingWrite {
-                            ProgressView()
-                        }
+                        if isTestingWrite { ProgressView() }
                     }
                 }
                 .disabled(isTestingWrite)
@@ -198,7 +194,7 @@ struct SettingsView: View {
                             .foregroundColor(writeTestSuccess == true ? .green : (writeTestSuccess == false ? .red : .primary))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: 150)
+                    .frame(maxHeight: 200)
                 }
             }
 
@@ -311,119 +307,109 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Core Run Test Logic (Kỹ thuật Symlink Part-Directory)
+    // MARK: - Core Run Test Logic
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
-        writeTestLog = "[*] Bắt đầu test quyền (Symlink Part-Directory Protocol)...\n"
+        writeTestLog = "[*] Bắt đầu kiểm tra chuyên sâu...\n"
 
         let work = DispatchWorkItem {
             let testFile = MobileGestaltApplyTask.onDeviceMGPath
             let bridge = WorseQueryBridge.shared
 
-            // 1. Lấy App Group (bắt buộc phải có)
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang quét App Group...\n" }
-            guard let appGroup = self.getFirstValidAppGroup() else {
+            // 1. Kiểm tra VPN
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang kiểm tra LocalDevVPN...\n" }
+            if !self.vpnActive {
                 DispatchQueue.main.async {
-                    self.writeTestLog += "❌ THẤT BẠI: Không tìm thấy App Group hợp lệ trong chữ ký!\n"
-                    self.writeTestLog += "👉 Mày phải sign app với App Group entitlement (vd: group.com.mày.app) thì worse_query mới chạy.\n"
-                    self.writeTestLog += "👉 Nếu dùng Feather/ESign, phải dùng profile có App Group, không dùng wildcard.\n"
-                    self.writeTestSuccess = false
-                    self.isTestingWrite = false
+                    self.writeTestLog += "❌ VPN CHƯA BẬT! Bật LocalDevVPN lên boss man.\n"
+                    self.writeTestSuccess = false; self.isTestingWrite = false
                 }
                 return
             }
-            DispatchQueue.main.async { self.writeTestLog += "✅ App Group: \(appGroup)\n" }
+            DispatchQueue.main.async { self.writeTestLog += "✅ LocalDevVPN đang bật.\n" }
 
-            // 2. Xin quyền qua kỹ thuật Symlink Part-Directory
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang tạo symlink part-directory và xin quyền...\n" }
+            // 2. Kiểm tra Profile thật
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang bóc tách file embedded.mobileprovision...\n" }
+            let (profileGroups, isWildcard) = bridge.inspectProvisioningProfile()
+            
+            DispatchQueue.main.async {
+                if isWildcard {
+                    self.writeTestLog += "⚠️ CẢNH BÁO: Profile của mày là Wildcard (*)! Không thể chứa App Group thật!\n"
+                }
+                if profileGroups.isEmpty {
+                    self.writeTestLog += "❌ LỖI: File mobileprovision ĐÉO CÓ App Group nào cả!\n"
+                } else {
+                    self.writeTestLog += "✅ App Group trong profile: \(profileGroups.joined(separator: ", "))\n"
+                }
+            }
+
+            // 3. Lấy App Group (Runtime)
+            guard let appGroup = self.getFirstValidAppGroup() else {
+                DispatchQueue.main.async {
+                    self.writeTestLog += "❌ THẤT BẠI: Không tìm thấy App Group runtime.\n"
+                    self.writeTestSuccess = false; self.isTestingWrite = false
+                }
+                return
+            }
+            DispatchQueue.main.async { self.writeTestLog += "✅ App Group runtime: \(appGroup)\n" }
+
+            // 4. Xin quyền qua Symlink
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang tạo symlink và xin quyền...\n" }
             let handle = bridge.grantAccessToMobileGestalt(appGroupID: appGroup)
 
             guard handle > 0 else {
                 DispatchQueue.main.async {
-                    self.writeTestLog += "\n❌ THẤT BẠI: grantAccess trên symlink trả về handle không hợp lệ.\n"
-                    self.writeTestLog += "👉 Nguyên nhân có thể:\n"
-                    self.writeTestLog += "  1. App Group chưa được sign đúng (kiểm tra entitlements).\n"
-                    self.writeTestLog += "  2. Signer đã drop App Group (dùng AltStore/SideStore để tự tạo).\n"
-                    self.writeTestLog += "  3. Profile wildcard (App ID *) không thể chứa App Group.\n"
-                    self.writeTestLog += "  4. Framework WorseQuery phiên bản cũ, chưa hỗ trợ iOS 27.2+.\n"
-                    self.writeTestSuccess = false
-                    self.isTestingWrite = false
-                }
-                return
-            }
-            DispatchQueue.main.async { self.writeTestLog += "✅ Xin quyền thành công! Handle: \(handle)\n" }
-
-            // 3. Đọc dữ liệu gốc
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang đọc file thật...\n" }
-            let originalData: Data
-            do {
-                originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
-                DispatchQueue.main.async { self.writeTestLog += "✅ Đọc file thành công (\(originalData.count) bytes)!\n" }
-            } catch {
-                bridge.releaseAll()
-                DispatchQueue.main.async {
-                    self.writeTestLog += "\n❌ LỖI ĐỌC FILE: \(error.localizedDescription)\n"
-                    self.writeTestSuccess = false
-                    self.isTestingWrite = false
+                    self.writeTestLog += "\n❌ THẤT BẠI: Handle invalid.\n"
+                    self.writeTestLog += "👉 CHẨN ĐOÁN:\n"
+                    if isWildcard || profileGroups.isEmpty || profileGroups.first != appGroup {
+                        self.writeTestLog += "   - Cert mày dùng là đồ fake/auto-gen. Kernel nó từ chối cấp token cho App Group ảo.\n"
+                        self.writeTestLog += "   - Mày phải dùng tài khoản Apple Developer (có trả phí) để đăng ký App Group thật, rồi export file .mobileprovision mới sign lại app.\n"
+                    } else {
+                        self.writeTestLog += "   - Cert đúng nhưng framework WorseQuery đéo support iOS 27.2+ hoặc bị lỗi XPC.\n"
+                    }
+                    self.writeTestSuccess = false; self.isTestingWrite = false
                 }
                 return
             }
 
-            // 4. Gỡ cờ bất biến (UF_IMMUTABLE) nếu có
-            var st = stat()
-            if stat(testFile, &st) == 0, (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
-                if chflags(testFile, st.st_flags & ~UInt32(UF_IMMUTABLE)) == 0 {
-                    DispatchQueue.main.async { self.writeTestLog += "✅ Đã gỡ cờ UF_IMMUTABLE!\n" }
-                } else {
-                    DispatchQueue.main.async { self.writeTestLog += "⚠️ Không thể gỡ cờ UF_IMMUTABLE (errno: \(errno))\n" }
-                }
-            }
-
-            // 5. GHI FILE (In-place Overwrite, chuẩn Erosion-CN)
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR)...\n" }
+            // 5. Ghi file
+            DispatchQueue.main.async { self.writeTestLog += "✅ Có token! Đang test ghi...\n" }
             do {
+                let originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
+                
+                // Gỡ cờ bất biến
+                var st = stat()
+                if stat(testFile, &st) == 0, (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
+                    _ = chflags(testFile, st.st_flags & ~UInt32(UF_IMMUTABLE))
+                }
+                
                 let fd = open(testFile, O_RDWR | O_CLOEXEC)
-                guard fd >= 0 else {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
-                                  userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
-                }
+                guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
                 defer { close(fd) }
-
-                let bytesWritten = originalData.withUnsafeBytes { buffer in
-                    pwrite(fd, buffer.baseAddress, buffer.count, 0)
-                }
+                
+                let bytesWritten = originalData.withUnsafeBytes { pwrite(fd, $0.baseAddress, $0.count, 0) }
                 guard bytesWritten == originalData.count else {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
-                                  userInfo: [NSLocalizedDescriptionKey: "Ghi file thất bại (pwrite). errno: \(errno)"])
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "pwrite errno: \(errno)"])
                 }
-
+                
                 let fileSize = lseek(fd, 0, SEEK_END)
                 if fileSize > off_t(originalData.count) {
                     ftruncate(fd, off_t(originalData.count))
                 }
-
-                if fcntl(fd, F_FULLFSYNC) == -1 {
-                    DispatchQueue.main.async { self.writeTestLog += "⚠️ F_FULLFSYNC thất bại (errno: \(errno)), nhưng dữ liệu có thể đã ghi.\n" }
-                }
-
+                
+                _ = fcntl(fd, F_FULLFSYNC)
+                
                 bridge.releaseAll()
-
                 DispatchQueue.main.async {
                     self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
-                    self.writeTestLog += "🎉 App Group & WorseQuery hoạt động hoàn hảo!\nBạn có thể dùng Apply bình thường."
-                    self.writeTestSuccess = true
-                    self.isTestingWrite = false
+                    self.writeTestLog += "🎉 App Group & WorseQuery hoạt động hoàn hảo!"
+                    self.writeTestSuccess = true; self.isTestingWrite = false
                 }
             } catch {
                 bridge.releaseAll()
                 DispatchQueue.main.async {
-                    self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối ghi dù đã consume token qua symlink.\n"
-                    self.writeTestLog += "  1. File có thể đang bị lock bởi daemon khác.\n"
-                    self.writeTestLog += "  2. Sandbox token không có quyền recursive.\n"
-                    self.writeTestSuccess = false
-                    self.isTestingWrite = false
+                    self.writeTestLog += "❌ LỖI GHI: \(error.localizedDescription)\n"
+                    self.writeTestSuccess = false; self.isTestingWrite = false
                 }
             }
         }
