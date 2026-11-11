@@ -5,9 +5,6 @@ import Darwin
 import Security
 import XPC
 
-// Native WorseQuery & typealias được khai báo duy nhất trong SettingsView.swift
-// SecTaskCreateFromSelf / SecTaskCopyValueForEntitlement đã có @_silgen_name ở SettingsView.swift
-
 enum MobileGestaltApplyTask {
     static var onDeviceMGPath: String { MGURL.fsGestaltURL.path }
 
@@ -15,15 +12,22 @@ enum MobileGestaltApplyTask {
                              onLogUpdate: @escaping (String) -> Void) async throws {
         let mgURL = URL(fileURLWithPath: onDeviceMGPath)
 
+        // Nếu store rỗng do chưa load, thử load lại từ file modified
+        if store.mgCurrentDict.count == 0 {
+            let modURL = URL.documentsDirectory.appendingPathComponent("ModifiedMobileGestalt.plist")
+            store.loadFromPlist(url: modURL)
+        }
+
         guard store.mgCurrentDict.count > 0 else {
-            throw mgError(-1, "Store rỗng. Chỉnh gì đó rồi Save Settings trước khi Apply.")
+            throw mgError(-1, "Store rỗng. Hãy bấm Reset Original hoặc lưu lại trước khi Apply.")
         }
         guard FileManager.default.fileExists(atPath: onDeviceMGPath) else {
             throw mgError(-2, "Không tìm thấy MobileGestalt.plist.")
         }
 
+        // Tự động backup nếu chưa có (chỉ lần đầu)
         if !MobileGestaltBackupManager.shared.hasBackup {
-            onLogUpdate("[MG] Đang backup pristine...")
+            onLogUpdate("[MG] Đang backup pristine (lần đầu)...")
             let originalData = try Data(contentsOf: mgURL)
             guard (try? PropertyListSerialization.propertyList(from: originalData, format: nil)) != nil else {
                 throw mgError(-3, "File gốc không parse được — dừng để tránh bootloop.")
@@ -44,14 +48,12 @@ enum MobileGestaltApplyTask {
             throw mgError(-5, "Không tìm thấy App Group!")
         }
 
-        // Signature canonical: grantAccess(targetPath:appGroupID:) -> (Int64, String)
         let targetDir = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
         let (handle, accessMsg) = NativeWorseQuery.shared.grantAccess(targetPath: targetDir, appGroupID: group)
         guard handle > 0 else {
             throw mgError(-5, "Xin quyền MCM thất bại: \(accessMsg). Hãy chắc chắn cert có App Group hợp lệ.")
         }
         onLogUpdate("[MG] ✅ Đã được cấp quyền ghi.")
-
         defer { NativeWorseQuery.shared.releaseAll() }
 
         // Gỡ cờ immutable
@@ -67,18 +69,16 @@ enum MobileGestaltApplyTask {
         }
         defer { close(fd) }
 
-        // Ghi đè dữ liệu mới từ đầu file
         let bytesWritten = plistData.withUnsafeBytes { pwrite(fd, $0.baseAddress, $0.count, 0) }
         guard bytesWritten == plistData.count else {
             throw mgError(-6, "Ghi file thất bại (errno: \(errno))")
         }
 
-        // ĐM, CÁI NÀY QUAN TRỌNG NÈ: Cắt bớt phần dư của file cũ để tránh corrupt plist
+        // Cắt bớt phần dư của file cũ
         if ftruncate(fd, off_t(plistData.count)) != 0 {
             throw mgError(-7, "Cắt file (ftruncate) thất bại (errno: \(errno))")
         }
 
-        // Đồng bộ hóa
         _ = fcntl(fd, F_FULLFSYNC)
 
         onLogUpdate("[MG] Verify file sau khi ghi...")
