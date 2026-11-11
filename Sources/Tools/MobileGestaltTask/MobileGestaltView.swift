@@ -2,8 +2,28 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AirliftFFI
 
-// TweakRowIcon & IconPickerLabel đã được khai báo trong UI/TweakRowIcon.swift
-// Không khai báo lại để tránh invalid redeclaration.
+// Custom Icon siêu mỏng, không màu mè
+struct CleanTweakIcon: View {
+    let systemImage: String
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 15, weight: .light)) // Nét mỏng
+            .frame(width: 28, height: 28)
+            .background(Color.secondary.opacity(0.1)) // Nền xám mờ tinh tế
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous)) // Bo góc nhẹ
+    }
+}
+
+struct IconPickerLabel: View {
+    let title: String
+    let systemImage: String
+    var body: some View {
+        HStack(spacing: 12) {
+            CleanTweakIcon(systemImage: systemImage)
+            Text(title)
+        }
+    }
+}
 
 struct MobileGestaltView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
@@ -53,13 +73,19 @@ struct MobileGestaltView: View {
         .navigationTitle(L("tool_mobile_gestalt"))
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            store.loadFromPlist(url: modMGURL)
+            // Đảm bảo Store có dữ liệu
+            if store.mgCurrentDict.count == 0 {
+                store.loadFromPlist(url: modMGURL)
+            }
+            
             if initError != nil {
                 lastError = initError
                 initError = nil
                 showErrorAlert.toggle()
                 return
             }
+            // Đồng bộ lại UI từ Store
+            mobileGestalt = store.mgCurrentDict
             hydrateFromDict()
         }
         .onChange(of: enableModelName) { enabled in if enabled { applyModelName() } else { removeModelName() } }
@@ -76,6 +102,14 @@ struct MobileGestaltView: View {
     }
 
     private func hydrateFromDict() {
+        // Reset mặc định trước khi load
+        dynamicIslandType = 0
+        enableCustomSubtype = false
+        customSubtypeValue = ""
+        enableModelName = false
+        modelName = ""
+        productType = MobileGestaltView.machineName()
+
         if let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary {
             productType = cacheExtra[MGKey.prodType] as? String ?? productType
             if let artwork = cacheExtra[MGKey.artwork] as? NSDictionary, let subtype = artwork["ArtworkDeviceSubType"] as? Int {
@@ -173,7 +207,7 @@ struct MobileGestaltView: View {
                 .disabled(Utils.requiresVersion(18))
             Toggle(isOn: store.mgTrollPadBinding()) {
                 HStack(spacing: 12) {
-                    TweakRowIcon(systemImage: "ipad.and.iphone")
+                    CleanTweakIcon(systemImage: "ipad.and.iphone")
                     Text("Become iPadOS")
                 }
             }
@@ -184,13 +218,13 @@ struct MobileGestaltView: View {
         Section(header: Text(L("section_system_features"))) {
             Toggle(isOn: bindingForMGKeys(["9MZ5AdH43csAUajl/dU+IQ"], type: [Int].self, defaultValue: [1], enableValue: [1, 2])) {
                 HStack(spacing: 12) {
-                    TweakRowIcon(systemImage: "square.grid.2x2.fill")
+                    CleanTweakIcon(systemImage: "square.grid.2x2.fill")
                     Text(L("mg_install_ipad_apps"))
                 }
             }
             Toggle(isOn: store.mgRegionRestrictionsBinding()) {
                 HStack(spacing: 12) {
-                    TweakRowIcon(systemImage: "globe")
+                    CleanTweakIcon(systemImage: "globe")
                     Text(L("mg_disable_region"))
                 }
             }
@@ -208,7 +242,7 @@ struct MobileGestaltView: View {
             IconToggle(title: L("mg_security_research"), systemImage: "terminal", isOn: store.mgByteBinding(key: MGKey.srd))
             Toggle(isOn: bindingForAppleIntelligence()) {
                 HStack(spacing: 12) {
-                    TweakRowIcon(systemImage: "apple.intelligence")
+                    CleanTweakIcon(systemImage: "apple.intelligence")
                     Text(L("mg_apple_intelligence"))
                 }
             }
@@ -270,15 +304,44 @@ struct MobileGestaltView: View {
         }
     }
 
+    // SỬA LẠI: Xoá sạch key cũ, reset UI, load lại nguyên bản từ backup
     private func resetOriginal() {
         do {
-            let pristineData = try MobileGestaltBackupManager.shared.restoreData()
+            // 1. Lấy dữ liệu backup nguyên bản
+            let pristineData: Data
+            if MobileGestaltBackupManager.shared.hasBackup {
+                pristineData = try MobileGestaltBackupManager.shared.restoreData()
+            } else {
+                // Nếu chưa có backup, lấy file hệ thống gốc làm chuẩn
+                pristineData = try Data(contentsOf: URL(fileURLWithPath: MobileGestaltApplyTask.onDeviceMGPath))
+            }
+            
+            guard pristineData.count > 0 else {
+                throw NSError(domain: "Reset", code: -1, userInfo: [NSLocalizedDescriptionKey: "Dữ liệu backup bị rỗng! Không thể khôi phục."])
+            }
+
+            // 2. Ghi đè lên file local
             try pristineData.write(to: modMGURL)
-            mobileGestalt = try NSMutableDictionary(contentsOf: modMGURL, error: ())
-            store.loadFromPlist(url: modMGURL)
-            toolStore.replaceMobileGestaltEnabled = true
+            
+            // 3. Load lại từ file local vào State & Store
+            let freshDict = try NSMutableDictionary(contentsOf: modMGURL, error: ())
+            self.mobileGestalt = freshDict
+            
+            store.mgCurrentDict = freshDict
+            store.objectWillChange.send()
+            
+            // 4. Reset cứng UI
+            dynamicIslandType = 0
+            enableCustomSubtype = false
+            customSubtypeValue = ""
+            enableModelName = false
+            modelName = ""
+            
+            // 5. Hydrate lại (để lấy đúng dữ liệu nếu file pristine có sẵn tweaks)
+            hydrateFromDict()
+            
             showApplyTab = true
-            lastError = "Đã reset về pristine backup. Bấm Apply để ghi lại."
+            lastError = "Đã khôi phục về nguyên bản, xoá sạch key cũ. Bấm Apply để ghi đè lên thiết bị."
             showErrorAlert = true
         } catch {
             lastError = "Reset failed: \(error)"
