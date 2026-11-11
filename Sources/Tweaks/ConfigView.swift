@@ -8,6 +8,7 @@ struct ConfigView: View {
     @AppStorage("ConfigOrgName") private var orgName: String = ""
     
     @State private var showSavedAlert = false
+    @State private var showRestoredAlert = false
 
     var body: some View {
         Form {
@@ -65,14 +66,13 @@ struct ConfigView: View {
                 }
 
                 Button(role: .destructive) {
+                    // Reset toàn bộ @AppStorage về mặc định, UI sẽ tự update
                     toolStore.configTweaksEnabled = false
                     footnoteText = ""
                     supervised = false
                     orgName = ""
                     
-                    UserDefaults.standard.removeObject(forKey: "ConfigFootnoteText")
-                    UserDefaults.standard.removeObject(forKey: "ConfigSupervised")
-                    UserDefaults.standard.removeObject(forKey: "ConfigOrgName")
+                    showRestoredAlert = true
                 } label: {
                     HStack {
                         Image(systemName: "arrow.counterclockwise")
@@ -86,6 +86,11 @@ struct ConfigView: View {
             Button("OK") {}
         } message: {
             Text("Đã lưu. Chuyển sang tab Apply để áp dụng.")
+        }
+        .alert("Restored", isPresented: $showRestoredAlert) {
+            Button("OK") {}
+        } message: {
+            Text("Đã xoá toàn bộ cấu hình. Hãy sang tab Apply để hoàn tất việc xoá trên thiết bị.")
         }
     }
 }
