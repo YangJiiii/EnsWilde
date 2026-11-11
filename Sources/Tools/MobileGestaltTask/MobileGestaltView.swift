@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 import AirliftFFI
 
 // Custom Icon Style mỏng hơn, ít tròn hơn
-struct TweakRowIcon: View {
+private struct TweakRowIcon: View {
     let systemImage: String
     var body: some View {
         Image(systemName: systemImage)
@@ -15,7 +15,7 @@ struct TweakRowIcon: View {
     }
 }
 
-struct IconPickerLabel: View {
+private struct IconPickerLabel: View {
     let title: String
     let systemImage: String
     var body: some View {
