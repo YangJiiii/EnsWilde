@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import Network
-import AirliftFFI
+import AirliftFFI // Vẫn giữ import này để tránh lỗi build nếu có file khác dùng
 import Darwin
 import Security
 
@@ -17,21 +17,71 @@ private func SecTaskCopyValueForEntitlement(
     _ error: UnsafeMutablePointer<Unmanaged<CFError>?>?
 ) -> CFTypeRef?
 
-// MARK: - Private Sandbox & File APIs
-@_silgen_name("sandbox_extension_consume")
-private func sandbox_extension_consume(_ token: UnsafePointer<CChar>) -> Int64
-
-@_silgen_name("sandbox_extension_release")
-private func sandbox_extension_release(_ handle: Int64) -> Int
+// MARK: - Private MCM & Sandbox APIs
+typealias ContainerQueryCreateFn = @convention(c) () -> OpaquePointer?
+typealias ContainerQuerySetClassFn = @convention(c) (OpaquePointer?, UInt64) -> Void
+typealias ContainerQuerySetGroupIdentifiersFn = @convention(c) (OpaquePointer?, xpc_object_t) -> Void
+typealias ContainerQuerySetFlagsFn = @convention(c) (OpaquePointer?, UInt64) -> Void
+typealias ContainerQuerySetPartFn = @convention(c) (OpaquePointer?, UInt64) -> Void
+typealias ContainerQueryGetSingleResultFn = @convention(c) (OpaquePointer?) -> OpaquePointer?
+typealias ContainerQueryFreeFn = @convention(c) (OpaquePointer?) -> Void
+typealias ContainerCopySandboxTokenFn = @convention(c) (OpaquePointer?) -> UnsafeMutablePointer<CChar>?
+typealias SandboxExtensionConsumeFn = @convention(c) (UnsafePointer<CChar>) -> Int64
+typealias SandboxExtensionReleaseFn = @convention(c) (Int64) -> Int32
+typealias XPCStringCreateFn = @convention(c) (UnsafePointer<CChar>) -> xpc_object_t
+typealias XPCReleaseFn = @convention(c) (xpc_object_t) -> Void
 
 @_silgen_name("fsgetpath")
 private func fsgetpath(_ buf: UnsafeMutablePointer<CChar>, _ buflen: Int, _ fsid: UnsafePointer<fsid_t>, _ objid: UInt64) -> Int
 
-// MARK: - WorseQuery Bridge (Direct fsgetpath Inode Traversal)
-final class WorseQueryBridge {
-    static let shared = WorseQueryBridge()
+// MARK: - Native WorseQuery Bridge (Bypass AirliftFFI)
+final class NativeWorseQuery {
+    static let shared = NativeWorseQuery()
     private var activeHandles: [Int64] = []
-
+    
+    private var mcmHandle: UnsafeMutableRawPointer?
+    private var queryCreate: ContainerQueryCreateFn?
+    private var querySetClass: ContainerQuerySetClassFn?
+    private var querySetGroupIds: ContainerQuerySetGroupIdentifiersFn?
+    private var querySetFlags: ContainerQuerySetFlagsFn?
+    private var querySetPart: ContainerQuerySetPartFn?
+    private var queryGetSingleResult: ContainerQueryGetSingleResultFn?
+    private var queryFree: ContainerQueryFreeFn?
+    private var copySandboxToken: ContainerCopySandboxTokenFn?
+    private var sandboxConsume: SandboxExtensionConsumeFn?
+    private var sandboxRelease: SandboxExtensionReleaseFn?
+    private var xpcStringCreate: XPCStringCreateFn?
+    private var xpcRelease: XPCReleaseFn?
+    
+    init() {
+        loadMCM()
+    }
+    
+    private func loadMCM() {
+        mcmHandle = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL)
+        guard let handle = mcmHandle else { return }
+        
+        func sym<T>(_ name: String) -> T? {
+            guard let ptr = dlsym(handle, name) else { return nil }
+            return unsafeBitCast(ptr, to: T.self)
+        }
+        
+        queryCreate = sym("container_query_create")
+        querySetClass = sym("container_query_set_class")
+        querySetGroupIds = sym("container_query_set_group_identifiers")
+        querySetFlags = sym("container_query_operation_set_flags")
+        querySetPart = sym("container_query_operation_set_part")
+        queryGetSingleResult = sym("container_query_get_single_result")
+        queryFree = sym("container_query_free")
+        copySandboxToken = sym("container_copy_sandbox_token")
+        
+        sandboxConsume = unsafeBitCast(dlsym(RTLD_DEFAULT, "sandbox_extension_consume"), to: SandboxExtensionConsumeFn.self)
+        sandboxRelease = unsafeBitCast(dlsym(RTLD_DEFAULT, "sandbox_extension_release"), to: SandboxExtensionReleaseFn.self)
+        xpcStringCreate = unsafeBitCast(dlsym(RTLD_DEFAULT, "xpc_string_create"), to: XPCStringCreateFn.self)
+        xpcRelease = unsafeBitCast(dlsym(RTLD_DEFAULT, "xpc_release"), to: XPCReleaseFn.self)
+    }
+    
+    // Lấy path từ inode (Dùng cho fallback iOS 27.0.1 nếu symlink bị chặn)
     private func getPathFromInode(_ inode: UInt64, volumePath: String = "/private/var") -> String? {
         var sfs = statfs()
         if statfs(volumePath, &sfs) != 0 { return nil }
@@ -45,7 +95,7 @@ final class WorseQueryBridge {
         guard result > 0 else { return nil }
         return String(cString: pathBuffer)
     }
-
+    
     private func scanInodes(in directory: String) -> [UInt64] {
         var inodes: [UInt64] = []
         let fm = FileManager.default
@@ -53,63 +103,111 @@ final class WorseQueryBridge {
         for case let path as String in enumerator {
             let fullPath = (directory as NSString).appendingPathComponent(path)
             var st = stat()
-            if stat(fullPath, &st) == 0 {
-                inodes.append(st.st_ino)
-            }
+            if stat(fullPath, &st) == 0 { inodes.append(st.st_ino) }
         }
         return inodes
     }
-
-    func grantAccessToMobileGestalt(appGroupID: String) -> (Int64, String) {
-        let wq = WorseQuery()
-        let testFile = MobileGestaltApplyTask.onDeviceMGPath
-        let targetDir = (testFile as NSString).deletingLastPathComponent
-
-        // 1. Quét inode trong thư mục MobileGestalt cache
-        let inodes = scanInodes(in: targetDir)
+    
+    func grantAccess(targetPath: String, appGroupID: String) -> (Int64, String) {
+        guard let create = queryCreate, let setClass = querySetClass, let setGroupIds = querySetGroupIds,
+              let setFlags = querySetFlags, let setPart = querySetPart, let getResult = queryGetSingleResult,
+              let qFree = queryFree, let copyToken = copySandboxToken, let consume = sandboxConsume,
+              let strCreate = xpcStringCreate, let xpcRel = xpcRelease else {
+            return (-1, "Không load được MCM APIs")
+        }
         
-        for inode in inodes {
-            guard let realPath = getPathFromInode(inode) else { continue }
-            
-            // 2. Xin quyền trên đường dẫn thật lấy được từ kernel
-            let (granted, handle, _) = wq.grantAccess(atPath: realPath)
-            if granted, handle > 0 {
-                let res = consumeToken(handle: handle)
-                if res.0 > 0 {
-                    return (res.0, "Thành công qua fsgetpath: \(realPath)")
-                }
-            }
+        let fm = FileManager.default
+        guard let groupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
+            return (-1, "Không lấy được App Group URL cho \(appGroupID)")
         }
-
-        // 3. Fallback cuối cùng: thử trực tiếp trên file
-        let (grantedDirect, handleDirect, errorDirect) = wq.grantAccess(atPath: testFile)
-        if grantedDirect, handleDirect > 0 {
-            let res = consumeToken(handle: handleDirect)
-            if res.0 > 0 {
-                return res
-            }
+        
+        let cachesPath = groupURL.appendingPathComponent("Library/Caches").path
+        let libPath = groupURL.appendingPathComponent("Library").path
+        let backupCaches = groupURL.appendingPathComponent("Library/Caches.bqtool").path
+        
+        // 1. Tạo symlink
+        try? fm.createDirectory(atPath: libPath, withIntermediateDirectories: true)
+        try? fm.removeItem(atPath: backupCaches)
+        if fm.fileExists(atPath: cachesPath) { try? fm.moveItem(atPath: cachesPath, toPath: backupCaches) }
+        
+        do {
+            try fm.createSymbolicLink(atPath: cachesPath, withDestinationPath: targetPath)
+        } catch {
+            return (-1, "Tạo symlink thất bại: \(error.localizedDescription)")
         }
-
-        return (-1, "XPC Error. Lỗi cuối: \(errorDirect)")
-    }
-
-    private func consumeToken(handle: Int64) -> (Int64, String) {
-        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else {
-            return (-1, "Pointer error")
+        
+        // 2. Setup Query
+        guard let query = create() else {
+            cleanup(cachesPath, backupCaches)
+            return (-2, "Tạo query thất bại")
         }
-        let consumed = sandbox_extension_consume(tokenPtr)
-        if consumed < 0 { return (-1, "Consume errno: \(errno)") }
+        
+        setClass(query, 7) // 7 = App Group
+        let ident = appGroupID.withCString { strCreate($0) }
+        setGroupIds(query, ident)
+        setPart(query, 3) // 3 = Library/Caches
+        
+        var result: OpaquePointer? = nil
+        
+        // Thử flag iOS 27 trước (từ WQFiles/KAMUI)
+        setFlags(query, 0x8100000000)
+        result = getResult(query)
+        
+        // Fallback flag iOS 26/27.0.1 (từ worse_query.m gốc)
+        if result == nil {
+            setFlags(query, 0x8000000000)
+            result = getResult(query)
+        }
+        
+        guard result != nil else {
+            qFree(query)
+            xpcRel(ident)
+            cleanup(cachesPath, backupCaches)
+            return (-3, "XPC Error: containermanagerd từ chối cấp token.")
+        }
+        
+        // 3. Lấy token
+        guard let tokenPtr = copyToken(result) else {
+            qFree(query)
+            xpcRel(ident)
+            cleanup(cachesPath, backupCaches)
+            return (-4, "Kernel từ chối cấp token")
+        }
+        
+        let consumed = consume(tokenPtr)
+        free(tokenPtr)
+        qFree(query)
+        xpcRel(ident)
+        cleanup(cachesPath, backupCaches)
+        
+        if consumed < 0 { return (-5, "Consume token thất bại (errno: \(errno))") }
+        
         activeHandles.append(consumed)
-        return (consumed, "OK")
+        return (consumed, "Thành công qua MCM Symlink")
     }
-
+    
+    // Fallback dùng fsgetpath (Dành riêng cho iOS 27.0.1 nếu MCM bị chặn)
+    func grantAccessViaFSGetPath(targetFile: String) -> (Int64, String) {
+        // Nếu mày muốn thử cách này, nó sẽ quét inode của file và xin quyền trực tiếp.
+        // Tuy nhiên, trên 27.0.1, MCM Symlink thường hoạt động tốt hơn nếu có App Group.
+        return (-1, "fsgetpath fallback chưa được kích hoạt trong bản này.")
+    }
+    
+    private func cleanup(_ cachesPath: String, _ backupCaches: String) {
+        let fm = FileManager.default
+        try? fm.removeItem(atPath: cachesPath)
+        if fm.fileExists(atPath: backupCaches) { try? fm.moveItem(atPath: backupCaches, toPath: cachesPath) }
+    }
+    
     func releaseAll() {
-        for h in activeHandles { _ = sandbox_extension_release(h) }
+        if let release = sandboxRelease {
+            for h in activeHandles { _ = release(h) }
+        }
         activeHandles.removeAll()
     }
 }
 
-// MARK: - Document Picker
+// MARK: - Document Picker (Đã fix asCopy)
 struct DocumentPickerView: UIViewControllerRepresentable {
     var allowedContentTypes: [UTType] = [.data, .item]
     let onPick: (URL) -> Void
@@ -306,11 +404,11 @@ struct SettingsView: View {
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
-        writeTestLog = "[*] Bắt đầu test quyền (fsgetpath inode traversal)...\n"
+        writeTestLog = "[*] Bắt đầu test quyền (Native MCM)...\n"
 
         let work = DispatchWorkItem {
             let testFile = MobileGestaltApplyTask.onDeviceMGPath
-            let bridge = WorseQueryBridge.shared
+            let bridge = NativeWorseQuery.shared
             let runtimeGroups = self.getAllRuntimeAppGroups()
 
             DispatchQueue.main.async { self.writeTestLog += "📱 Runtime Groups: \(runtimeGroups.joined(separator: ", "))\n" }
@@ -322,7 +420,7 @@ struct SettingsView: View {
                 if FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) == nil { continue }
 
                 DispatchQueue.main.async { self.writeTestLog += "[*] Thử xin quyền qua group: \(group)...\n" }
-                let (handle, error) = bridge.grantAccessToMobileGestalt(appGroupID: group)
+                let (handle, error) = bridge.grantAccess(targetPath: "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches", appGroupID: group)
 
                 if handle > 0 {
                     finalHandle = handle
@@ -339,8 +437,7 @@ struct SettingsView: View {
                     self.writeTestLog += "\n❌ TẤT CẢ PHƯƠNG PHÁP ĐỀU THẤT BẠI!\n"
                     self.writeTestLog += "👉 Lỗi cuối cùng: \(lastError)\n"
                     self.writeTestLog += "👉 CHẨN ĐOÁN:\n"
-                    self.writeTestLog += "   - fsgetpath trả về path nhưng grantAccess vẫn từ chối (XPC Error).\n"
-                    self.writeTestLog += "   - Có thể do signer đã drop App Group hoặc cert không hợp lệ.\n"
+                    self.writeTestLog += "   - Signer đã drop App Group hoặc cert không hợp lệ.\n"
                     self.writeTestSuccess = false; self.isTestingWrite = false
                 }
                 return
