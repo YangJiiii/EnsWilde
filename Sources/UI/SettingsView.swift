@@ -24,44 +24,13 @@ private func sandbox_extension_consume(_ token: UnsafePointer<CChar>) -> Int64
 @_silgen_name("sandbox_extension_release")
 private func sandbox_extension_release(_ handle: Int64) -> Int
 
-@_silgen_name("sandbox_extension_issue_file")
-private func sandbox_extension_issue_file(_ extension_class: UnsafePointer<CChar>, _ path: UnsafePointer<CChar>, _ flags: UInt32) -> UnsafeMutablePointer<CChar>?
-
 @_silgen_name("fsgetpath")
 private func fsgetpath(_ buf: UnsafeMutablePointer<CChar>, _ buflen: Int, _ fsid: UnsafePointer<fsid_t>, _ objid: UInt64) -> Int
 
-// MARK: - WorseQuery Bridge (Entitlement Check & Issue File)
+// MARK: - WorseQuery Bridge (Direct API - Chuẩn WQFiles)
 final class WorseQueryBridge {
     static let shared = WorseQueryBridge()
     private var activeHandles: [Int64] = []
-
-    func inspectProvisioningProfile() -> (groups: [String], isWildcard: Bool, hasMGEntitlement: Bool) {
-        guard let profilePath = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
-              let data = try? Data(contentsOf: URL(fileURLWithPath: profilePath)),
-              let dataString = String(data: data, encoding: .isoLatin1),
-              let startRange = dataString.range(of: "<plist"),
-              let endRange = dataString.range(of: "</plist>") else {
-            return ([], false, false)
-        }
-        
-        let plistString = String(dataString[startRange.lowerBound..<endRange.upperBound])
-        guard let plistData = plistString.data(using: .isoLatin1) else { return ([], false, false) }
-        
-        var format = PropertyListSerialization.PropertyListFormat.xml
-        guard let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: &format) as? [String: Any],
-              let entitlements = plist["Entitlements"] as? [String: Any] else {
-            return ([], false, false)
-        }
-        
-        let groups = entitlements["com.apple.security.application-groups"] as? [String] ?? []
-        let appId = entitlements["application-identifier"] as? String ?? ""
-        let isWildcard = appId.contains("*")
-        
-        // Check quyền tối quan trọng của MobileGestalt
-        let hasMGEntitlement = entitlements["com.apple.private.security.storage.MobileGestalt"] as? Bool ?? false
-        
-        return (groups, isWildcard, hasMGEntitlement)
-    }
 
     private func getPathFromInode(_ inode: UInt64, volumePath: String = "/private/var") -> String? {
         var sfs = statfs()
@@ -94,7 +63,7 @@ final class WorseQueryBridge {
     func grantAccessToMobileGestalt(appGroupID: String) -> (Int64, String) {
         let fm = FileManager.default
         guard let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
-            return (-1, "Không lấy được App Group container cho \(appGroupID)")
+            return (-1, "Không lấy được App Group container")
         }
         
         let cachesPath = appGroupURL.appendingPathComponent("Library/Caches").path
@@ -102,34 +71,11 @@ final class WorseQueryBridge {
         let backupCachesPath = appGroupURL.appendingPathComponent("Library/Caches.bqtool").path
         
         let targetDir = "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
-        
-        // Lấy path chuẩn của file MobileGestalt
-        let pathsToTry = [
-            MobileGestaltApplyTask.onDeviceMGPath,
-            "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist",
-            "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist"
-        ]
-        
-        // 1. Cấp quyền qua API sandbox_extension_issue_file trực tiếp (nếu có entitlement)
-        let extClass = "com.apple.app-sandbox.read-write".cString(using: .utf8)!
-        for path in pathsToTry {
-            if let tokenPtr = path.withCString({ pathC in
-                extClass.withUnsafeBufferPointer { extBuf in
-                    sandbox_extension_issue_file(extBuf.baseAddress!, pathC, 0)
-                }
-            }) {
-                let tokenStr = String(cString: tokenPtr)
-                let handle = tokenStr.withCString { sandbox_extension_consume($0) }
-                free(tokenPtr)
-                
-                if handle > 0 {
-                    activeHandles.append(handle)
-                    return (handle, "Thành công qua sandbox_extension_issue_file cho: \(path)")
-                }
-            }
-        }
+        let testFile = MobileGestaltApplyTask.onDeviceMGPath
 
-        // 2. Fallback: Symlink via App Group
+        let wq = WorseQuery()
+
+        // 1. Thử Symlink (Nhanh nhất, chuẩn Airlift)
         if fm.fileExists(atPath: cachesPath) {
             try? fm.removeItem(atPath: backupCachesPath)
             try? fm.moveItem(atPath: cachesPath, toPath: backupCachesPath)
@@ -137,18 +83,21 @@ final class WorseQueryBridge {
         try? fm.createDirectory(atPath: libraryPath, withIntermediateDirectories: true)
         try? fm.createSymbolicLink(atPath: cachesPath, withDestinationPath: targetDir)
         
-        let wq = WorseQuery()
         let (granted, handleSymlink, errorSymlink) = wq.grantAccess(atPath: cachesPath)
+        
+        // Dọn dẹp symlink
+        try? fm.removeItem(atPath: cachesPath)
+        if fm.fileExists(atPath: backupCachesPath) {
+            try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
+        }
+        
         if granted, handleSymlink > 0 {
             let res = consumeToken(handle: handleSymlink)
-            cleanupSymlink(cachesPath: cachesPath, backupCachesPath: backupCachesPath)
             if res.0 > 0 { return res }
         }
-        cleanupSymlink(cachesPath: cachesPath, backupCachesPath: backupCachesPath)
 
-        // 3. Fallback: fsgetpath
-        let parentDir = (pathsToTry[0] as NSString).deletingLastPathComponent
-        let inodes = scanInodes(in: parentDir)
+        // 2. Thử fsgetpath (Chuẩn KAMUI/WQFiles cho iOS 27+)
+        let inodes = scanInodes(in: targetDir)
         for inode in inodes {
             guard let realPath = getPathFromInode(inode) else { continue }
             let (granted2, handle2, _) = wq.grantAccess(atPath: realPath)
@@ -158,24 +107,14 @@ final class WorseQueryBridge {
             }
         }
 
-        // 4. Fallback: Trực tiếp trên file
-        for path in pathsToTry {
-            let (granted3, handle3, _) = wq.grantAccess(atPath: path)
-            if granted3, handle3 > 0 {
-                let res = consumeToken(handle: handle3)
-                if res.0 > 0 { return res }
-            }
+        // 3. Thử trực tiếp
+        let (granted3, handle3, error3) = wq.grantAccess(atPath: testFile)
+        if granted3, handle3 > 0 {
+            let res = consumeToken(handle: handle3)
+            if res.0 > 0 { return res }
         }
 
-        return (-1, "XPC Error. Lỗi: \(errorSymlink)")
-    }
-    
-    private func cleanupSymlink(cachesPath: String, backupCachesPath: String) {
-        let fm = FileManager.default
-        try? fm.removeItem(atPath: cachesPath)
-        if fm.fileExists(atPath: backupCachesPath) {
-            try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
-        }
+        return (-1, "XPC Error. Lỗi: \(errorSymlink.isEmpty ? error3 : errorSymlink)")
     }
 
     private func consumeToken(handle: Int64) -> (Int64, String) {
@@ -391,35 +330,12 @@ struct SettingsView: View {
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
-        writeTestLog = "[*] Bắt đầu test quyền (Issue File & Entitlements)...\n"
+        writeTestLog = "[*] Bắt đầu test quyền (Direct WorseQuery)...\n"
 
         let work = DispatchWorkItem {
-            let testFile = MobileGestaltApplyTask.onDeviceMGPath
             let bridge = WorseQueryBridge.shared
-
-            if !self.vpnActive {
-                DispatchQueue.main.async {
-                    self.writeTestLog += "❌ VPN CHƯA BẬT! Bật LocalDevVPN lên boss man.\n"
-                    self.writeTestSuccess = false; self.isTestingWrite = false
-                }
-                return
-            }
-            
-            // Check Entitlements
-            let (_, isWildcard, hasMGEnt) = bridge.inspectProvisioningProfile()
-            DispatchQueue.main.async {
-                if isWildcard {
-                    self.writeTestLog += "⚠️ Profile là Wildcard (*)!\n"
-                }
-                if !hasMGEnt {
-                    self.writeTestLog += "⚠️ CẢNH BÁO: Profile THIẾU entitlement `com.apple.private.security.storage.MobileGestalt`!\n"
-                    self.writeTestLog += "👉 Đây là lý do XPC Error. Sideloader bóp mất quyền này rồi.\n"
-                } else {
-                    self.writeTestLog += "✅ Profile có entitlement MobileGestalt!\n"
-                }
-            }
-
             let runtimeGroups = self.getAllRuntimeAppGroups()
+            
             DispatchQueue.main.async { self.writeTestLog += "📱 Runtime Groups: \(runtimeGroups.joined(separator: ", "))\n" }
 
             var finalHandle: Int64 = -1
@@ -446,12 +362,7 @@ struct SettingsView: View {
                     self.writeTestLog += "\n❌ TẤT CẢ PHƯƠNG PHÁP ĐỀU THẤT BẠI!\n"
                     self.writeTestLog += "👉 Lỗi cuối cùng: \(lastError)\n"
                     self.writeTestLog += "👉 CHẨN ĐOÁN:\n"
-                    if !hasMGEnt {
-                        self.writeTestLog += "   - 100% do thiếu entitlement `com.apple.private.security.storage.MobileGestalt`.\n"
-                        self.writeTestLog += "   - Mày phải tự sign app bằng Xcode với tài khoản Developer thật, add file entitlements có dòng đó, rồi build vào máy.\n"
-                    } else {
-                        self.writeTestLog += "   - XPC bị block bởi LocalDevVPN, thử tắt bật lại VPN.\n"
-                    }
+                    self.writeTestLog += "   - Cert sign fake hoặc framework AirliftFFI bị lỗi XPC.\n"
                     self.writeTestSuccess = false; self.isTestingWrite = false
                 }
                 return
@@ -459,6 +370,7 @@ struct SettingsView: View {
 
             DispatchQueue.main.async { self.writeTestLog += "✅ Đã có token! Đang test ghi file...\n" }
             do {
+                let testFile = MobileGestaltApplyTask.onDeviceMGPath
                 let originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
                 var st = stat()
                 if stat(testFile, &st) == 0, (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
