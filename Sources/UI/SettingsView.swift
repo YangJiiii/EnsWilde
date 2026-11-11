@@ -31,16 +31,19 @@ private func fsgetpath(_ buf: UnsafeMutablePointer<CChar>, _ buflen: Int, _ fsid
 final class WorseQueryBridge {
     static let shared = WorseQueryBridge()
     private var activeHandles: [Int64] = []
-    
+
     private func getPathFromInode(_ inode: UInt64, volumePath: String = "/private/var") -> String? {
         var pathBuffer = [CChar](repeating: 0, count: Int(PATH_MAX))
-        let result = pathBuffer.withUnsafeMutableBufferPointer { buffer in
-            fsgetpath(buffer.baseAddress, Int(PATH_MAX), volumePath, inode)
+        let result = pathBuffer.withUnsafeMutableBufferPointer { buffer -> Int in
+            // FIX: baseAddress is Optional<UnsafeMutablePointer<CChar>>; guard to unwrap
+            // (pathBuffer is always non-empty so baseAddress is never nil in practice)
+            guard let base = buffer.baseAddress else { return 0 }
+            return fsgetpath(base, Int(PATH_MAX), volumePath, inode)
         }
         guard result > 0 else { return nil }
         return String(cString: pathBuffer)
     }
-    
+
     private func scanInodes(in directory: String) -> [UInt64] {
         var inodes: [UInt64] = []
         let fm = FileManager.default
@@ -54,7 +57,7 @@ final class WorseQueryBridge {
         }
         return inodes
     }
-    
+
     func grantAccessToMobileGestalt(appGroupID: String) -> (Int64, String) {
         let fm = FileManager.default
         guard let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
@@ -331,10 +334,10 @@ struct SettingsView: View {
 
             for group in runtimeGroups {
                 if FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) == nil { continue }
-                
+
                 DispatchQueue.main.async { self.writeTestLog += "[*] Thử xin quyền qua group: \(group)...\n" }
                 let (handle, error) = bridge.grantAccessToMobileGestalt(appGroupID: group)
-                
+
                 if handle > 0 {
                     finalHandle = handle
                     DispatchQueue.main.async { self.writeTestLog += "✅ Thành công với group: \(group)!\n" }
@@ -363,16 +366,16 @@ struct SettingsView: View {
                 if stat(testFile, &st) == 0, (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
                     _ = chflags(testFile, st.st_flags & ~UInt32(UF_IMMUTABLE))
                 }
-                
+
                 let fd = open(testFile, O_RDWR | O_CLOEXEC)
                 guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
                 defer { close(fd) }
-                
+
                 let bytesWritten = originalData.withUnsafeBytes { pwrite(fd, $0.baseAddress, $0.count, 0) }
                 guard bytesWritten == originalData.count else {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "pwrite errno: \(errno)"])
                 }
-                
+
                 _ = fcntl(fd, F_FULLFSYNC)
                 bridge.releaseAll()
                 DispatchQueue.main.async {
