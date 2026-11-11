@@ -2,29 +2,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AirliftFFI
 
-// Custom Icon Style mỏng hơn, ít tròn hơn
-private struct TweakRowIcon: View {
-    let systemImage: String
-    var body: some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 16, weight: .regular))
-            .frame(width: 30, height: 30)
-            .background(Color.secondary.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous)) // Giảm độ tròn, mỏng hơn
-            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
-    }
-}
-
-private struct IconPickerLabel: View {
-    let title: String
-    let systemImage: String
-    var body: some View {
-        HStack(spacing: 12) {
-            TweakRowIcon(systemImage: systemImage)
-            Text(title)
-        }
-    }
-}
+// TweakRowIcon & IconPickerLabel đã được khai báo trong UI/TweakRowIcon.swift
+// Không khai báo lại để tránh invalid redeclaration.
 
 struct MobileGestaltView: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
@@ -47,11 +26,11 @@ struct MobileGestaltView: View {
     @State var initError: String?
     @State var lastError: String?
     @State var dynamicIslandType: Int = 0
-    
+
     // Custom Subtype State
     @State var enableCustomSubtype: Bool = false
     @State var customSubtypeValue: String = ""
-    
+
     @State var enableModelName: Bool = false
     @State var modelName: String = ""
 
