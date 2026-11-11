@@ -45,7 +45,6 @@ enum MobileGestaltApplyTask {
         }
 
         // Signature canonical: grantAccess(targetPath:appGroupID:) -> (Int64, String)
-        // targetPath = thư mục Caches của MobileGestalt (symlink target) — giống SettingsView
         let targetDir = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
         let (handle, accessMsg) = NativeWorseQuery.shared.grantAccess(targetPath: targetDir, appGroupID: group)
         guard handle > 0 else {
@@ -68,11 +67,18 @@ enum MobileGestaltApplyTask {
         }
         defer { close(fd) }
 
+        // Ghi đè dữ liệu mới từ đầu file
         let bytesWritten = plistData.withUnsafeBytes { pwrite(fd, $0.baseAddress, $0.count, 0) }
         guard bytesWritten == plistData.count else {
             throw mgError(-6, "Ghi file thất bại (errno: \(errno))")
         }
 
+        // ĐM, CÁI NÀY QUAN TRỌNG NÈ: Cắt bớt phần dư của file cũ để tránh corrupt plist
+        if ftruncate(fd, off_t(plistData.count)) != 0 {
+            throw mgError(-7, "Cắt file (ftruncate) thất bại (errno: \(errno))")
+        }
+
+        // Đồng bộ hóa
         _ = fcntl(fd, F_FULLFSYNC)
 
         onLogUpdate("[MG] Verify file sau khi ghi...")
@@ -80,13 +86,13 @@ enum MobileGestaltApplyTask {
             let writtenData = try Data(contentsOf: mgURL)
             guard let writtenDict = try PropertyListSerialization.propertyList(from: writtenData, format: nil) as? NSDictionary,
                   writtenDict["CacheExtra"] != nil || writtenDict["CacheData"] != nil else {
-                throw mgError(-7, "File sau khi ghi không hợp lệ.")
+                throw mgError(-8, "File sau khi ghi không hợp lệ.")
             }
         } catch {
             onLogUpdate("[MG] ⚠️ Verify thất bại — rollback...")
             let pristineData = try MobileGestaltBackupManager.shared.restoreData()
             try? pristineData.write(to: mgURL)
-            throw mgError(-8, "File sau khi ghi corrupt, đã rollback: \(error.localizedDescription)")
+            throw mgError(-9, "File sau khi ghi corrupt, đã rollback: \(error.localizedDescription)")
         }
 
         onLogUpdate("[MG] ✅ MobileGestalt đã apply thành công. Respring để thay đổi.")
