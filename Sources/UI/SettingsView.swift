@@ -24,24 +24,20 @@ private func sandbox_extension_consume(_ token: UnsafePointer<CChar>) -> Int64
 @_silgen_name("sandbox_extension_release")
 private func sandbox_extension_release(_ handle: Int64) -> Int
 
-// MARK: - WorseQuery Bridge (Full Check & Fallback)
+// MARK: - WorseQuery Bridge (Exhaustive Fallback)
 final class WorseQueryBridge {
     static let shared = WorseQueryBridge()
     private var activeHandles: [Int64] = []
     
-    // Hàm bóc tách file mobileprovision để xem App Group có thật không
     func inspectProvisioningProfile() -> (groups: [String], isWildcard: Bool) {
-        guard let profilePath = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision") else {
-            return ([], false)
-        }
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: profilePath)) else {
+        guard let profilePath = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: profilePath)),
+              let dataString = String(data: data, encoding: .isoLatin1),
+              let startRange = dataString.range(of: "<plist"),
+              let endRange = dataString.range(of: "</plist>") else {
             return ([], false)
         }
         
-        guard let dataString = String(data: data, encoding: .isoLatin1) else { return ([], false) }
-        guard let startRange = dataString.range(of: "<plist"),
-              let endRange = dataString.range(of: "</plist>") else { return ([], false) }
-              
         let plistString = String(dataString[startRange.lowerBound..<endRange.upperBound])
         guard let plistData = plistString.data(using: .isoLatin1) else { return ([], false) }
         
@@ -58,9 +54,11 @@ final class WorseQueryBridge {
         return (groups, isWildcard)
     }
     
-    func grantAccessToMobileGestalt(appGroupID: String) -> Int64 {
+    func grantAccessToMobileGestalt(appGroupID: String) -> (Int64, String) {
         let fm = FileManager.default
-        guard let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else { return -1 }
+        guard let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
+            return (-1, "Không tạo được container URL cho \(appGroupID)")
+        }
         
         let cachesPath = appGroupURL.appendingPathComponent("Library/Caches").path
         let libraryPath = appGroupURL.appendingPathComponent("Library").path
@@ -76,34 +74,44 @@ final class WorseQueryBridge {
         do {
             try fm.createSymbolicLink(atPath: cachesPath, withDestinationPath: targetDir)
         } catch {
-            print("❌ Không thể tạo symlink: \(error.localizedDescription)")
-            if fm.fileExists(atPath: backupCachesPath) {
-                try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
-            }
-            return -1
+            if fm.fileExists(atPath: backupCachesPath) { try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath) }
+            return (-1, "Tạo symlink thất bại: \(error.localizedDescription)")
         }
         
-        var handle: Int64 = -1
         let wq = WorseQuery()
-        let (granted, handleSwift, _) = wq.grantAccess(atPath: cachesPath)
-        
-        if granted, handleSwift > 0 {
-            handle = handleSwift
-        }
+        let (granted, handleSwift, errorMsg) = wq.grantAccess(atPath: cachesPath)
         
         try? fm.removeItem(atPath: cachesPath)
         if fm.fileExists(atPath: backupCachesPath) {
             try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
         }
         
-        guard handle > 0 else { return -1 }
-        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else { return -1 }
+        guard granted, handleSwift > 0 else {
+            return (-1, errorMsg.isEmpty ? "WorseQuery từ chối cấp token (XPC Error)" : errorMsg)
+        }
+        
+        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handleSwift)) else {
+            return (-1, "Không parse được token pointer")
+        }
         
         let consumedHandle = sandbox_extension_consume(tokenPtr)
-        if consumedHandle > 0 {
-            activeHandles.append(consumedHandle)
+        if consumedHandle < 0 {
+            return (-1, "sandbox_extension_consume thất bại (errno: \(errno))")
         }
-        return consumedHandle
+        
+        activeHandles.append(consumedHandle)
+        return (consumedHandle, "Thành công")
+    }
+    
+    func grantAccessDirect(path: String) -> (Int64, String) {
+        let wq = WorseQuery()
+        let (granted, handle, errorMsg) = wq.grantAccess(atPath: path)
+        guard granted, handle > 0 else { return (-1, errorMsg) }
+        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else { return (-1, "Pointer error") }
+        let consumedHandle = sandbox_extension_consume(tokenPtr)
+        if consumedHandle < 0 { return (-1, "Consume errno: \(errno)") }
+        activeHandles.append(consumedHandle)
+        return (consumedHandle, "Thành công")
     }
     
     func releaseAll() {
@@ -158,7 +166,6 @@ struct SettingsView: View {
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
 
-    // MARK: - State cho Run Test
     @State private var isTestingWrite = false
     @State private var writeTestLog = ""
     @State private var writeTestSuccess: Bool? = nil
@@ -194,7 +201,7 @@ struct SettingsView: View {
                             .foregroundColor(writeTestSuccess == true ? .green : (writeTestSuccess == false ? .red : .primary))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: 200)
+                    .frame(maxHeight: 250)
                 }
             }
 
@@ -307,18 +314,15 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Core Run Test Logic
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
-        writeTestLog = "[*] Bắt đầu kiểm tra chuyên sâu...\n"
+        writeTestLog = "[*] Bắt đầu quét toàn diện App Group...\n"
 
         let work = DispatchWorkItem {
             let testFile = MobileGestaltApplyTask.onDeviceMGPath
             let bridge = WorseQueryBridge.shared
 
-            // 1. Kiểm tra VPN
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang kiểm tra LocalDevVPN...\n" }
             if !self.vpnActive {
                 DispatchQueue.main.async {
                     self.writeTestLog += "❌ VPN CHƯA BẬT! Bật LocalDevVPN lên boss man.\n"
@@ -326,58 +330,74 @@ struct SettingsView: View {
                 }
                 return
             }
-            DispatchQueue.main.async { self.writeTestLog += "✅ LocalDevVPN đang bật.\n" }
 
-            // 2. Kiểm tra Profile thật
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang bóc tách file embedded.mobileprovision...\n" }
+            // 1. Quét Profile
             let (profileGroups, isWildcard) = bridge.inspectProvisioningProfile()
+            let runtimeGroups = self.getAllRuntimeAppGroups()
             
             DispatchQueue.main.async {
-                if isWildcard {
-                    self.writeTestLog += "⚠️ CẢNH BÁO: Profile của mày là Wildcard (*)! Không thể chứa App Group thật!\n"
-                }
-                if profileGroups.isEmpty {
-                    self.writeTestLog += "❌ LỖI: File mobileprovision ĐÉO CÓ App Group nào cả!\n"
+                if isWildcard { self.writeTestLog += "⚠️ Profile là Wildcard (*)!\n" }
+                self.writeTestLog += "📄 Profile Groups: \(profileGroups.joined(separator: ", "))\n"
+                self.writeTestLog += "📱 Runtime Groups: \(runtimeGroups.joined(separator: ", "))\n"
+            }
+
+            // Gộp tất cả group lại để thử
+            let allGroups = Array(Set(profileGroups + runtimeGroups))
+            var finalHandle: Int64 = -1
+            var lastError = ""
+
+            // 2. Thử từng App Group
+            for group in allGroups {
+                if FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) == nil { continue }
+                
+                DispatchQueue.main.async { self.writeTestLog += "[*] Thử xin quyền qua group: \(group)...\n" }
+                let (handle, error) = bridge.grantAccessToMobileGestalt(appGroupID: group)
+                
+                if handle > 0 {
+                    finalHandle = handle
+                    DispatchQueue.main.async { self.writeTestLog += "✅ Thành công với group: \(group)!\n" }
+                    break
                 } else {
-                    self.writeTestLog += "✅ App Group trong profile: \(profileGroups.joined(separator: ", "))\n"
+                    lastError = error
+                    DispatchQueue.main.async { self.writeTestLog += " ⚠️ Thất bại: \(error)\n" }
                 }
             }
 
-            // 3. Lấy App Group (Runtime)
-            guard let appGroup = self.getFirstValidAppGroup() else {
-                DispatchQueue.main.async {
-                    self.writeTestLog += "❌ THẤT BẠI: Không tìm thấy App Group runtime.\n"
-                    self.writeTestSuccess = false; self.isTestingWrite = false
+            // 3. Fallback: Thử trực tiếp trên file
+            if finalHandle <= 0 {
+                DispatchQueue.main.async { self.writeTestLog += "[*] Thử xin quyền TRỰC TIẾP trên file...\n" }
+                let (handle, error) = bridge.grantAccessDirect(path: testFile)
+                if handle > 0 {
+                    finalHandle = handle
+                    DispatchQueue.main.async { self.writeTestLog += "✅ Thành công trực tiếp trên file!\n" }
+                } else {
+                    lastError = error
+                    DispatchQueue.main.async { self.writeTestLog += " ⚠️ Thất bại: \(error)\n" }
                 }
-                return
             }
-            DispatchQueue.main.async { self.writeTestLog += "✅ App Group runtime: \(appGroup)\n" }
 
-            // 4. Xin quyền qua Symlink
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang tạo symlink và xin quyền...\n" }
-            let handle = bridge.grantAccessToMobileGestalt(appGroupID: appGroup)
-
-            guard handle > 0 else {
+            guard finalHandle > 0 else {
                 DispatchQueue.main.async {
-                    self.writeTestLog += "\n❌ THẤT BẠI: Handle invalid.\n"
+                    self.writeTestLog += "\n❌ TẤT CẢ PHƯƠNG PHÁP ĐỀU THẤT BẠI!\n"
+                    self.writeTestLog += "👉 Lỗi cuối cùng: \(lastError)\n"
                     self.writeTestLog += "👉 CHẨN ĐOÁN:\n"
-                    if isWildcard || profileGroups.isEmpty || profileGroups.first != appGroup {
-                        self.writeTestLog += "   - Cert mày dùng là đồ fake/auto-gen. Kernel nó từ chối cấp token cho App Group ảo.\n"
-                        self.writeTestLog += "   - Mày phải dùng tài khoản Apple Developer (có trả phí) để đăng ký App Group thật, rồi export file .mobileprovision mới sign lại app.\n"
+                    if profileGroups != runtimeGroups {
+                        self.writeTestLog += "   - App Group trong Profile và Runtime ĐÉO KHỚP NHAU!\n"
+                        self.writeTestLog += "   - Cái này do Sideloader (Feather/ESign) nó tự động đổi đuôi App Group để tránh trùng. Kernel nó phát hiện ra nên block!\n"
+                        self.writeTestLog += "   - FIX: Dùng Sideloadly/AltStore, hoặc dùng file IPA đã sign sẵn, đừng dùng ESign nữa.\n"
                     } else {
-                        self.writeTestLog += "   - Cert đúng nhưng framework WorseQuery đéo support iOS 27.2+ hoặc bị lỗi XPC.\n"
+                        self.writeTestLog += "   - Framework WorseQuery đéo support bản iOS này (27.0.1).\n"
+                        self.writeTestLog += "   - LocalDevVPN bị lỗi XPC.\n"
                     }
                     self.writeTestSuccess = false; self.isTestingWrite = false
                 }
                 return
             }
 
-            // 5. Ghi file
-            DispatchQueue.main.async { self.writeTestLog += "✅ Có token! Đang test ghi...\n" }
+            // 4. Ghi file
+            DispatchQueue.main.async { self.writeTestLog += "✅ Đã có token! Đang test ghi file...\n" }
             do {
                 let originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
-                
-                // Gỡ cờ bất biến
                 var st = stat()
                 if stat(testFile, &st) == 0, (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
                     _ = chflags(testFile, st.st_flags & ~UInt32(UF_IMMUTABLE))
@@ -392,17 +412,10 @@ struct SettingsView: View {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "pwrite errno: \(errno)"])
                 }
                 
-                let fileSize = lseek(fd, 0, SEEK_END)
-                if fileSize > off_t(originalData.count) {
-                    ftruncate(fd, off_t(originalData.count))
-                }
-                
                 _ = fcntl(fd, F_FULLFSYNC)
-                
                 bridge.releaseAll()
                 DispatchQueue.main.async {
                     self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
-                    self.writeTestLog += "🎉 App Group & WorseQuery hoạt động hoàn hảo!"
                     self.writeTestSuccess = true; self.isTestingWrite = false
                 }
             } catch {
@@ -416,19 +429,10 @@ struct SettingsView: View {
         DispatchQueue.global(qos: .userInitiated).async(execute: work)
     }
 
-    // Hàm lấy App Group xịn nhất (đọc runtime entitlements)
-    private func getFirstValidAppGroup() -> String? {
-        guard let task = SecTaskCreateFromSelf(nil) else { return nil }
-        guard let entitlements = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil) else { return nil }
-        guard let groups = entitlements as? [String] else { return nil }
-
-        let fm = FileManager.default
-        for g in groups {
-            if fm.containerURL(forSecurityApplicationGroupIdentifier: g) != nil {
-                return g
-            }
-        }
-        return groups.first
+    private func getAllRuntimeAppGroups() -> [String] {
+        guard let task = SecTaskCreateFromSelf(nil) else { return [] }
+        guard let entitlements = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil) else { return [] }
+        return (entitlements as? [String]) ?? []
     }
 
     @ViewBuilder private func statusRow(title: String, subtitle: String, ok: Bool) -> some View {
