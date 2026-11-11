@@ -27,6 +27,7 @@ struct MainViewWithNavigation: View {
             NavigationStack { SettingsView(toolStore: toolStore) }
                 .tabItem { Label(L("nav_settings"), systemImage: "gearshape.fill") }.tag(NavigationTab.settings)
 
+            // Đã đổi thành AboutView() để dùng bản đầy đủ từ SettingsView.swift
             NavigationStack { AboutView() }
                 .tabItem { Label(L("nav_about"), systemImage: "info.circle.fill") }.tag(NavigationTab.about)
 
@@ -179,57 +180,5 @@ struct ApplyTabView: View {
     }
 }
 
-// MARK: - ABOUT VIEW (inline — KHÔNG tạo file mới, KHÔNG đụng Xcode project)
-private struct AboutView: View {
-    private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-    private let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-
-    private func deviceModelName() -> String {
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let machineMirror = Mirror(reflecting: systemInfo.machine)
-        let identifier = machineMirror.children.reduce("") { id, element in
-            guard let value = element.value as? Int8, value != 0 else { return id }
-            return id + String(UnicodeScalar(UInt8(value)))
-        }
-        return "\(UIDevice.current.model) (\(identifier))"
-    }
-
-    var body: some View {
-        List {
-            Section {
-                VStack(spacing: 12) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 56))
-                        .foregroundStyle(.tint)
-                    Text("EnsWilde").font(.title2.bold())
-                    Text("v\(appVersion) (\(buildNumber))").font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .listRowBackground(Color.clear)
-            }
-
-            Section {
-                HStack {
-                    Label(L("app_ios"), systemImage: "iphone")
-                    Spacer()
-                    Text(UIDevice.current.systemVersion).font(.footnote).foregroundStyle(.secondary)
-                }
-                HStack {
-                    Label(L("app_device"), systemImage: "apps.iphone")
-                    Spacer()
-                    Text(deviceModelName()).font(.footnote).foregroundStyle(.secondary)
-                }
-            } header: {
-                Text(L("settings_app_info"))
-            }
-
-            Section {
-                Text(L("app_info_footer")).font(.footnote).foregroundStyle(.secondary)
-            }
-        }
-        .navigationTitle(L("nav_about"))
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
+// ĐÃ XOÁ HOÀN TOÀN `private struct TabAboutView` Ở ĐÂY
+// Vì đã dùng struct AboutView() từ file SettingsView.swift
