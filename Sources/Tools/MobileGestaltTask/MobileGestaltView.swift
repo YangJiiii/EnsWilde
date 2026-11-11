@@ -14,7 +14,8 @@ struct CleanTweakIcon: View {
     }
 }
 
-struct IconPickerLabel: View {
+// ĐÃ RENAME: tránh trùng với IconPickerLabel trong TweakRowIcon.swift
+struct MGIconPickerLabel: View {
     let title: String
     let systemImage: String
     var body: some View {
@@ -155,7 +156,7 @@ struct MobileGestaltView: View {
                 Text(L("mg_subtype_2736")).tag(7)
                 Text("Custom Subtype").tag(-1) // Thêm option custom
             } label: {
-                IconPickerLabel(title: L("mg_device_subtype_preset"), systemImage: "iphone")
+                MGIconPickerLabel(title: L("mg_device_subtype_preset"), systemImage: "iphone")
             }
             .pickerStyle(.menu)
             .onChange(of: dynamicIslandType) { newValue in
@@ -201,9 +202,9 @@ struct MobileGestaltView: View {
     @ViewBuilder private var displayAndUISection: some View {
         Section(header: Text(L("section_display_and_ui"))) {
             IconToggle(title: L("mg_stage_manager"), systemImage: "rectangle.on.rectangle.angled", isOn: store.mgByteBinding(key: MGKey.stageMgr))
-            IconToggle(title: L("mg_aod"), systemImage: "moon.stars.fill", isOn: store.mgByteBinding(key: MGKey.AOD))
+            IconToggle(title: L("mg_aod"), systemImage: "moon.stars.fill", isOn: store.mgByteBinding(key: MGKey.aod))
                 .disabled(Utils.requiresVersion(18))
-            IconToggle(title: L("mg_aod_vibrancy"), systemImage: "circle.lefthalf.filled", isOn: store.mgByteBinding(key: MGKey.AODVibrancy))
+            IconToggle(title: L("mg_aod_vibrancy"), systemImage: "circle.lefthalf.filled", isOn: store.mgByteBinding(key: MGKey.aodVibrancy))
                 .disabled(Utils.requiresVersion(18))
             Toggle(isOn: store.mgTrollPadBinding()) {
                 HStack(spacing: 12) {
@@ -256,7 +257,7 @@ struct MobileGestaltView: View {
                     Text("iPhone 16 Pro Max").tag("iPhone17,2")
                 }
             } label: {
-                IconPickerLabel(title: L("mg_device_model"), systemImage: "iphone.gen3")
+                MGIconPickerLabel(title: L("mg_device_model"), systemImage: "iphone.gen3")
             }
             .pickerStyle(.menu)
         }
