@@ -24,59 +24,26 @@ private func sandbox_extension_consume(_ token: UnsafePointer<CChar>) -> Int64
 @_silgen_name("sandbox_extension_release")
 private func sandbox_extension_release(_ handle: Int64) -> Int
 
-// MARK: - WorseQuery Bridge (Bản Fix Full Bằng Symlink)
+// MARK: - WorseQuery Bridge (Trực diện, không symlink)
 final class WorseQueryBridge {
     static let shared = WorseQueryBridge()
     private var activeHandles: [Int64] = []
     
-    func grantAccessToSystemGroup(targetPath: String, appGroupID: String) -> Int64 {
-        let fm = FileManager.default
-        
-        guard let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
-            print("❌ Không thể lấy App Group container: \(appGroupID)")
-            return -1
-        }
-        
-        let cachesPath = appGroupURL.appendingPathComponent("Library/Caches").path
-        let libraryPath = appGroupURL.appendingPathComponent("Library").path
-        
-        // Dọn dẹp symlink cũ
-        try? fm.removeItem(atPath: cachesPath)
-        try? fm.createDirectory(atPath: libraryPath, withIntermediateDirectories: true)
-        
-        // Tạo symlink trỏ tới thư mục đích thật
-        do {
-            try fm.createSymbolicLink(atPath: cachesPath, withDestinationPath: targetPath)
-        } catch {
-            print("❌ Không thể tạo symlink tại \(cachesPath): \(error.localizedDescription)")
-            return -1
-        }
-        
-        // Xin quyền trên cái symlink
+    /// Xin quyền trực tiếp trên đường dẫn (File hoặc Folder)
+    func grantAccess(path: String) -> Int64 {
         let wq = WorseQuery()
-        let (granted, handle, _) = wq.grantAccess(atPath: cachesPath)
+        let (granted, tokenPtr, _) = wq.grantAccess(atPath: path)
         
-        guard granted, handle > 0 else {
-            print("❌ WorseQuery từ chối grantAccess trên symlink.")
-            try? fm.removeItem(atPath: cachesPath)
-            return -1
+        guard granted, tokenPtr > 0 else { return -1 }
+        
+        guard let ptr = UnsafePointer<CChar>(bitPattern: UInt(tokenPtr)) else { return -1 }
+        let handle = sandbox_extension_consume(ptr)
+        
+        if handle > 0 {
+            activeHandles.append(handle)
+            return handle
         }
-        
-        // Consume token
-        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else {
-            try? fm.removeItem(atPath: cachesPath)
-            return -1
-        }
-        
-        let consumedHandle = sandbox_extension_consume(tokenPtr)
-        if consumedHandle < 0 {
-            print("⚠️ Consume token thất bại (errno: \(errno))")
-            try? fm.removeItem(atPath: cachesPath)
-            return -1
-        }
-        
-        activeHandles.append(consumedHandle)
-        return handle
+        return -1
     }
     
     func releaseAll() {
@@ -84,14 +51,6 @@ final class WorseQueryBridge {
             _ = sandbox_extension_release(h)
         }
         activeHandles.removeAll()
-    }
-    
-    func cleanupSymlink(appGroupID: String) {
-        let fm = FileManager.default
-        if let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) {
-            let cachesPath = appGroupURL.appendingPathComponent("Library/Caches").path
-            try? fm.removeItem(atPath: cachesPath)
-        }
     }
 }
 
@@ -292,37 +251,31 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Core Run Test Logic
+    // MARK: - Core Run Test Logic (Direct File Grant)
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
-        writeTestLog = "[*] Bắt đầu test quyền (Symlink App Group Protocol)...\n"
+        writeTestLog = "[*] Bắt đầu test quyền...\n"
 
         let work = DispatchWorkItem {
             let testFile = MobileGestaltApplyTask.onDeviceMGPath
             let targetDir = (testFile as NSString).deletingLastPathComponent
             let bridge = WorseQueryBridge.shared
 
-            // 1. Lấy App Group
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang quét App Group...\n" }
-            guard let appGroup = self.getFirstValidAppGroup() else {
-                DispatchQueue.main.async {
-                    self.writeTestLog += "❌ THẤT BẠI: Không tìm thấy App Group hợp lệ trong chữ ký!\n"
-                    self.writeTestSuccess = false
-                    self.isTestingWrite = false
-                }
-                return
+            // 1. Xin quyền TRỰC TIẾP TRÊN FILE
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang xin quyền trên FILE:\n    \(testFile)\n" }
+            var handle = bridge.grantAccess(path: testFile)
+            
+            // Fallback: Nếu trên file fail, thử trên DIR (mặc dù trước đó fail lúc open, nhưng thử vẫn hơn)
+            if handle <= 0 {
+                DispatchQueue.main.async { self.writeTestLog += " ⚠️ Xin quyền trên file thất bại, thử trên DIR...\n" }
+                handle = bridge.grantAccess(path: targetDir)
             }
-            DispatchQueue.main.async { self.writeTestLog += "✅ App Group: \(appGroup)\n" }
-
-            // 2. Grant via Symlink
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang tạo symlink qua App Group và xin quyền...\n" }
-            let handle = bridge.grantAccessToSystemGroup(targetPath: targetDir, appGroupID: appGroup)
             
             guard handle > 0 else {
                 DispatchQueue.main.async {
-                    self.writeTestLog += "\n❌ THẤT BẠI: grantAccess trên symlink trả về handle không hợp lệ.\n"
-                    self.writeTestLog += "👉 Kernel vẫn chặn. Hãy chắc chắn App Group đã được sign đúng.\n"
+                    self.writeTestLog += "\n❌ THẤT BẠI: grantAccess trả về handle không hợp lệ.\n"
+                    self.writeTestLog += "👉 Framework WorseQuery từ chối cấp quyền. Hãy chắc chắn App Group đã được sign đúng.\n"
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
@@ -330,7 +283,7 @@ struct SettingsView: View {
             }
             DispatchQueue.main.async { self.writeTestLog += "✅ Xin quyền thành công! Handle: \(handle)\n" }
 
-            // 3. Đọc dữ liệu gốc
+            // 2. Đọc dữ liệu gốc
             DispatchQueue.main.async { self.writeTestLog += "[*] Đang đọc file thật...\n" }
             let originalData: Data
             do {
@@ -338,7 +291,6 @@ struct SettingsView: View {
                 DispatchQueue.main.async { self.writeTestLog += "✅ Đọc file thành công (\(originalData.count) bytes)!\n" }
             } catch {
                 bridge.releaseAll()
-                bridge.cleanupSymlink(appGroupID: appGroup)
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI ĐỌC FILE: \(error.localizedDescription)\n"
                     self.writeTestSuccess = false
@@ -347,7 +299,7 @@ struct SettingsView: View {
                 return
             }
 
-            // 4. Gỡ cờ bất biến
+            // 3. Gỡ cờ bất biến (UF_IMMUTABLE) nếu có
             var st = stat()
             if stat(testFile, &st) == 0, (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
                 if chflags(testFile, st.st_flags & ~UInt32(UF_IMMUTABLE)) == 0 {
@@ -357,35 +309,43 @@ struct SettingsView: View {
                 }
             }
 
-            // 5. Ghi file (In-place Overwrite)
-            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử ghi đè tại chỗ (pwrite với O_RDWR)...\n" }
+            // 4. GHI FILE (Bỏ O_NOFOLLOW, thử O_RDWR rồi fallback O_WRONLY)
+            DispatchQueue.main.async { self.writeTestLog += "[*] Đang thử mở file để ghi...\n" }
             do {
-                let fd = open(testFile, O_RDWR | O_CLOEXEC | O_NOFOLLOW)
+                // Thử O_RDWR trước
+                var fd = open(testFile, O_RDWR | O_CLOEXEC)
+                if fd < 0 {
+                    DispatchQueue.main.async { self.writeTestLog += " ⚠️ O_RDWR thất bại (errno: \(errno)), thử O_WRONLY...\n" }
+                    fd = open(testFile, O_WRONLY | O_CLOEXEC)
+                }
+                
                 guard fd >= 0 else {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
-                                  userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi. errno: \(errno)"])
+                                  userInfo: [NSLocalizedDescriptionKey: "Không thể mở file để ghi (cả RDWR và WRONLY). errno: \(errno)"])
                 }
                 defer { close(fd) }
 
+                // Ghi đè tại offset 0
                 let bytesWritten = originalData.withUnsafeBytes { buffer in
                     pwrite(fd, buffer.baseAddress, buffer.count, 0)
                 }
                 guard bytesWritten == originalData.count else {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
-                                  userInfo: [NSLocalizedDescriptionKey: "Ghi file thất bại. errno: \(errno)"])
+                                  userInfo: [NSLocalizedDescriptionKey: "Ghi file thất bại (pwrite). errno: \(errno)"])
                 }
 
+                // Cắt bớt phần dư
                 let fileSize = lseek(fd, 0, SEEK_END)
                 if fileSize > off_t(originalData.count) {
                     ftruncate(fd, off_t(originalData.count))
                 }
 
+                // Đồng bộ hóa
                 if fcntl(fd, F_FULLFSYNC) == -1 {
                     // Chỉ cảnh báo
                 }
 
                 bridge.releaseAll()
-                bridge.cleanupSymlink(appGroupID: appGroup)
 
                 DispatchQueue.main.async {
                     self.writeTestLog += "✅ GHI FILE THÀNH CÔNG!\n"
@@ -395,30 +355,17 @@ struct SettingsView: View {
                 }
             } catch {
                 bridge.releaseAll()
-                bridge.cleanupSymlink(appGroupID: appGroup)
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ LỖI GHI FILE: \(error.localizedDescription)\n\n"
-                    self.writeTestLog += "👉 Kernel vẫn từ chối ghi dù đã consume token qua symlink.\n"
+                    self.writeTestLog += "👉 Nguyên nhân: Kernel vẫn từ chối open() dù đã consume token.\n"
+                    self.writeTestLog += "  1. File có thể đang bị lock bởi daemon khác.\n"
+                    self.writeTestLog += "  2. Sandbox token không có quyền recursive.\n"
                     self.writeTestSuccess = false
                     self.isTestingWrite = false
                 }
             }
         }
         DispatchQueue.global(qos: .userInitiated).async(execute: work)
-    }
-
-    // Hàm lấy App Group xịn nhất
-    private func getFirstValidAppGroup() -> String? {
-        guard let task = SecTaskCreateFromSelf(nil) else { return nil }
-        guard let entitlements = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil) else { return nil }
-        guard let groups = entitlements as? [String] else { return nil }
-        
-        for g in groups {
-            if g.contains("mobilegestalt") || g.hasPrefix("group.") {
-                return g
-            }
-        }
-        return groups.first
     }
 
     @ViewBuilder private func statusRow(title: String, subtitle: String, ok: Bool) -> some View {
