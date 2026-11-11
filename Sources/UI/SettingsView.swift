@@ -17,103 +17,95 @@ private func SecTaskCopyValueForEntitlement(
     _ error: UnsafeMutablePointer<Unmanaged<CFError>?>?
 ) -> CFTypeRef?
 
-// MARK: - Private Sandbox APIs
+// MARK: - Private Sandbox & File APIs
 @_silgen_name("sandbox_extension_consume")
 private func sandbox_extension_consume(_ token: UnsafePointer<CChar>) -> Int64
 
 @_silgen_name("sandbox_extension_release")
 private func sandbox_extension_release(_ handle: Int64) -> Int
 
-// MARK: - WorseQuery Bridge (Exhaustive Fallback)
+@_silgen_name("fsgetpath")
+private func fsgetpath(_ buf: UnsafeMutablePointer<CChar>, _ buflen: Int, _ fsid: UnsafePointer<CChar>, _ objid: UInt64) -> Int
+
+// MARK: - WorseQuery Bridge (fsgetpath & Fallback)
 final class WorseQueryBridge {
     static let shared = WorseQueryBridge()
     private var activeHandles: [Int64] = []
     
-    func inspectProvisioningProfile() -> (groups: [String], isWildcard: Bool) {
-        guard let profilePath = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
-              let data = try? Data(contentsOf: URL(fileURLWithPath: profilePath)),
-              let dataString = String(data: data, encoding: .isoLatin1),
-              let startRange = dataString.range(of: "<plist"),
-              let endRange = dataString.range(of: "</plist>") else {
-            return ([], false)
+    private func getPathFromInode(_ inode: UInt64, volumePath: String = "/private/var") -> String? {
+        var pathBuffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let result = pathBuffer.withUnsafeMutableBufferPointer { buffer in
+            fsgetpath(buffer.baseAddress, Int(PATH_MAX), volumePath, inode)
         }
-        
-        let plistString = String(dataString[startRange.lowerBound..<endRange.upperBound])
-        guard let plistData = plistString.data(using: .isoLatin1) else { return ([], false) }
-        
-        var format = PropertyListSerialization.PropertyListFormat.xml
-        guard let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: &format) as? [String: Any],
-              let entitlements = plist["Entitlements"] as? [String: Any] else {
-            return ([], false)
+        guard result > 0 else { return nil }
+        return String(cString: pathBuffer)
+    }
+    
+    private func scanInodes(in directory: String) -> [UInt64] {
+        var inodes: [UInt64] = []
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(atPath: directory) else { return [] }
+        for case let path as String in enumerator {
+            let fullPath = (directory as NSString).appendingPathComponent(path)
+            var st = stat()
+            if stat(fullPath, &st) == 0 {
+                inodes.append(st.st_ino)
+            }
         }
-        
-        let groups = entitlements["com.apple.security.application-groups"] as? [String] ?? []
-        let appId = entitlements["application-identifier"] as? String ?? ""
-        let isWildcard = appId.contains("*")
-        
-        return (groups, isWildcard)
+        return inodes
     }
     
     func grantAccessToMobileGestalt(appGroupID: String) -> (Int64, String) {
         let fm = FileManager.default
         guard let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
-            return (-1, "Không tạo được container URL cho \(appGroupID)")
+            return (-1, "Không lấy được App Group container")
         }
-        
         let cachesPath = appGroupURL.appendingPathComponent("Library/Caches").path
-        let libraryPath = appGroupURL.appendingPathComponent("Library").path
-        let backupCachesPath = appGroupURL.appendingPathComponent("Library/Caches.bqtool").path
-        
-        if fm.fileExists(atPath: cachesPath) {
-            try? fm.removeItem(atPath: backupCachesPath)
-            try? fm.moveItem(atPath: cachesPath, toPath: backupCachesPath)
-        }
-        try? fm.createDirectory(atPath: libraryPath, withIntermediateDirectories: true)
-        
         let targetDir = "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
-        do {
-            try fm.createSymbolicLink(atPath: cachesPath, withDestinationPath: targetDir)
-        } catch {
-            if fm.fileExists(atPath: backupCachesPath) { try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath) }
-            return (-1, "Tạo symlink thất bại: \(error.localizedDescription)")
-        }
-        
-        let wq = WorseQuery()
-        let (granted, handleSwift, errorMsg) = wq.grantAccess(atPath: cachesPath)
-        
+        let testFile = MobileGestaltApplyTask.onDeviceMGPath
+
+        // 1. Thử symlink
         try? fm.removeItem(atPath: cachesPath)
-        if fm.fileExists(atPath: backupCachesPath) {
-            try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
-        }
-        
-        guard granted, handleSwift > 0 else {
-            return (-1, errorMsg.isEmpty ? "WorseQuery từ chối cấp token (XPC Error)" : errorMsg)
-        }
-        
-        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handleSwift)) else {
-            return (-1, "Không parse được token pointer")
-        }
-        
-        let consumedHandle = sandbox_extension_consume(tokenPtr)
-        if consumedHandle < 0 {
-            return (-1, "sandbox_extension_consume thất bại (errno: \(errno))")
-        }
-        
-        activeHandles.append(consumedHandle)
-        return (consumedHandle, "Thành công")
-    }
-    
-    func grantAccessDirect(path: String) -> (Int64, String) {
+        try? fm.createSymbolicLink(atPath: cachesPath, withDestinationPath: targetDir)
+
         let wq = WorseQuery()
-        let (granted, handle, errorMsg) = wq.grantAccess(atPath: path)
-        guard granted, handle > 0 else { return (-1, errorMsg) }
-        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else { return (-1, "Pointer error") }
-        let consumedHandle = sandbox_extension_consume(tokenPtr)
-        if consumedHandle < 0 { return (-1, "Consume errno: \(errno)") }
-        activeHandles.append(consumedHandle)
-        return (consumedHandle, "Thành công")
+        let (granted, handleSymlink, errorSymlink) = wq.grantAccess(atPath: cachesPath)
+        try? fm.removeItem(atPath: cachesPath)
+
+        if granted, handleSymlink > 0 {
+            return consumeToken(handle: handleSymlink)
+        }
+
+        // 2. Thử fsgetpath
+        let parentDir = (testFile as NSString).deletingLastPathComponent
+        let inodes = scanInodes(in: parentDir)
+        for inode in inodes {
+            guard let realPath = getPathFromInode(inode) else { continue }
+            let (granted2, handle2, _) = wq.grantAccess(atPath: realPath)
+            if granted2, handle2 > 0 {
+                return consumeToken(handle: handle2)
+            }
+        }
+
+        // 3. Thử trực tiếp trên file
+        let (granted3, handle3, error3) = wq.grantAccess(atPath: testFile)
+        if granted3, handle3 > 0 {
+            return consumeToken(handle: handle3)
+        }
+
+        return (-1, "Tất cả thất bại. Lỗi: \(error3.isEmpty ? errorSymlink : error3)")
     }
-    
+
+    private func consumeToken(handle: Int64) -> (Int64, String) {
+        guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else {
+            return (-1, "Pointer error")
+        }
+        let consumed = sandbox_extension_consume(tokenPtr)
+        if consumed < 0 { return (-1, "Consume errno: \(errno)") }
+        activeHandles.append(consumed)
+        return (consumed, "OK")
+    }
+
     func releaseAll() {
         for h in activeHandles { _ = sandbox_extension_release(h) }
         activeHandles.removeAll()
@@ -317,7 +309,7 @@ struct SettingsView: View {
     private func runMobileGestaltTest() {
         isTestingWrite = true
         writeTestSuccess = nil
-        writeTestLog = "[*] Bắt đầu quét toàn diện App Group...\n"
+        writeTestLog = "[*] Bắt đầu quét toàn diện (fsgetpath)...\n"
 
         let work = DispatchWorkItem {
             let testFile = MobileGestaltApplyTask.onDeviceMGPath
@@ -331,23 +323,13 @@ struct SettingsView: View {
                 return
             }
 
-            // 1. Quét Profile
-            let (profileGroups, isWildcard) = bridge.inspectProvisioningProfile()
             let runtimeGroups = self.getAllRuntimeAppGroups()
-            
-            DispatchQueue.main.async {
-                if isWildcard { self.writeTestLog += "⚠️ Profile là Wildcard (*)!\n" }
-                self.writeTestLog += "📄 Profile Groups: \(profileGroups.joined(separator: ", "))\n"
-                self.writeTestLog += "📱 Runtime Groups: \(runtimeGroups.joined(separator: ", "))\n"
-            }
+            DispatchQueue.main.async { self.writeTestLog += "📱 Runtime Groups: \(runtimeGroups.joined(separator: ", "))\n" }
 
-            // Gộp tất cả group lại để thử
-            let allGroups = Array(Set(profileGroups + runtimeGroups))
             var finalHandle: Int64 = -1
             var lastError = ""
 
-            // 2. Thử từng App Group
-            for group in allGroups {
+            for group in runtimeGroups {
                 if FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) == nil { continue }
                 
                 DispatchQueue.main.async { self.writeTestLog += "[*] Thử xin quyền qua group: \(group)...\n" }
@@ -363,38 +345,17 @@ struct SettingsView: View {
                 }
             }
 
-            // 3. Fallback: Thử trực tiếp trên file
-            if finalHandle <= 0 {
-                DispatchQueue.main.async { self.writeTestLog += "[*] Thử xin quyền TRỰC TIẾP trên file...\n" }
-                let (handle, error) = bridge.grantAccessDirect(path: testFile)
-                if handle > 0 {
-                    finalHandle = handle
-                    DispatchQueue.main.async { self.writeTestLog += "✅ Thành công trực tiếp trên file!\n" }
-                } else {
-                    lastError = error
-                    DispatchQueue.main.async { self.writeTestLog += " ⚠️ Thất bại: \(error)\n" }
-                }
-            }
-
             guard finalHandle > 0 else {
                 DispatchQueue.main.async {
                     self.writeTestLog += "\n❌ TẤT CẢ PHƯƠNG PHÁP ĐỀU THẤT BẠI!\n"
                     self.writeTestLog += "👉 Lỗi cuối cùng: \(lastError)\n"
                     self.writeTestLog += "👉 CHẨN ĐOÁN:\n"
-                    if profileGroups != runtimeGroups {
-                        self.writeTestLog += "   - App Group trong Profile và Runtime ĐÉO KHỚP NHAU!\n"
-                        self.writeTestLog += "   - Cái này do Sideloader (Feather/ESign) nó tự động đổi đuôi App Group để tránh trùng. Kernel nó phát hiện ra nên block!\n"
-                        self.writeTestLog += "   - FIX: Dùng Sideloadly/AltStore, hoặc dùng file IPA đã sign sẵn, đừng dùng ESign nữa.\n"
-                    } else {
-                        self.writeTestLog += "   - Framework WorseQuery đéo support bản iOS này (27.0.1).\n"
-                        self.writeTestLog += "   - LocalDevVPN bị lỗi XPC.\n"
-                    }
+                    self.writeTestLog += "   - Thằng containermanagerd nó chặn XPC. Dùng cert free của Sideloader hay bị bóp lắm.\n"
                     self.writeTestSuccess = false; self.isTestingWrite = false
                 }
                 return
             }
 
-            // 4. Ghi file
             DispatchQueue.main.async { self.writeTestLog += "✅ Đã có token! Đang test ghi file...\n" }
             do {
                 let originalData = try Data(contentsOf: URL(fileURLWithPath: testFile))
