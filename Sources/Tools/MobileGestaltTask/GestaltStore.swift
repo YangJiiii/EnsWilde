@@ -51,7 +51,6 @@ final class GestaltStore: ObservableObject {
         }
     }
     
-    // Trả về Optional để dùng được if let
     func FindCacheDataOffset(_ key: String) -> Int? {
         guard let cacheExtra = mgCurrentDict["CacheExtra"] as? NSDictionary,
               let uid = cacheExtra[key] as? Int else { return nil }
@@ -84,26 +83,17 @@ final class GestaltStore: ObservableObject {
         })
     }
 
-    // ✅ SỬA: Giữ nguyên cấu trúc ArtworkTraits, chỉ thay đổi SubType
-    func applyDynamicIsland(type: Int) -> Bool {
+    func applyDynamicIsland(type: Int, customValue: Int? = nil) -> Bool {
         guard let cacheExtra = mgCurrentDict["CacheExtra"] as? NSMutableDictionary else { return false }
         
         let subtypeValues: [Int] = [0, 2436, 2556, 2796, 2976, 2622, 2868, 2736]
         
         if type == 0 {
-            // Tắt Dynamic Island
             cacheExtra.removeObject(forKey: MGKey.island)
-            // Không xóa MGKey.artwork để giữ lại tên máy
-        } else if type > 0 && type < subtypeValues.count {
-            let subtypeValue = subtypeValues[type]
-            
-            // Lấy cấu trúc ArtworkTraits hiện có (để không xóa mất tên máy)
+        } else {
+            let subtypeValue = customValue ?? (type > 0 && type < subtypeValues.count ? subtypeValues[type] : 0)
             let gestaltDict = (cacheExtra[MGKey.artwork] as? NSMutableDictionary) ?? NSMutableDictionary()
-            
-            // Cập nhật kích thước màn hình mới
             gestaltDict["ArtworkDeviceSubType"] = subtypeValue
-            
-            // Ghi đè lại vào CacheExtra
             cacheExtra[MGKey.artwork] = gestaltDict
             cacheExtra[MGKey.island] = 1
         }
