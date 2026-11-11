@@ -9,10 +9,10 @@ import XPC
 
 // MARK: - Private Security Framework APIs
 @_silgen_name("SecTaskCreateFromSelf")
-private func SecTaskCreateFromSelf(_ allocator: UnsafeRawPointer?) -> CFTypeRef?
+func SecTaskCreateFromSelf(_ allocator: UnsafeRawPointer?) -> CFTypeRef?
 
 @_silgen_name("SecTaskCopyValueForEntitlement")
-private func SecTaskCopyValueForEntitlement(
+func SecTaskCopyValueForEntitlement(
     _ task: CFTypeRef,
     _ entitlement: CFString,
     _ error: UnsafeMutablePointer<Unmanaged<CFError>?>?
