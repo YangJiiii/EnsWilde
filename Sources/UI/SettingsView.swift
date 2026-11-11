@@ -29,16 +29,9 @@ final class WorseQueryBridge {
     static let shared = WorseQueryBridge()
     private var activeHandles: [Int64] = []
     
-    /// Xin quyền đọc/ghi vào MobileGestalt cache bằng kỹ thuật symlink part-directory.
-    /// Kỹ thuật này hoạt động trên iOS 27.2+ bằng cách:
-    /// 1. Tạo symlink `Library/Caches` trong App Group container trỏ tới thư mục đích thật.
-    /// 2. Query container manager để lấy sandbox extension cho symlink đó.
-    /// 3. `containermanagerd` sẽ resolve symlink và cấp quyền cho target thật.
-    /// 4. Xóa symlink và khôi phục `Library/Caches` gốc sau khi dùng xong.
     func grantAccessToMobileGestalt(appGroupID: String) -> Int64 {
         let fm = FileManager.default
         
-        // 1. Lấy App Group container
         guard let appGroupURL = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
             print("❌ Không thể lấy App Group container: \(appGroupID)")
             return -1
@@ -48,37 +41,33 @@ final class WorseQueryBridge {
         let libraryPath = appGroupURL.appendingPathComponent("Library").path
         let backupCachesPath = appGroupURL.appendingPathComponent("Library/Caches.bqtool").path
         
-        // 2. Backup và xóa Library/Caches hiện tại (nếu có)
+        // 1. Backup và xóa Library/Caches hiện tại
         if fm.fileExists(atPath: cachesPath) {
             try? fm.removeItem(atPath: backupCachesPath)
             try? fm.moveItem(atPath: cachesPath, toPath: backupCachesPath)
         }
         
-        // 3. Tạo thư mục Library nếu chưa có
+        // 2. Tạo thư mục Library nếu chưa có
         try? fm.createDirectory(atPath: libraryPath, withIntermediateDirectories: true)
         
-        // 4. Tạo symlink: Library/Caches -> thư mục MobileGestalt thật
+        // 3. Tạo symlink: Library/Caches -> thư mục MobileGestalt thật
         let targetDir = "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches"
         do {
             try fm.createSymbolicLink(atPath: cachesPath, withDestinationPath: targetDir)
         } catch {
             print("❌ Không thể tạo symlink: \(error.localizedDescription)")
-            // Khôi phục lại Caches gốc nếu có
             if fm.fileExists(atPath: backupCachesPath) {
                 try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
             }
             return -1
         }
         
-        // 5. Query WorseQuery để lấy token cho symlink
+        // 4. Query WorseQuery để lấy token cho symlink
         let wq = WorseQuery()
-        // Truyền vào đường dẫn symlink (Library/Caches trong App Group)
-        // WorseQuery sẽ query container manager và nhận được token cho target thật
         let (granted, handle, errorMsg) = wq.grantAccess(atPath: cachesPath)
         
         guard granted, handle > 0 else {
             print("❌ WorseQuery từ chối grantAccess trên symlink. Error: \(errorMsg)")
-            // Dọn dẹp symlink và khôi phục Caches gốc
             try? fm.removeItem(atPath: cachesPath)
             if fm.fileExists(atPath: backupCachesPath) {
                 try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
@@ -86,9 +75,8 @@ final class WorseQueryBridge {
             return -1
         }
         
-        // 6. Consume token
+        // 5. Consume token
         guard let tokenPtr = UnsafePointer<CChar>(bitPattern: UInt(handle)) else {
-            // Dọn dẹp
             try? fm.removeItem(atPath: cachesPath)
             if fm.fileExists(atPath: backupCachesPath) {
                 try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
@@ -99,7 +87,6 @@ final class WorseQueryBridge {
         let consumedHandle = sandbox_extension_consume(tokenPtr)
         if consumedHandle < 0 {
             print("⚠️ Consume token thất bại (errno: \(errno))")
-            // Dọn dẹp
             try? fm.removeItem(atPath: cachesPath)
             if fm.fileExists(atPath: backupCachesPath) {
                 try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
@@ -109,8 +96,7 @@ final class WorseQueryBridge {
         
         activeHandles.append(consumedHandle)
         
-        // 7. Xóa symlink và khôi phục Caches gốc ngay sau khi consume token thành công
-        // Token đã được cấp cho target thật, không cần symlink nữa
+        // 6. Xóa symlink và khôi phục Caches gốc
         try? fm.removeItem(atPath: cachesPath)
         if fm.fileExists(atPath: backupCachesPath) {
             try? fm.moveItem(atPath: backupCachesPath, toPath: cachesPath)
@@ -404,7 +390,6 @@ struct SettingsView: View {
                 }
                 defer { close(fd) }
 
-                // Ghi đè tại offset 0 (In-place, không ftruncate trước)
                 let bytesWritten = originalData.withUnsafeBytes { buffer in
                     pwrite(fd, buffer.baseAddress, buffer.count, 0)
                 }
@@ -413,13 +398,11 @@ struct SettingsView: View {
                                   userInfo: [NSLocalizedDescriptionKey: "Ghi file thất bại (pwrite). errno: \(errno)"])
                 }
 
-                // Cắt bớt phần dư nếu file gốc dài hơn dữ liệu mới
                 let fileSize = lseek(fd, 0, SEEK_END)
                 if fileSize > off_t(originalData.count) {
                     ftruncate(fd, off_t(originalData.count))
                 }
 
-                // Đồng bộ hóa APFS + phần cứng (bắt buộc)
                 if fcntl(fd, F_FULLFSYNC) == -1 {
                     DispatchQueue.main.async { self.writeTestLog += "⚠️ F_FULLFSYNC thất bại (errno: \(errno)), nhưng dữ liệu có thể đã ghi.\n" }
                 }
@@ -453,7 +436,6 @@ struct SettingsView: View {
         guard let entitlements = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil) else { return nil }
         guard let groups = entitlements as? [String] else { return nil }
 
-        // Ưu tiên group có container URL thực sự
         let fm = FileManager.default
         for g in groups {
             if fm.containerURL(forSecurityApplicationGroupIdentifier: g) != nil {
