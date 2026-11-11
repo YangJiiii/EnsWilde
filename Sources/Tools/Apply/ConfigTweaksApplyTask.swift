@@ -2,16 +2,9 @@ import Foundation
 import Darwin
 import Security
 
-// Private APIs
-@_silgen_name("SecTaskCreateFromSelf")
-private func SecTaskCreateFromSelf(_ allocator: UnsafeRawPointer?) -> CFTypeRef?
-
-@_silgen_name("SecTaskCopyValueForEntitlement")
-private func SecTaskCopyValueForEntitlement(
-    _ task: CFTypeRef,
-    _ entitlement: CFString,
-    _ error: UnsafeMutablePointer<Unmanaged<CFError>?>?
-) -> CFTypeRef?
+// SecTaskCreateFromSelf & SecTaskCopyValueForEntitlement đã được khai báo
+// (internal) trong Sources/UI/SettingsView.swift → dùng chung trong module.
+// KHÔNG khai báo lại ở đây để tránh lỗi "invalid redeclaration".
 
 enum ConfigTweaksApplyTask {
     // Đường dẫn chuẩn
@@ -43,7 +36,7 @@ enum ConfigTweaksApplyTask {
         // 2. Xin quyền ghi bằng NativeWorseQuery (MCM Symlink)
         onLogUpdate("[Config] Đang xin quyền ghi vào ConfigurationProfiles...")
         let (handle, errorMsg) = NativeWorseQuery.shared.grantAccess(targetPath: configDir, appGroupID: group)
-        
+
         guard handle > 0 else {
             throw NSError(domain: "ConfigTweak", code: -2, userInfo: [
                 NSLocalizedDescriptionKey: "Xin quyền thất bại: \(errorMsg)"
@@ -110,7 +103,7 @@ enum ConfigTweaksApplyTask {
     /// Ghi đè file an toàn: pwrite từ offset 0, ftruncate cắt phần dư, F_FULLFSYNC đồng bộ.
     private static func writeFileInPlace(url: URL, data: Data) throws {
         let path = url.path
-        
+
         // Gỡ cờ immutable nếu có
         var st = stat()
         if stat(path, &st) == 0, (st.st_flags & UInt32(UF_IMMUTABLE)) != 0 {
