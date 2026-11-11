@@ -1,0 +1,4 @@
+module AirliftFFI {
+    umbrella header "airlift.h"
+    export *
+}

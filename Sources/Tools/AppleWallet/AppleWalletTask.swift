@@ -1,70 +1,106 @@
 import Foundation
+import AirliftFFI
+import Network
+
+class LogCallbackContext {
+    let onLogUpdate: (String) -> Void
+    init(onLogUpdate: @escaping (String) -> Void) {
+        self.onLogUpdate = onLogUpdate
+    }
+}
 
 enum AppleWalletTask {
-    
-    /// Apply all enabled wallet cards in a single batch operation
-    /// CRITICAL: Background images MUST be processed before cache files for proper rendering
-    /// pass.json (if imported) is applied after card images
-    static func run(store: ToolStore, walletStore: AppleWalletStore) async throws {
-        // Get enabled cards
+    static func run(store: ToolStore, walletStore: AppleWalletStore, onLogUpdate: @escaping (String) -> Void) async throws {
         let enabledCards = walletStore.enabledCards()
-        guard !enabledCards.isEmpty else {
-            throw ToolTaskError.generic("No enabled wallet cards to apply")
+        guard !enabledCards.isEmpty else { throw ToolTaskError.generic("No enabled wallet cards to apply") }
+        
+        guard NetworkStatus.isVPNTunnelPresent() else { throw ToolTaskError.generic("VPN chưa bật.") }
+        let pairingURL = URL.documentsDirectory.appendingPathComponent("pairingFile.plist")
+        guard FileManager.default.fileExists(atPath: pairingURL.path) else {
+            throw ToolTaskError.generic("Không tìm thấy Pairing File.")
         }
         
-        // Collect ALL files from all enabled cards in proper order
-        var allFiles: [BookRestoreFile] = []
+        onLogUpdate("Đang dò tunnel IP...")
+        guard let _ = await AirliftHostResolver.bestAvailable(log: onLogUpdate) else {
+            throw ToolTaskError.generic("Không tìm thấy RSD tunnel.")
+        }
+        
+        let tempFolderName = "AirLiftWallet_\(UUID().uuidString)"
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(tempFolderName)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        
+        // Tạo cấu trúc thư mục Cards chuẩn
+        let cardsDir = tempDir.appendingPathComponent("Cards")
+        try FileManager.default.createDirectory(at: cardsDir, withIntermediateDirectories: true)
         
         for card in enabledCards {
-            let cardBasePath = "/private/var/mobile/Library/Passes/Cards/\(card.id)"
-            let cardPrefix = String(card.id.prefix(8))
+            let pkpassDir = cardsDir.appendingPathComponent(card.id).appendingPathExtension("pkpass")
+            let cacheDir = cardsDir.appendingPathComponent(card.id).appendingPathExtension("cache")
             
-            // CRITICAL ORDERING: Background image MUST come first!
-            // Step 1: Add background image (.pkpass) first
-            if let bgImageData = card.backgroundImageData {
-                let bgFileName = card.cardBackgroundFileName
-                let pkpassPath = "\(cardBasePath).pkpass/\(bgFileName)"
-                let uniqueMediaName = "wallet_\(cardPrefix)_\(bgFileName)"
-                allFiles.append(.walletImage(targetPath: pkpassPath, contents: bgImageData, mediaFileName: uniqueMediaName))
+            try FileManager.default.createDirectory(at: pkpassDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            
+            // Ghi ảnh nền (nếu có)
+            if let bgData = card.backgroundImageData { 
+                try bgData.write(to: pkpassDir.appendingPathComponent(card.cardBackgroundFileName)) 
             }
             
-            // Step 2: Then add cache files (FrontFace, PlaceHolder, Preview)
-            if let frontFaceData = card.frontFaceImageData {
-                let frontFacePath = "\(cardBasePath).cache/FrontFace"
-                let uniqueMediaName = "wallet_\(cardPrefix)_FrontFace"
-                allFiles.append(.walletImage(targetPath: frontFacePath, contents: frontFaceData, mediaFileName: uniqueMediaName))
+            // Do UI mới chỉ chọn 1 ảnh, ta map nó cho cả 3
+            let unifiedImage = card.frontFaceImageData ?? card.previewImageData ?? card.backgroundImageData
+            if let imgData = unifiedImage {
+                try imgData.write(to: cacheDir.appendingPathComponent("FrontFace"))
+                try imgData.write(to: cacheDir.appendingPathComponent("PlaceHolder"))
+                try imgData.write(to: cacheDir.appendingPathComponent("Preview"))
             }
             
-            if let placeHolderData = card.placeHolderImageData {
-                let placeHolderPath = "\(cardBasePath).cache/PlaceHolder"
-                let uniqueMediaName = "wallet_\(cardPrefix)_PlaceHolder"
-                allFiles.append(.walletImage(targetPath: placeHolderPath, contents: placeHolderData, mediaFileName: uniqueMediaName))
-            }
-            
-            if let previewData = card.previewImageData {
-                let previewPath = "\(cardBasePath).cache/Preview"
-                let uniqueMediaName = "wallet_\(cardPrefix)_Preview"
-                allFiles.append(.walletImage(targetPath: previewPath, contents: previewData, mediaFileName: uniqueMediaName))
-            }
-            
-            // Step 3: Add pass.json after card images (if imported)
-            if let passJSONData = card.loadPassJSON() {
-                let passJSONPath = "\(cardBasePath).pkpass/pass.json"
-                let uniqueMediaName = "wallet_\(cardPrefix)_pass.json"
-                allFiles.append(.walletImage(targetPath: passJSONPath, contents: passJSONData, mediaFileName: uniqueMediaName))
+            // Ghi pass.json
+            if let passJSON = card.loadPassJSON() { 
+                try passJSON.write(to: pkpassDir.appendingPathComponent("pass.json")) 
             }
         }
         
-        guard !allFiles.isEmpty else {
-            throw ToolTaskError.generic("No wallet files to apply")
+        onLogUpdate("Pushing files via AirTraffic (Inject Folder)...")
+        let srcDir = cardsDir.path
+        let targetParentDir = "/var/mobile/Library/Passes"
+        let destName = "Cards"
+        
+        let logCtx = LogCallbackContext { line in
+            onLogUpdate("[Airlift] \(line)")
+        }
+        let ctxPtr = Unmanaged.passUnretained(logCtx).toOpaque()
+        
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var errPtr: UnsafeMutablePointer<CChar>? = nil
+                
+                let logCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { ctx, msgPtr in
+                    guard let ctx = ctx, let msgPtr = msgPtr else { return }
+                    let line = String(cString: msgPtr)
+                    let logCtx = Unmanaged<LogCallbackContext>.fromOpaque(ctx).takeUnretainedValue()
+                    logCtx.onLogUpdate(line)
+                }
+                
+                let res = al_exploit_inject_folder(
+                    pairingURL.path,
+                    srcDir,
+                    targetParentDir,
+                    destName,
+                    logCallback,
+                    ctxPtr,
+                    &errPtr
+                )
+                
+                if res != 0 {
+                    let msg = errPtr != nil ? String(cString: errPtr!) : "Airlift Error (Code: \(res))"
+                    if let e = errPtr { al_string_free(e) }
+                    continuation.resume(throwing: ToolTaskError.generic("AirLift Error: \(msg)"))
+                } else {
+                    continuation.resume()
+                }
+            }
         }
         
-        // Apply all files in a single batch using unified BookRestore task
-        print("[AppleWallet] Applying \(allFiles.count) file(s) from \(enabledCards.count) card(s) in batch mode...")
-        try await BookRestoreApplyTask.applyFiles(allFiles, store: store)
-        print("[AppleWallet] Files applied successfully.")
-        
-        // Note: BookRestoreApplyTask already opens Books app at the end.
-        // User should open Wallet app to see the changes applied to cards.
+        onLogUpdate("✅ Wallet applied.")
     }
 }

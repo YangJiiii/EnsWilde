@@ -181,3 +181,28 @@ final class LanguageManager: ObservableObject {
         return language.version > currentVersion
     }
 }
+
+// MARK: - LocalizationManager Bridge
+//
+// Cầu nối cho `AboutView` (Sources/UI/SettingsView.swift).
+//
+// `AboutView` đọc `localizationManager.availableLanguages` và gọi
+// `localizationManager.fetchAvailableLanguages()` — trong khi toàn bộ logic
+// tải danh sách ngôn ngữ nằm trên `LanguageManager.shared`.
+//
+// Extension này:
+//   1. Gọi `LanguageManager.shared.fetchAvailableLanguages()` (giữ nguyên logic cũ).
+//   2. Copy kết quả `LanguageManager.shared.availableLanguages` sang
+//      `LocalizationManager.shared.availableLanguages` để SwiftUI view
+//      (đang `@ObservedObject localizationManager`) nhận được update.
+//
+// Không thay đổi UI, không thay đổi logic, chỉ bổ sung entry point bị thiếu.
+extension LocalizationManager {
+    func fetchAvailableLanguages() async {
+        await LanguageManager.shared.fetchAvailableLanguages()
+        let langs = LanguageManager.shared.availableLanguages
+        await MainActor.run {
+            self.availableLanguages = langs
+        }
+    }
+}

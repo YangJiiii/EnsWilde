@@ -1,150 +1,146 @@
-import FlyingFox
-import SQLite3
 import SwiftUI
-import UniformTypeIdentifiers
-import UserNotifications
+import AirliftFFI
 
-extension UIDocumentPickerViewController {
-    @objc func fix_init(forOpeningContentTypes contentTypes: [UTType], asCopy: Bool) -> UIDocumentPickerViewController {
-        return fix_init(forOpeningContentTypes: contentTypes, asCopy: true)
-    }
+extension Notification.Name {
+    static let airliftLog = Notification.Name("airlift.log")
 }
 
 @main
 struct MyApp: App {
-    // MARK: - Anti-Tamper Header
-    // This constant serves as a visible warning in the binary to deter reverse engineering.
-    // The dummy reference in init() prevents compiler optimization from stripping it.
-    private static let antiTamperMessage: String = "Fuck you. Get out..."
+    @AppStorage("hasChosenMode") private var hasChosenMode: Bool = false
     
-    private static var httpServer: HTTPServer?
-
     init() {
-        // Ensure antiTamperMessage is referenced so compiler doesn't optimize it away
-        if Self.antiTamperMessage.isEmpty { return }
+        UserDefaults.standard.set(false, forKey: "ShowApplyTab")
         
-        // Set global tint color from user preference (default #ef9f76)
-        let hexString = UserDefaults.standard.string(forKey: "EnsWilde.userTintColor") ?? "#ef9f76"
-        let tintColor = UIColor(Color(hex: hexString))
-        UIView.appearance(whenContainedInInstancesOf: [UIWindow.self]).tintColor = tintColor
-        UITabBar.appearance().tintColor = tintColor
-        UINavigationBar.appearance().tintColor = tintColor
-        
-        // Check iOS version compatibility on launch
-        let versionSupported = Utils.isIOSVersionSupported()
-        let versionString = Utils.getIOSVersionString()
-        
-        if !versionSupported {
-            print("⚠️ [VERSION CHECK] Unsupported iOS version detected: \(versionString)")
-            print("⚠️ [VERSION CHECK] App only supports iOS 18.0 - 26.2 beta 1")
-        } else {
-            print("✅ [VERSION CHECK] iOS version \(versionString) is supported")
-        }
-        
-        Task.detached { @MainActor in
-            do {
-                Utils.port = try Utils.reservePort()
-
-                let server = HTTPServer(port: Utils.port)
-                Self.httpServer = server
-
-                await server.appendRoute("GET /*", to: DirectoryHTTPHandler(root: URL.documentsDirectory))
-                try await server.run()
-            } catch {
-                Utils.port = 0
-                print("[HTTP] server failed: \(error)")
-            }
-        }
-
-        let fixMethod = class_getInstanceMethod(UIDocumentPickerViewController.self, #selector(UIDocumentPickerViewController.fix_init(forOpeningContentTypes:asCopy:)))!
-        let origMethod = class_getInstanceMethod(UIDocumentPickerViewController.self, #selector(UIDocumentPickerViewController.init(forOpeningContentTypes:asCopy:)))!
-        method_exchangeImplementations(origMethod, fixMethod)
-
-        // Request notification permission at launch
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // Init Airlift logger
+        al_log_init({ _, msg in
+            guard let msg = msg else { return }
+            let line = String(cString: msg)
+            NSLog("[Airlift] %@", line)
+            NotificationCenter.default.post(
+                name: .airliftLog,
+                object: nil,
+                userInfo: ["line": line]
+            )
+        }, nil)
     }
-
+    
     var body: some Scene {
         WindowGroup {
-            if Utils.isIOSVersionSupported() {
-                MainViewWithNavigation()
+            if !hasChosenMode && isVersionBlocked() {
+                VersionBlockedView() // LỖI CŨ LÀ DO THIẾU CÁI STRUCT NÀY
             } else {
-                UnsupportedVersionView()
+                MainViewWithNavigation()
             }
         }
+    }
+    
+    private func isVersionBlocked() -> Bool {
+        let version = UIDevice.current.systemVersion
+        guard version.hasPrefix("27.") || version == "27" else { return false }
+        
+        let build = getCleanBuildNumber()
+        let supportedBuilds = [
+            "24A5355q", // 27.0 beta 1
+            "24A5370h", // 27.0 beta 2
+            "24A5380h", // 27.0 beta 3
+            "24A5390f", // 27.0 beta 4
+            "24A446" // 27.0.1 
+        ]
+        
+        if supportedBuilds.contains(build) {
+            return false
+        }
+        return true
+    }
+    
+    private func getCleanBuildNumber() -> String {
+        var size: size_t = 0
+        sysctlbyname("kern.osversion", nil, &size, nil, 0)
+        var build = [CChar](repeating: 0, count: size)
+        sysctlbyname("kern.osversion", &build, &size, nil, 0)
+        return String(cString: build).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
-// MARK: - Unsupported Version View
-struct UnsupportedVersionView: View {
+// MARK: - MÀN HÌNH CHẶN (ĐÃ ĐƯỢC THÊM LẠI ĐẦY ĐỦ)
+struct VersionBlockedView: View {
+    @AppStorage("isAirLiftMode") private var isAirLiftMode: Bool = false
+    @AppStorage("hasChosenMode") private var hasChosenMode: Bool = false
+    
     var body: some View {
         ZStack {
-            Color(uiColor: .systemBackground)
-                .ignoresSafeArea()
-            
-            VStack(spacing: 24) {
+            Color.black.edgesIgnoringSafeArea(.all)
+            VStack(spacing: 20) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 60))
-                    .foregroundColor(.orange)
-                    .padding(.bottom, 8)
+                    .foregroundStyle(.orange)
                 
-                VStack(spacing: 12) {
-                    Text("iOS Version Not Supported")
-                        .font(.system(size: 24, weight: .bold))
-                        .multilineTextAlignment(.center)
-                    
-                    Text("This app only supports iOS versions 18.0 to 26.2 beta 1")
-                        .font(.system(size: 16))
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-                    
-                    VStack(spacing: 6) {
-                        Text("Your current iOS version:")
-                            .font(.system(size: 14))
-                            .foregroundColor(.secondary)
-                        
-                        Text(Utils.getIOSVersionString())
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(.primary)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color(uiColor: .secondarySystemBackground))
-                            )
-                    }
-                    .padding(.top, 8)
-                }
+                Text("iOS Version Not Supported")
+                    .font(.title.bold())
+                    .foregroundColor(.white)
                 
-                VStack(alignment: .leading, spacing: 10) {
+                Text("This app only supports iOS versions 27.0 Developer Beta 1-4 / Public Beta 1-2")
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                Text("Your current iOS version:")
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+                
+                Text(UIDevice.current.systemVersion)
+                    .font(.title2.bold())
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.1))
+                    .cornerRadius(10)
+                
+                VStack(alignment: .leading, spacing: 12) {
                     Text("To use this app:")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.primary)
+                        .font(.headline)
+                        .foregroundColor(.white)
                     
-                    if Utils.os.majorVersion < 18 {
-                        Label("Upgrade your iOS to version 18.0 or later", systemImage: "arrow.up.circle.fill")
-                            .font(.system(size: 13))
-                            .foregroundColor(.secondary)
-                    } else if Utils.os.majorVersion > 26 || (Utils.os.majorVersion == 26 && Utils.os.minorVersion > 2) {
-                        Label("Downgrade to iOS 26.2 or earlier", systemImage: "arrow.down.circle.fill")
-                            .font(.system(size: 13))
-                            .foregroundColor(.secondary)
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.down.circle.fill").foregroundColor(.gray)
+                        Text("Downgrade to iOS 27 Developer Beta 4 or earlier")
+                            .foregroundColor(.gray).font(.subheadline)
                     }
                     
-                    Label("Contact the developer for support", systemImage: "questionmark.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
+                    HStack(spacing: 10) {
+                        Image(systemName: "questionmark.circle.fill").foregroundColor(.gray)
+                        Text("Contact the developer for support")
+                            .foregroundColor(.gray).font(.subheadline)
+                    }
+                    
+                    Divider().background(Color.gray)
+                    
+                    Button(action: {
+                        withAnimation {
+                            isAirLiftMode = true
+                            hasChosenMode = true
+                        }
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "airplane.circle.fill")
+                            Text("Continue with Airlift")
+                                .font(.subheadline).fontWeight(.semibold)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.orange)
+                        .foregroundColor(.white)
+                        .cornerRadius(25)
+                    }
+                    .padding(.top, 10)
                 }
-                .padding(16)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color(uiColor: .secondarySystemBackground))
-                )
-                .padding(.horizontal, 32)
-                .padding(.top, 12)
+                .padding(20)
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(16)
+                .padding(.horizontal)
             }
-            .padding()
         }
     }
 }

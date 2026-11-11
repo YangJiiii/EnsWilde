@@ -4,9 +4,9 @@
 
 # EnsWilde (Mobile)
 
-**EnsWilde** is a tool utilizing `itunesstored` & `bookassetd` exploits, designed for iPhone and iPad running the latest **iOS Version 26.2b1**.
+**EnsWilde** is a tool utilizing `Worse_query` & `Airlift` exploits, designed for iPhone and iPad running the  **Worse_query iOS Version 27.0-27.3 (24C5370i) Airlift iOS Version : 26.0-27.2 Beta 2**.
 
-It operates as a standalone on-device application, functioning independently like modern apps. It leverages the `sparserestore` exploit to write data to files situated outside of the intended restore location.
+It operates as a standalone on-device application, functioning independently like modern apps. It leverages the `Bad_query` exploit to write data to files situated outside of the intended restore location.
 
 > [!WARNING]
 > **DISCLAIMER:**
@@ -16,52 +16,26 @@ It operates as a standalone on-device application, functioning independently lik
 ---
 
 ## Features
-* **Disable call recording notification sound:** Turns off the audible alert when call recording starts.
 * **Change Apple Wallet background image:** Customize the background appearance of Wallet passes/cards.
 * **Edit MobileGestalt file (advanced):** Modify MobileGestalt configuration values (for advanced users).
 * **Change Passcode background:** Customize the numeric keypad appearance using the `.passthm` interface.
 * **On-device patching (no PC required):** Operates as a standalone app after the initial setup.
 * **More features coming soon:** Development is ongoing to introduce additional capabilities.
+* **iOS 26 Need to get pairing file on computer and then drop pairing file to setting app.
 
 ---
 
 ## Usage Guides
 
-### Apple Wallet Background Guide
-Step-by-step guide for changing Apple Wallet pass/card backgrounds using EnsWilde:
-
-🔗 https://gist.github.com/YangJiiii/06daf0c2d0fa11002757e501622353ea
-
----
-
-### Passcode Background Guide
-Detailed instructions on customizing the passcode keypad background using `.passthm`:
-
-🔗 https://gist.github.com/YangJiiii/67c6323cf4b7fd8487fcd6e2c8fb4233
-
----
-
-## Getting Your .mobiledevicepairing File (Impactor)
-
-EnsWilde uses **Impactor** to automatically handle pairing.
-
-🔗 https://github.com/khcrysalis/Impactor
-
-### Steps
-1. Download and open **Impactor** on your computer.
-2. Connect your iPhone or iPad via USB.
-3. In Impactor, select **EnsWilde**.
-4. Click **Import**.
-5. Impactor will automatically generate and inject the required pairing data.
-
-No manual export or file transfer is required.
-
----
-
-## Setting Up VPN
+## Setting Airlift
 1. Download **LocaldevVPN** from the iOS App Store.
 2. Enable the VPN inside the app.
 3. Launch **EnsWilde**.
+4. import Pairing File to setting page . iOS 26 using iloader , iOS 27 on device StikPair . Pairing directly in app on iOS 27 soon
+## Need to know before continue
+1.You need a cert that have  App Group capabilities 
+2.Worse_query now using app group to get sandbox escape so need a cert that support 
+3.Need Cert? Just buy at [Cert YangJiii](https://cc.dangdi.dev)
 
 ---
 
@@ -69,14 +43,10 @@ No manual export or file transfer is required.
 
 Special thanks to the following for their contributions and support:
 
-* **Carrot1211**: [For cheering me on and supporting me during development](https://x.com/Hihihehe1221)
-* **@khanhduytran0**: [SparseBox](https://github.com/khanhduytran0/SparseBox)
-* **@Little_34306**: [Original concept for "Disable Call Recording"](https://github.com/34306)
-* **@SideStore team**: [`idevice` and C bindings from StikDebug](https://github.com/sidestore)
-* **@JJTech0130**: [`SparseRestore` and backup exploit](https://github.com/JJTech0130)
-* **@hanakim3945**: [`bl_sbx` exploit files and writeup](https://github.com/hanakim3945)
-* **@Lakr233**: [BBackupp](https://github.com/Lakr233/BBackupp)
-* **@libimobiledevice**: [Underlying communication libraries](https://github.com/libimobiledevice/libimobiledevice)
-* **@PoomSmart**: MobileGestalt dump
-* **@paragonarsi**: Apple Wallet Get
-* **@iTechExpert21**: Hide Dynamic Island
+* **YangJiii**: [For supporting me during development](https://x.com/duongduong0908)
+* **YangJiii**: [Original Developer of EnsWilde](https://github.com/yangjiiii/EnsWilde)
+* **@forcequitOS**: [Worse_query](https://github.com/forcequitOS/worse_query/)
+* **0xjohnnydev**: [Airlift](https://github.com/0xjohnnydev/airlift)
+* **mak5er**: [Airlift-on-device Method](https://github.com/Mak5er/AirCard-iOS)
+* **@StikDebug team**: [`StikPair`Get Pairing File](https://github.com/StikDebug)
+* **DeepSeek**: Ai for this project
