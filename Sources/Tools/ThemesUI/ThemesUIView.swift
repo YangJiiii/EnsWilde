@@ -6,27 +6,23 @@ struct ThemesUIView: View {
     let globalPrefsURL: URL
     let springboardPrefsURL: URL
     
-    // Solarium/Liquid Glass toggles
-    @State private var solariumForceFallback = false          // SolariumForceFallback
-    @State private var disableSolarium = false                 // com.apple.SwiftUI.DisableSolarium
-    @State private var ignoreSolariumLinkedOnCheck = false     // com.apple.SwiftUI.IgnoreSolariumLinkedOnCheck
-    @State private var disallowGlassTime = false               // SBDisallowGlassTime
-    @State private var disableGlassDock = false                // SBDisableGlassDock
-    @State private var disableSpecularMotion = false           // SBDisableSpecularEverywhereUsingLSSAssertion
-    @State private var disableOuterRefraction = false          // SolariumDisableOuterRefraction
-    @State private var allowHDR = true                         // SolariumAllowHDR (include only when false)
+    @State private var solariumForceFallback = false
+    @State private var disableSolarium = false
+    @State private var ignoreSolariumLinkedOnCheck = false
+    @State private var disallowGlassTime = false
+    @State private var disableGlassDock = false
+    @State private var disableSpecularMotion = false
+    @State private var disableOuterRefraction = false
+    @State private var allowHDR = true
     
-    // Springboard Options
-    @State private var suppressDynamicIsland = false           // SBSuppressDynamicIslandCompletely
+    @State private var suppressDynamicIsland = false
     
     var body: some View {
         Form {
-            // Enable Tool
             Section(L("themes_ui_title")) {
                 Toggle(L("enable_tool"), isOn: $toolStore.themesUIEnabled)
             }
 
-            // Liquid Glass (Solarium) Section
             Section(header: Text(L("section_liquid_glass"))) {
                 Toggle(L("themes_force_fallback"), isOn: $solariumForceFallback)
                     .onChange(of: solariumForceFallback) { autoSave() }
@@ -56,13 +52,11 @@ struct ThemesUIView: View {
                 .onChange(of: allowHDR) { autoSave() }
             }
 
-            // Springboard Options Section
             Section(header: Text(L("themes_springboard_section"))) {
                 Toggle(L("themes_hide_dynamic_island"), isOn: $suppressDynamicIsland)
                     .onChange(of: suppressDynamicIsland) { autoSave() }
             }
 
-            // Reset Section
             Section(header: Text(L("section_save_settings"))) {
                 Button(L("themes_reset_button"), role: .destructive) {
                     resetAllSettings()
@@ -70,7 +64,7 @@ struct ThemesUIView: View {
             }
         }
         .headerProminence(.increased)
-        .navigationTitle("Themes UI")
+        .navigationTitle(L("themes_ui_title"))
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             loadAllPreferences()
@@ -78,7 +72,6 @@ struct ThemesUIView: View {
     }
 
     private func loadAllPreferences() {
-        // Load GlobalPreferences.plist
         if FileManager.default.fileExists(atPath: globalPrefsURL.path) {
             if let dict = NSDictionary(contentsOf: globalPrefsURL) as? [String: Any] {
                 solariumForceFallback = (dict["SolariumForceFallback"] as? Bool) ?? false
@@ -92,22 +85,16 @@ struct ThemesUIView: View {
             }
         }
 
-        // Load SpringboardPreferences.plist
         if FileManager.default.fileExists(atPath: springboardPrefsURL.path) {
             if let dict = NSDictionary(contentsOf: springboardPrefsURL) as? [String: Any] {
                 suppressDynamicIsland = (dict["SBSuppressDynamicIslandCompletely"] as? Bool) ?? false
             }
         }
         
-        // Ensure plists always exist on disk so collectThemesUIFiles() can find them
         autoSave()
     }
 
-    /// Auto-save: only write keys that are non-default into GlobalPreferences.plist.
-    /// SpringboardPreferences.plist always includes SBSuppressDynamicIslandCompletely
-    /// with the explicit current value so turning it OFF sends `false` to the device.
     private func autoSave() {
-        // Build GlobalPreferences.plist with only active (true) keys
         let globalDict = NSMutableDictionary()
         if solariumForceFallback { globalDict["SolariumForceFallback"] = true }
         if disableSolarium { globalDict["com.apple.SwiftUI.DisableSolarium"] = true }
@@ -119,8 +106,6 @@ struct ThemesUIView: View {
         if !allowHDR { globalDict["SolariumAllowHDR"] = false }
         try? (globalDict as NSDictionary).write(to: globalPrefsURL)
 
-        // Build SpringboardPreferences.plist — always write the explicit current value.
-        // When DI is OFF, sending `false` ensures the device removes the suppression.
         let sbDict: NSDictionary = ["SBSuppressDynamicIslandCompletely": suppressDynamicIsland]
         try? sbDict.write(to: springboardPrefsURL)
 

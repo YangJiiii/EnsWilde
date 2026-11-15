@@ -8,5 +8,5 @@
 #import "EnsWilde-Bridging-Header.h"
 
 LSApplicationWorkspace *LSApplicationWorkspaceDefaultWorkspace(void) {
-   return [NSClassFromString(@"LSApplicationWorkspace") defaultWorkspace];
+    return [NSClassFromString(@"LSApplicationWorkspace") defaultWorkspace];
 }

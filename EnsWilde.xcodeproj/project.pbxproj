@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		E14762372DF1368000FC89FB /* eligibility.plist in Resources */ = {isa = PBXBuildFile; fileRef = E14762322DF1368000FC89FB /* eligibility.plist */; };
 		E14762382DF1368000FC89FB /* FeatureFlags_Global.plist in Resources */ = {isa = PBXBuildFile; fileRef = E14762332DF1368000FC89FB /* FeatureFlags_Global.plist */; };
-		E147623A2DF1368E00FC89FB /* FindCacheDataOffset.m in Sources */ = {isa = PBXBuildFile; fileRef = E14762392DF1368E00FC89FB /* FindCacheDataOffset.m */; };
 		E14762632DF138AB00FC89FB /* NIOCore in Frameworks */ = {isa = PBXBuildFile; productRef = E14762622DF138AB00FC89FB /* NIOCore */; };
 		E14762652DF138AB00FC89FB /* NIOFoundationCompat in Frameworks */ = {isa = PBXBuildFile; productRef = E14762642DF138AB00FC89FB /* NIOFoundationCompat */; };
 		E14762672DF138AB00FC89FB /* NIOPosix in Frameworks */ = {isa = PBXBuildFile; productRef = E14762662DF138AB00FC89FB /* NIOPosix */; };
@@ -35,7 +34,6 @@
 		E147622F2DF1365A00FC89FB /* empty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = empty.swift; sourceTree = "<group>"; };
 		E14762322DF1368000FC89FB /* eligibility.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = eligibility.plist; sourceTree = "<group>"; };
 		E14762332DF1368000FC89FB /* FeatureFlags_Global.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = FeatureFlags_Global.plist; sourceTree = "<group>"; };
-		E14762392DF1368E00FC89FB /* FindCacheDataOffset.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = FindCacheDataOffset.m; sourceTree = "<group>"; };
 		E147623B2DF1369300FC89FB /* EnsWilde-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "EnsWilde-Bridging-Header.h"; sourceTree = "<group>"; };
 		E147623C2DF1369700FC89FB /* idevicebackup2.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = idevicebackup2.c; sourceTree = "<group>"; };
 		E147623E2DF1369900FC89FB /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
@@ -111,7 +109,6 @@
 				E147622A2DF1364F00FC89FB /* include */,
 				E14762302DF1365A00FC89FB /* lib */,
 				E14762352DF1368000FC89FB /* Resources */,
-				E14762392DF1368E00FC89FB /* FindCacheDataOffset.m */,
 				E147623B2DF1369300FC89FB /* EnsWilde-Bridging-Header.h */,
 				E147623C2DF1369700FC89FB /* idevicebackup2.c */,
 				E147623E2DF1369900FC89FB /* LICENSE */,
@@ -270,7 +267,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E147623A2DF1368E00FC89FB /* FindCacheDataOffset.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -332,12 +328,12 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = include;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
-				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = NO;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -435,7 +431,7 @@
 				MARKETING_VERSION = 3.1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.yangjiii.EnsWilde;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = "EnsWilde-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;

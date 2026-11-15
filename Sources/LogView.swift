@@ -7,7 +7,6 @@ final class LogModel: ObservableObject {
     @Published var text = ""
 
     func append(_ msg: String) {
-        // Ensure chunks end with newline so output is readable
         if msg.hasSuffix("\n") {
             text += msg
         } else {
@@ -19,7 +18,6 @@ final class LogModel: ObservableObject {
         text = ""
     }
 
-    /// Save current log to Documents as a .txt file and return its URL.
     func exportToDocuments(fileName: String = "EnsWilde-Log.txt") throws -> URL {
         let url = URL.documentsDirectory.appendingPathComponent(fileName)
         try text.write(to: url, atomically: true, encoding: .utf8)
@@ -27,7 +25,7 @@ final class LogModel: ObservableObject {
     }
 }
 
-// MARK: - Globals (keep same style as your current code)
+// MARK: - Globals
 
 let logPipe = Pipe()
 let GLOBAL_LOG = LogModel()
@@ -63,7 +61,6 @@ struct LogView: View {
                     guard !data.isEmpty, var logString = String(data: data, encoding: .utf8) else { return }
 
                     DispatchQueue.main.async {
-                        // Redact udid if present
                         if !Utils.udid.isEmpty, logString.contains(Utils.udid) {
                             logString = logString.replacingOccurrences(of: Utils.udid, with: "<redacted>")
                         }
@@ -74,50 +71,48 @@ struct LogView: View {
                 }
             }
         }
-        .navigationTitle("Log output")
+        .navigationTitle(L("log_output_title"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    Button("Clear") {
-                        GLOBAL_LOG.clear()
-                    }
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button(L("log_clear")) {
+                    GLOBAL_LOG.clear()
+                }
 
-                    Button("Export .txt") {
-                        do {
-                            let url = try GLOBAL_LOG.exportToDocuments()
-                            exportURL = url
-                            exportError = nil
-                            showShareSheet = true
-                        } catch {
-                            exportError = "\(error)"
-                        }
+                Button(L("log_export_txt")) {
+                    do {
+                        let url = try GLOBAL_LOG.exportToDocuments()
+                        exportURL = url
+                        exportError = nil
+                        showShareSheet = true
+                    } catch {
+                        exportError = "\(error)"
                     }
                 }
             }
-            .alert("Export failed", isPresented: Binding(
-                get: { exportError != nil },
-                set: { _ in exportError = nil }
-            )) {
-                Button("OK") {}
-            } message: {
-                Text(exportError ?? "")
+        }
+        .alert(L("log_export_failed"), isPresented: Binding(
+            get: { exportError != nil },
+            set: { _ in exportError = nil }
+        )) {
+            Button(L("alert_ok")) {}
+        } message: {
+            Text(exportError ?? "")
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let exportURL {
+                ShareSheet(activityItems: [exportURL])
+            } else {
+                Text(L("log_no_file"))
+                    .padding()
             }
-            .sheet(isPresented: $showShareSheet) {
-                if let exportURL {
-                    ShareSheet(activityItems: [exportURL])
-                } else {
-                    Text("No file")
-                        .padding()
-                }
-            }
+        }
     }
 
     init() {
-        // Make stdout/stderr more predictable
-        setvbuf(stdout, nil, _IOLBF, 0) // stdout line-buffered
-        setvbuf(stderr, nil, _IONBF, 0) // stderr unbuffered
+        setvbuf(stdout, nil, _IOLBF, 0)
+        setvbuf(stderr, nil, _IONBF, 0)
 
-        // Redirect stdout and stderr to the pipe
         dup2(logPipe.fileHandleForWriting.fileDescriptor, fileno(stdout))
         dup2(logPipe.fileHandleForWriting.fileDescriptor, fileno(stderr))
     }

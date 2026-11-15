@@ -31,5 +31,19 @@
 	<true/>
 	<key>UISupportsDocumentBrowser</key>
 	<true/>
+	
+	<!-- BẮT BUỘC CHO PAIR ON DEVICE -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Ứng dụng cần quyền mạng cục bộ để phát hiện thiết bị và thực hiện Pairing không dây qua Bonjour.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_remotepairing-pairable-host._tcp</string>
+	</array>
+	
+	<!-- BẮT BUỘC ĐỂ CHẠY NGẦM VÔ HẠN KHI PAIRING -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 </dict>
 </plist>
