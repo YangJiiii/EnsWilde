@@ -270,13 +270,16 @@ final class GestaltStore: ObservableObject {
             let cmd = curCmd.assumingMemoryBound(to: load_command.self)
             if cmd.pointee.cmd == LC_SEGMENT_64 {
                 let segCmd = curCmd.assumingMemoryBound(to: segment_command_64.self)
-                let segName = String(data: Data(bytes: &segCmd.pointee.segname, count: 16), encoding: .utf8)?.trimmingCharacters(in: .controlCharacters) ?? ""
+                // Lấy segname an toàn qua con trỏ thô
+                let segName = String(cString: UnsafeRawPointer(segCmd).advanced(by: 8).assumingMemoryBound(to: CChar.self))
 
                 if segName == "__TEXT" {
                     var sectionPtr = curCmd.advanced(by: MemoryLayout<segment_command_64>.size)
                     for _ in 0..<Int(segCmd.pointee.nsects) {
                         let section = sectionPtr.assumingMemoryBound(to: section_64.self)
-                        let sectName = String(data: Data(bytes: &section.pointee.sectname, count: 16), encoding: .utf8)?.trimmingCharacters(in: .controlCharacters) ?? ""
+                        // Lấy sectname an toàn qua con trỏ thô (offset 0)
+                        let sectName = String(cString: UnsafeRawPointer(section).advanced(by: 0).assumingMemoryBound(to: CChar.self))
+
                         if sectName == "__cstring" {
                             textCStringAddr = section.pointee.addr
                             textCStringSize = section.pointee.size
@@ -287,7 +290,8 @@ final class GestaltStore: ObservableObject {
                     var sectionPtr = curCmd.advanced(by: MemoryLayout<segment_command_64>.size)
                     for _ in 0..<Int(segCmd.pointee.nsects) {
                         let section = sectionPtr.assumingMemoryBound(to: section_64.self)
-                        let sectName = String(data: Data(bytes: &section.pointee.sectname, count: 16), encoding: .utf8)?.trimmingCharacters(in: .controlCharacters) ?? ""
+                        let sectName = String(cString: UnsafeRawPointer(section).advanced(by: 0).assumingMemoryBound(to: CChar.self))
+
                         if sectName == "__const" {
                             constAddr = section.pointee.addr
                             constSize = section.pointee.size
@@ -800,17 +804,4 @@ extension GestaltStore {
         return d
     }
     func loadFromPlist(url: URL) { if let d = Self.loadMutableDict(from: url) { mgCurrentDict = d; objectWillChange.send() } }
-    func mgByteBinding(key: String, enableValue: UInt8 = 1, disableValue: UInt8 = 0) -> Binding<Bool> { return mgKeyBinding([key]) }
-    func applyDynamicIsland(type: Int, customValue: Int? = nil) -> Bool {
-        let subtypes = [0, 2436, 2556, 2796, 2976, 2622, 2868, 2736, 2662]
-        guard let ce = mgCurrentDict["CacheExtra"] as? NSMutableDictionary else { return false }
-        if type == 0 { (ce[MGKey.artwork] as? NSMutableDictionary)?.removeObject(forKey: "ArtworkDeviceSubType") }
-        else if type > 0 && type < subtypes.count {
-            let art = (ce[MGKey.artwork] as? NSMutableDictionary) ?? NSMutableDictionary()
-            art["ArtworkDeviceSubType"] = subtypes[type]
-            ce[MGKey.artwork] = art
-        }
-        objectWillChange.send()
-        return true
-    }
-}
+    func mgByteBinding(key: String, enableValue: UInt8 = 1,
