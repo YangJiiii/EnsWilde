@@ -242,60 +242,130 @@ final class GestaltStore: ObservableObject {
         })
     }
     
-    func mgSetiPadOS(enable: Bool) -> Bool {
-        guard let cacheData = mgCurrentDict["CacheData"] as? Data else {
-            print("❌ Lỗi: Không đọc được CacheData")
-            return false
+    // MARK: - Bộ đọc nhị phân để tìm Offset của DeviceClassNumber (queryType = 3)
+    private func findDeviceClassNumberOffset() -> Int? {
+        guard let handle = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_GLOBAL) else { return nil }
+        defer { dlclose(handle) }
+
+        var headerPtr: UnsafePointer<mach_header_64>?
+        var imageSlide: Int = 0
+        for i in 0..<_dyld_image_count() {
+            if let imageName = _dyld_get_image_name(i),
+               String(cString: imageName) == "/usr/lib/libMobileGestalt.dylib",
+               let imageHeader = _dyld_get_image_header(i) {
+                headerPtr = UnsafeRawPointer(imageHeader).assumingMemoryBound(to: mach_header_64.self)
+                imageSlide = _dyld_get_image_vmaddr_slide(i)
+                break
+            }
         }
+        guard let header = headerPtr else { return nil }
+
+        var textCStringAddr: UInt64 = 0
+        var textCStringSize: UInt64 = 0
+        var constAddr: UInt64 = 0
+        var constSize: UInt64 = 0
+
+        var curCmd = UnsafeRawPointer(header).advanced(by: MemoryLayout<mach_header_64>.size)
+        for _ in 0..<header.pointee.ncmds {
+            let cmd = curCmd.assumingMemoryBound(to: load_command.self)
+            if cmd.pointee.cmd == LC_SEGMENT_64 {
+                let segCmd = curCmd.assumingMemoryBound(to: segment_command_64.self)
+                let segName = String(data: Data(bytes: &segCmd.pointee.segname, count: 16), encoding: .utf8)?.trimmingCharacters(in: .controlCharacters) ?? ""
+
+                if segName == "__TEXT" {
+                    var sectionPtr = curCmd.advanced(by: MemoryLayout<segment_command_64>.size)
+                    for _ in 0..<Int(segCmd.pointee.nsects) {
+                        let section = sectionPtr.assumingMemoryBound(to: section_64.self)
+                        let sectName = String(data: Data(bytes: &section.pointee.sectname, count: 16), encoding: .utf8)?.trimmingCharacters(in: .controlCharacters) ?? ""
+                        if sectName == "__cstring" {
+                            textCStringAddr = section.pointee.addr
+                            textCStringSize = section.pointee.size
+                        }
+                        sectionPtr = sectionPtr.advanced(by: MemoryLayout<section_64>.size)
+                    }
+                } else if segName == "__DATA_CONST" || segName == "__AUTH_CONST" {
+                    var sectionPtr = curCmd.advanced(by: MemoryLayout<segment_command_64>.size)
+                    for _ in 0..<Int(segCmd.pointee.nsects) {
+                        let section = sectionPtr.assumingMemoryBound(to: section_64.self)
+                        let sectName = String(data: Data(bytes: &section.pointee.sectname, count: 16), encoding: .utf8)?.trimmingCharacters(in: .controlCharacters) ?? ""
+                        if sectName == "__const" {
+                            constAddr = section.pointee.addr
+                            constSize = section.pointee.size
+                        }
+                        sectionPtr = sectionPtr.advanced(by: MemoryLayout<section_64>.size)
+                    }
+                }
+            }
+            curCmd = curCmd.advanced(by: Int(cmd.pointee.cmdsize))
+        }
+
+        guard textCStringAddr != 0, constAddr != 0 else { return nil }
+
+        let textCStringPtr = UnsafeRawPointer(bitPattern: Int(textCStringAddr) + imageSlide)!
+        var keyPtr: UnsafePointer<CChar>?
+        var offset = 0
+        while offset < textCStringSize {
+            let currentPtr = textCStringPtr.advanced(by: offset).assumingMemoryBound(to: CChar.self)
+            let currentString = String(cString: currentPtr)
+            if currentString == "mtrAoWJ3gsq+I90ZnQ0vQw" {
+                keyPtr = currentPtr
+                break
+            }
+            offset += currentString.utf8.count + 1
+        }
+        guard let keyPtr = keyPtr else { return nil }
+
+        let constSectionPtr = UnsafeRawPointer(bitPattern: Int(constAddr) + imageSlide)!.assumingMemoryBound(to: UnsafeRawPointer.self)
+        var structPtr: UnsafeRawPointer?
+        for i in 0..<Int(constSize) / 8 {
+            if constSectionPtr[i] == UnsafeRawPointer(keyPtr) {
+                structPtr = UnsafeRawPointer(constSectionPtr.advanced(by: i))
+                break
+            }
+        }
+        guard let structPtr = structPtr else { return nil }
+
+        // Offset của giá trị DeviceClassNumber trong cấu trúc là 0x9A
+        let offsetMetadata = structPtr.advanced(by: 0x9A).assumingMemoryBound(to: Int64.self)
+        return Int(offsetMetadata.pointee)
+    }
+    
+    func mgSetiPadOS(enable: Bool) -> Bool {
+        guard let cacheData = mgCurrentDict["CacheData"] as? Data else { return false }
 
         let ipadKeys = MGKey.ipadosCacheEx
-        let deviceClassKey = MGKey.deviceClassNumber
-
-        guard case .success(let layout) = MGCacheDataCoordinator.shared.libraryLayout() else {
-            print("❌ Lỗi: Không thể phân giải layout từ libMobileGestalt")
-            return false
-        }
-
         var patchedData = cacheData
         var patchedCount = 0
 
-        // Vá 6 key Medusa (Bật đa nhiệm, Stage Manager)
-        for key in ipadKeys {
-            if let slotIdx = layout.slotIndex(forKey: key) {
-                let offset = slotIdx * 8
-                if offset + 8 <= patchedData.count {
-                    patchedData[offset] = enable ? 0x01 : 0x00
-                    for i in 1..<8 { patchedData[offset + i] = 0x00 }
-                    patchedCount += 1
+        // Vá 6 key Medusa (Boolean)
+        if case .success(let layout) = MGCacheDataCoordinator.shared.libraryLayout() {
+            for key in ipadKeys {
+                if let slotIdx = layout.slotIndex(forKey: key) {
+                    let offset = slotIdx * 8
+                    if offset + 8 <= patchedData.count {
+                        patchedData[offset] = enable ? 0x01 : 0x00
+                        for i in 1..<8 { patchedData[offset + i] = 0x00 }
+                        patchedCount += 1
+                    }
                 }
-            } else {
-                print("⚠️ Không tìm thấy slot cho key \(key)")
             }
         }
 
-        // Vá DeviceClassNumber (1 = iPhone, 3 = iPad)
-        // Lưu ý: Có thể không tìm thấy trong layout nếu qtype != 11, nên ta không dùng nó làm điều kiện chặn.
-        if let classSlot = layout.slotIndex(forKey: deviceClassKey) {
-            let classOffset = classSlot * 8
-            if classOffset + 8 <= patchedData.count {
-                patchedData[classOffset] = enable ? 0x03 : 0x01
-                for i in 1..<8 { patchedData[classOffset + i] = 0x00 }
-                patchedCount += 1
+        // Vá DeviceClassNumber (Int)
+        if let classOffset = findDeviceClassNumberOffset(), classOffset + 8 <= patchedData.count {
+            let newValue: UInt64 = enable ? 3 : 1
+            withUnsafeBytes(of: newValue.littleEndian) { bytes in
+                patchedData.replaceSubrange(classOffset..<classOffset+8, with: bytes)
             }
+            patchedCount += 1
+            print("✅ Đã vá DeviceClassNumber tại offset \(classOffset) thành \(newValue)")
         } else {
-            print("⚠️ Không tìm thấy slot cho DeviceClassNumber trong layout (có thể do qtype != 11)")
+            print("❌ Không tìm thấy offset DeviceClassNumber")
         }
 
-        // Cho phép chạy kể cả khi không tìm thấy DeviceClassNumber, miễn là tìm thấy các key Medusa
-        guard patchedCount >= 1 else {
-            print("❌ Lỗi: Không vá được slot nào cả.")
-            return false
-        }
+        guard patchedCount > 0 else { return false }
 
         self.mgCurrentDict["CacheData"] = patchedData
-        print("✅ Đã vá thành công \(patchedCount) slot iPadOS vào CacheData.")
-        
-        // Cập nhật UI state
         for key in ipadKeys {
             if enable { self.cacheExtra[key] = 1 } else { self.cacheExtra.removeObject(forKey: key) }
         }
@@ -724,7 +794,6 @@ final class GestaltStore: ObservableObject {
     }
 }
 
-// MARK: - EnsWilde Compat
 extension GestaltStore {
     static func loadMutableDict(from url: URL) -> NSMutableDictionary? {
         guard let data = try? Data(contentsOf: url), let d = try? PropertyListSerialization.propertyList(from: data, options: [.mutableContainersAndLeaves], format: nil) as? NSMutableDictionary else { return nil }
