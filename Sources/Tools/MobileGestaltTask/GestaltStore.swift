@@ -804,4 +804,17 @@ extension GestaltStore {
         return d
     }
     func loadFromPlist(url: URL) { if let d = Self.loadMutableDict(from: url) { mgCurrentDict = d; objectWillChange.send() } }
-    func mgByteBinding(key: String, enableValue: UInt8 = 1,
+    func mgByteBinding(key: String, enableValue: UInt8 = 1, disableValue: UInt8 = 0) -> Binding<Bool> { return mgKeyBinding([key]) }
+    func applyDynamicIsland(type: Int, customValue: Int? = nil) -> Bool {
+        let subtypes = [0, 2436, 2556, 2796, 2976, 2622, 2868, 2736, 2662]
+        guard let ce = mgCurrentDict["CacheExtra"] as? NSMutableDictionary else { return false }
+        if type == 0 { (ce[MGKey.artwork] as? NSMutableDictionary)?.removeObject(forKey: "ArtworkDeviceSubType") }
+        else if type > 0 && type < subtypes.count {
+            let art = (ce[MGKey.artwork] as? NSMutableDictionary) ?? NSMutableDictionary()
+            art["ArtworkDeviceSubType"] = subtypes[type]
+            ce[MGKey.artwork] = art
+        }
+        objectWillChange.send()
+        return true
+    }
+}
