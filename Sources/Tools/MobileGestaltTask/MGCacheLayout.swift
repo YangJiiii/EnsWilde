@@ -2,8 +2,6 @@
 //  MGCacheLayout.swift
 //  EnsWilde
 //
-//  Strict runtime MobileGestalt CacheData descriptor resolver and byte-level validator.
-//
 
 import Foundation
 
@@ -63,6 +61,7 @@ struct MGCacheDataLayout: Codable, Equatable, Sendable {
     static let medusaOverlayKey = "UCG5MkVahJxG1YULbbd5Bg"
     static let medusaPinnedKey = "ZYqko/XM5zD3XBfN5RmaXA"
     static let medusaPipKey = "nVh/gwNpy7Jv1NOk00CMrw"
+    static let deviceClassNumberKey = "mtrAoWJ3gsq+I90ZnQ0vQw"
 
     static let shutterRelaxationKey = "P4ZJVy/zYuLy4ejRKP+0DA"
     static let shutterKeyboardMutePreserveKey = "bGUN8lS6sYzy3xhePubp8A"
@@ -768,6 +767,7 @@ final class MGCacheDataCoordinator {
         case MGCacheDataLayout.medusaOverlayKey: return ("medusa-overlay", "Medusa Overlay App", "true (0x01 · Enabled)", "false (0x00 · Disabled)")
         case MGCacheDataLayout.medusaPinnedKey: return ("medusa-pinned", "Medusa Pinned App", "true (0x01 · Enabled)", "false (0x00 · Disabled)")
         case MGCacheDataLayout.medusaPipKey: return ("medusa-pip", "Medusa PIP", "true (0x01 · Enabled)", "false (0x00 · Disabled)")
+        case MGCacheDataLayout.deviceClassNumberKey: return ("device-class-number", "DeviceClassNumber (1=iPhone, 3=iPad)", "3 (0x03 · iPad)", "1 (0x01 · iPhone)")
         case MGCacheDataLayout.shutterRelaxationKey: return ("shutter-relax-slot", "[Exp] Regional Shutter Relaxation", "true (0x01 · Mute Allowed)", "false (0x00 · Forced Shutter)")
         case MGCacheDataLayout.shutterKeyboardMutePreserveKey: return ("shutter-kb-mute-slot", "[Exp] Preserve Shutter (Keyboard Mute)", "true (0x01 · Force Preserved)", "false (0x00 · Force Removed)")
         case MGCacheDataLayout.shutterLegacyMutePreserveKey: return ("shutter-legacy-mute-slot", "[Exp] Preserve Shutter (Legacy)", "true (0x01 · Force Preserved)", "false (0x00 · Force Removed)")
