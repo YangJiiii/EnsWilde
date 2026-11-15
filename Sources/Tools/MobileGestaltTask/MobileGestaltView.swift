@@ -126,12 +126,16 @@ struct MobileGestaltView: View {
                 Toggle(L("mg_aod_vibrancy"), isOn: store.mgByteBinding(key: MGKey.AODVibrancy))
                     .disabled(Utils.requiresVersion(18))
                 
-                // ĐÃ XÓA BỎ POPUP LỖI HEX VÀ DÙNG LOGIC MỚI
+                // ĐÃ FIX: Nút không còn bị khoá cứng
                 Toggle("Become iPadOS", isOn: Binding(
                     get: { return store.mgTrollPadBinding().wrappedValue },
                     set: { newValue in
-                        _ = store.mgSetiPadOS(enable: newValue)
-                        store.objectWillChange.send()
+                        let success = store.mgSetiPadOS(enable: newValue)
+                        if success {
+                            store.objectWillChange.send()
+                        } else {
+                            print("Failed to set iPadOS")
+                        }
                     }
                 ))
             }
