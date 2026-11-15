@@ -129,12 +129,8 @@ struct MobileGestaltView: View {
                 Toggle("Become iPadOS", isOn: Binding(
                     get: { return store.mgTrollPadBinding().wrappedValue },
                     set: { newValue in
-                        let success = store.mgSetiPadOS(enable: newValue)
-                        if success {
-                            store.objectWillChange.send()
-                        } else {
-                            print("Failed to set iPadOS")
-                        }
+                        _ = store.mgSetiPadOS(enable: newValue)
+                        store.objectWillChange.send()
                     }
                 ))
             }
@@ -182,7 +178,7 @@ struct MobileGestaltView: View {
                         Text("iPhone 16 Pro Max").tag("iPhone17,2")
                         Text("iPhone 17").tag("iPhone18,3")
                         Text("iPhone 17 Pro").tag("iPhone18,1")
-                        Text("iPhone 17 Pro").tag("iPhone18,2")
+                        Text("iPhone 17 Pro Max").tag("iPhone18,2")
                         Text("iPhone Air").tag("iPhone18,4")
                         Text("iPhone 17e").tag("iPhone18,5")
                         Text("iPhone 18 Pro").tag("iPhone19,2")
@@ -304,8 +300,72 @@ struct MobileGestaltView: View {
         Task {
             do {
                 if let ce = store.mgCurrentDict["CacheExtra"] as? NSMutableDictionary {
-                    ce[MGKey.prodType] = productType
+                    // MARK: - Logic Spoof + AI CHUẨN XÁC TỪ ẢNH CỦA BẠN
                     
+                    let targetProductType = productType
+                    
+                    // Bảng mapping CHÍNH XÁC 100% dựa trên ảnh IPSW/AppleDB bạn cung cấp
+                    // Format: "ProductType": ("HardwareModel", "CPUModel", "RegulatoryModel_US")
+                    let spoofMap: [String: (hw: String, cpu: String, reg: String)] = [
+                        // iPhone 15 Series
+                        "iPhone16,1": ("D83AP", "t8130", "A2848"), // 15 Pro
+                        "iPhone16,2": ("D84AP", "t8130", "A2849"), // 15 Pro Max
+                        // iPhone 16 Series
+                        "iPhone17,3": ("D47AP", "t8140", "A3081"), // 16
+                        "iPhone17,4": ("D48AP", "t8140", "A3082"), // 16 Plus
+                        "iPhone17,1": ("D93AP", "t8140", "A3083"), // 16 Pro
+                        "iPhone17,2": ("D94AP", "t8140", "A3084"), // 16 Pro Max
+                        "iPhone17,5": ("V59AP", "t8140", "A3212"), // 16e
+                        // iPhone 17 Series
+                        "iPhone18,3": ("V57AP", "t8150", "A3520"), // 17
+                        "iPhone18,1": ("V53AP", "t8150", "A3256"), // 17 Pro
+                        "iPhone18,2": ("V54AP", "t8150", "A3257"), // 17 Pro Max
+                        "iPhone18,4": ("D23AP", "t8150", "A3260"), // Air
+                        "iPhone18,5": ("V59AP", "t8150", "A3575"), // 17e
+                        // iPhone 18 Series
+                        "iPhone19,2": ("V63AP", "t8160", "A3715"), // 18 Pro
+                        "iPhone19,3": ("V64AP", "t8160", "A3473"), // 18 Pro Max (US)
+                        "iPhone19,7": ("V64sAP", "t8160", "A3717"),// 18 Pro Max (Global) - Ép dùng mã Reg US để mở AI
+                        "iPhone19,4": ("V68AP", "t8160", "A3721") // Duo - Ép dùng mã Reg US để mở AI
+                    ]
+                    
+                    // Ghi đè bộ ba phần cứng nếu có trong mapping
+                    if let info = spoofMap[targetProductType] {
+                        ce[MGKey.prodType] = targetProductType
+                        ce["oYicEKzVTz4/CxxE05pEgQ"] = info.hw // HardwareModel
+                        ce["5pYKlGnYYBzGvAlIU8RjEQ"] = info.cpu // CPUModel
+                        ce["97JDvERpVwO+GHtthIh7hA"] = info.reg // RegulatoryModel
+                    } else if targetProductType == ogMachineName {
+                        // Nếu chọn Original, khôi phục lại từ backup
+                        if let ogCE = NSDictionary(contentsOf: MGURL.savedGestaltURL)?["CacheExtra"] as? NSDictionary {
+                            for key in ["h9jDsbgj7xIVeIQ8S3/X3Q", "oYicEKzVTz4/CxxE05pEgQ", "5pYKlGnYYBzGvAlIU8RjEQ", "97JDvERpVwO+GHtthIh7hA"] {
+                                if let val = ogCE[key] {
+                                    ce[key] = val
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Nếu chọn model khác Original, bật AI + Region LL
+                    if targetProductType != ogMachineName {
+                        // Bật AI key
+                        ce["A62OafQ85EJAiiqKn4agtg"] = 1 // AI Toggle
+                        
+                        // Bật Region LL
+                        ce["h63QSdBCiT/z0WU6rdQv6Q"] = "LL" // RegionCode
+                        ce["yK+xavymRGZ3xWc1tb8XDg"] = "LL/A" // RegionInfo
+                        
+                        // Xóa cờ xung đột
+                        ce.removeObject(forKey: "EqrsVvjcYDdxHBiQmGhAWw") // InternalInstall
+                        ce.removeObject(forKey: "LBJfwOEzExRxzlAnSuI7eg") // InternalBuild
+                        ce.removeObject(forKey: "waGD2UTpntjbDXD1r3oALQ") // SiriHub
+                        
+                        self.selectedRegionCode = "LL"
+                    }
+                    
+                    // MARK: - Kết thúc logic Spoof + AI
+                    
+                    // Phần còn lại giữ nguyên như cũ (artwork, model name, custom keys...)
                     let art = (ce[MGKey.artwork] as? NSMutableDictionary) ?? NSMutableDictionary()
                     
                     if dynamicIslandType == 0 {
