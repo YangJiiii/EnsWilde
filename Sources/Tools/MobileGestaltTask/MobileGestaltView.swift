@@ -20,6 +20,7 @@ struct MobileGestaltView: View {
     @StateObject private var store = GestaltStore.shared
 
     @AppStorage("ShowApplyTab") private var showApplyTab: Bool = false
+    @AppStorage("ogMachineName") private var ogMachineName = "" // <-- ĐÃ THÊM BIẾN NÀY
 
     @State var mbdb: Backup?
     @State var eligibilityData = Data()
@@ -300,12 +301,9 @@ struct MobileGestaltView: View {
         Task {
             do {
                 if let ce = store.mgCurrentDict["CacheExtra"] as? NSMutableDictionary {
-                    // MARK: - Logic Spoof + AI CHUẨN XÁC TỪ ẢNH CỦA BẠN
-                    
                     let targetProductType = productType
                     
                     // Bảng mapping CHÍNH XÁC 100% dựa trên ảnh IPSW/AppleDB bạn cung cấp
-                    // Format: "ProductType": ("HardwareModel", "CPUModel", "RegulatoryModel_US")
                     let spoofMap: [String: (hw: String, cpu: String, reg: String)] = [
                         // iPhone 15 Series
                         "iPhone16,1": ("D83AP", "t8130", "A2848"), // 15 Pro
@@ -317,16 +315,16 @@ struct MobileGestaltView: View {
                         "iPhone17,2": ("D94AP", "t8140", "A3084"), // 16 Pro Max
                         "iPhone17,5": ("V59AP", "t8140", "A3212"), // 16e
                         // iPhone 17 Series
-                        "iPhone18,3": ("V57AP", "t8150", "A3520"), // 17
+                        "iPhone18,3": ("V57AP", "t8150", "A3258"), // 17
                         "iPhone18,1": ("V53AP", "t8150", "A3256"), // 17 Pro
                         "iPhone18,2": ("V54AP", "t8150", "A3257"), // 17 Pro Max
                         "iPhone18,4": ("D23AP", "t8150", "A3260"), // Air
                         "iPhone18,5": ("V59AP", "t8150", "A3575"), // 17e
                         // iPhone 18 Series
-                        "iPhone19,2": ("V63AP", "t8160", "A3715"), // 18 Pro
+                        "iPhone19,2": ("V63AP", "t8160", "A3472"), // 18 Pro
                         "iPhone19,3": ("V64AP", "t8160", "A3473"), // 18 Pro Max (US)
                         "iPhone19,7": ("V64sAP", "t8160", "A3717"),// 18 Pro Max (Global) - Ép dùng mã Reg US để mở AI
-                        "iPhone19,4": ("V68AP", "t8160", "A3721") // Duo - Ép dùng mã Reg US để mở AI
+                        "iPhone19,4": ("V68AP", "t8160", "A3447") // Duo - Ép dùng mã Reg US để mở AI
                     ]
                     
                     // Ghi đè bộ ba phần cứng nếu có trong mapping
@@ -362,8 +360,6 @@ struct MobileGestaltView: View {
                         
                         self.selectedRegionCode = "LL"
                     }
-                    
-                    // MARK: - Kết thúc logic Spoof + AI
                     
                     // Phần còn lại giữ nguyên như cũ (artwork, model name, custom keys...)
                     let art = (ce[MGKey.artwork] as? NSMutableDictionary) ?? NSMutableDictionary()
