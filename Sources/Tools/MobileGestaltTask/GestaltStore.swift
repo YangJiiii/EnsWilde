@@ -337,6 +337,37 @@ final class GestaltStore: ObservableObject {
         return true
     }
     
+    // MARK: - Port 1:1 từ Gester (BQAIModelOptions & advancedSwitchChanged)
+    func applyDuoSpoofAndAI() {
+        // Key lấy chuẩn từ file GestaltVC.m của Gester
+        let kProductTypeKey = "h9jDsbgj7xIVeIQ8S3/X3Q"
+        let kHardwareKey = "oYicEKzVTz4/CxxE05pEgQ"
+        let kCPUKey = "5pYKlGnYYBzGvAlIU8RjEQ"
+        let kRegulatoryKey = "97JDvERpVwO+GHtthIh7hA"
+        let kSiriRegionKey = "h63QSdBCiT/z0WU6rdQv6Q"
+        let kSiriRegionCodeKey = "yK+xavymRGZ3xWc1tb8XDg"
+        let kAIKey = "A62OafQ85EJAiiqKn4agtg"
+        
+        // Cấu hình iPhone Duo (D48AP và t8150 là giả định cho phần cứng mới, giữ nguyên Reg của Duo)
+        self.cacheExtra[kProductTypeKey] = "iPhone19,4"
+        self.cacheExtra[kHardwareKey] = "D48AP"
+        self.cacheExtra[kCPUKey] = "t8150"
+        self.cacheExtra[kRegulatoryKey] = "A3447" // Mã giả định US của Duo
+        
+        // Mở khóa AI & Siri Region
+        self.cacheExtra[kAIKey] = 1
+        self.cacheExtra[kSiriRegionKey] = "LL"
+        self.cacheExtra[kSiriRegionCodeKey] = "LL/A"
+        
+        // Dọn dẹp xung đột
+        self.cacheExtra.removeObject(forKey: "EqrsVvjcYDdxHBiQmGhAWw") // intInstall
+        self.cacheExtra.removeObject(forKey: "LBJfwOEzExRxzlAnSuI7eg") // intBuild
+        self.cacheExtra.removeObject(forKey: "waGD2UTpntjbDXD1r3oALQ") // siriHub
+        
+        self.objectWillChange.send()
+        print("✅ Đã Spoof iPhone Duo + Ép Region LL + Bật AI (Gester logic)")
+    }
+    
     var preferredRegionUnlockMode: MGRegionUnlockMode {
         get {
             let raw = UserDefaults.standard.string(forKey: MGRegionUnlockMode.defaultsKey) ?? MGRegionUnlockMode.fullUS.rawValue
