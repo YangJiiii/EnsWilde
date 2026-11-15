@@ -126,7 +126,6 @@ struct MobileGestaltView: View {
                 Toggle(L("mg_aod_vibrancy"), isOn: store.mgByteBinding(key: MGKey.AODVibrancy))
                     .disabled(Utils.requiresVersion(18))
                 
-                // ĐÃ FIX: Nút không còn bị khoá cứng
                 Toggle("Become iPadOS", isOn: Binding(
                     get: { return store.mgTrollPadBinding().wrappedValue },
                     set: { newValue in
