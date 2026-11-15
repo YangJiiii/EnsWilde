@@ -31,43 +31,43 @@ enum MGMsg {
     static var support: String { L("请提前备份重要数据！如果某项修改未按预期生效，请勿向官方仓库提交支持请求。许多功能同时受限于设备硬件与 Apple 服务器策略，所有修改均需自行承担风险。") }
     static var mgReset: String { L("重置 MobileGestalt 将删除系统原始缓存文件并让系统在重启时重新生成。这有助于彻底清除无法还原的修改，但存在极低概率引发异常，请谨慎操作。") }
     static var liquidGlass: String { L("开启后将使用 iOS 26/27 液态玻璃 (Liquid Glass) 的低性能开销渲染模式，可降低 GPU 负载、减少机身发热并节省电量（注销或重启后生效）。") }
-    static var chinaCacheUnlock: String { L("通过从本机内存加载的系统库 (libMobileGestalt.dylib) 实时动态解析二进制 CacheData 槽位偏移，将国行底层限制标记 green-tea 设为 false、not-green-tea 设为 true。") }
-    static var wapiToWifi: String { L("通过本机系统库实时动态解析 wapi 布尔槽位偏移并设为 false，将系统“设置”与控制中心里的“无线局域网”统一显示为国际版的“Wi-Fi”。") }
+    static var chinaCacheUnlock: String { L("通过从本机内存加载的系统库 (libMobileGestalt.dylib) 实时动态解析二进制 CacheData 槽位偏移，将国行底层限制标记 green-tea 设为 false、not-green-tea 设为 true。\n\n• 可在所有国行设备上解锁 FaceTime 音频（语音通话）与 AI 底层区域准入；\n• 在自带物理 eSIM 芯片的国行机型（如 iPhone Air、iPhone 18 系列等内置 eUICC 芯片机型）上，可解除系统层针对境外 eSIM 的地理围栏拦截（注：常规纯双实体卡槽国行主板物理空焊 eUICC 芯片，无法通过纯软件写入虚拟卡）。\n\n⚠️ 注意：在 iOS 26/27 中，国行特有的单应用三态联网菜单（“关闭 / 无线局域网 / 无线局域网与蜂窝数据”）同样受 green-tea 标记控制。即使保持下方“无线局域网改 Wi-Fi”关闭，开启本项解除国行底层限制后，系统网络权限也会切换为国际版“蜂窝数据”独立开关模式（关闭本项并重启即可随时原样恢复）。\n\n安全策略：仅当本机 CacheUUID、总长度、有效位及填充字节 100% 匹配通过时才允许修改；应用后请手动重启手机生效。") }
+    static var wapiToWifi: String { L("通过本机系统库实时动态解析 wapi 布尔槽位偏移并设为 false，将系统“设置”与控制中心里的“无线局域网”统一显示为国际版的“Wi-Fi”。\n\n⚠️ 重要提示：开启后将会【丢失国行特有的“不允许联网”功能】（即“使用无线局域网与蜂窝网络的 App”中的“关闭”选项）！国际版逻辑仅允许单独关闭“蜂窝数据”，无法禁止单个应用使用 Wi-Fi 联网（如第三方输入法或离线应用将无法彻底断网），同时“启用 WAPI”开关也会隐藏。\n\n如需保留应用“不允许联网”权限控制，请保持此项关闭；若已开启，关闭此开关重新应用并手动重启手机即可原样恢复。") }
     static var intInstall: String { L("此选项将启用部分遗留在正式版 iOS 中的 Apple 内部调试特性。注意：开启后可能会影响部分正常功能（如无法从 App Store 重新安装自带系统应用），且与 Apple 智能互斥。") }
     static var intBuild: String { L("此开关主要用于在“设置”应用中显示内部存储调试信息。在部分设备（尤其是 iPadOS）上可能引发兼容性问题。") }
-    static var appleIntellInfo: String { L("为不支持 Apple 智能的旧机型开启端侧生成式 AI 总开关 (DeviceSupportsGenerativeModelSystems)") }
-    static var advAppleIntell: String { L("【防呆护栏警告】真机（iPhone 15 Pro Max 与 iPhone 18 Pro Max）底层探针交叉核验确认：iOS 27 音频智能在 iPhone / iPad 原厂设备树中默认均为 false。") }
-    static var audioMixInfo: String { L("通过本机系统库实时动态解析 CameracinematicAudioTrackRendering 二进制 CacheData 布尔槽位并设为 true，解锁相册与相机视频编辑中的“混音 (Audio Mix)”功能。") }
-    static var spatialAudioInfo: String { L("通过本机系统库实时动态解析 spatial-audio-recording 与 spatial-facetime-audio 二进制 CacheData 布尔槽位。") }
-    static var spatialFaceTimeInfo: String { L("通过本机系统库实时动态解析 spatial-facetime-audio 二进制 CacheData 布尔槽位。") }
-    static var spatialAudioRecInfo: String { L("通过本机系统库实时动态解析 spatial-audio-recording 二进制 CacheData 布尔槽位。") }
-    static var responsiveShutterInfo: String { L("通过本机系统库实时动态解析 ResponsiveShutter 二进制 CacheData 布尔槽位并设为 true。") }
-    static var hypertensionInfo: String { L("通过本机系统库实时动态解析 HypertensionNotifications 二进制 CacheData 布尔槽位并设为 true。") }
-    static var callScreeningGuide: String { L("【普通话“询问来电原因”与海外 Apple 智能黄金共存方案（测试特性）】") }
-    static var expNotice: String { L("【测试特性提示】本分组所有开关均通过运行时从本机 libMobileGestalt.dylib 实时解析真实 CacheData 布尔槽位。") }
-    static var expShutterMuteInfo: String { L("【测试特性】传统 RegionalBehaviorShutterClick 为只读动态探针。") }
-    static var expStudioMicsInfo: String { L("【测试特性】开启高低功耗双阵列麦克风并发拾音槽位。") }
-    static var expPhotoToneInfo: String { L("【测试特性】同步开启 PhotosLocalLight、ToneMapping 与 HDRDeferredProcessing 三个影像后期管线布尔槽位。") }
-    static var expSpatialStereoInfo: String { L("【测试特性】同步开启 SpatialOverCapture、StereoAudioRecording 与 P3ColorspaceVideoRecording 三个视频捕获槽位。") }
-    static var expCamControlInfo: String { L("【测试特性】同步开启 CameraButtonCapability、TouchSensitiveCameraControl、HardwareDetents 与 CameraHaptics 四个交互槽位。") }
-    static var expLegacyBatteryInfo: String { L("【测试特性】开启 DeviceShowsBatteryModelInformationLegacyHW 与 DynamicEndOfChargeLegacyHW 槽位。") }
-    static var expHighLumAODInfo: String { L("【测试特性】同步开启 HighLuminanceAlwaysOnDisplay 与 AlwaysOnDisplayFlipbook 槽位。") }
-    static var expCarPlay2Info: String { L("【测试特性】开启 DeviceSupportsCarPlay2 槽位。") }
-    static var expTouch120Info: String { L("【测试特性】开启 TouchDelivery120Hz 槽位。") }
-    static var expHearingAidInfo: String { L("【测试特性】同步开启 hearingaid-audio-equalization、hearingaid-low-energy-audio 与 hearingaid-power-reduction 三个连续布尔槽位。") }
-    static var expSleepApneaInfo: String { L("【测试特性】开启 DeviceSupportsBreathingDisturbancesMeasurements 槽位。") }
-    static var expUSBloodOxygenInfo: String { L("【测试特性】将 DeviceSupportsUSLegallyCompliantBloodOxygen 槽位设为 false。") }
-    static var expWorkoutUltraInfo: String { L("【测试特性】同步开启 WorkoutUltraMode 与 DeviceSupportsTimeInDaylight 槽位。") }
-    static var expSiriHubInfo: String { L("【防呆护栏警告】真机实测表明：DeviceSupportsSiriHub 属于带屏家居中枢硬件专属路由标记。") }
-    static var spoofUseless: String { L("伪装设备型号可能会导致面容 ID (Face ID) 等硬件功能失效！你的设备硬件本身已原生支持 Apple 智能。") }
-    static var spoofAI: String { L("对于不支持 Apple 智能的旧机型，仅开启开关无法下载端侧 AI 模型，还需伪装为支持的机型；但伪装机型可能导致面容 ID 失效。") }
-    static var subtype: String { L("仅在你想调整灵动岛纵向位置或屏幕分辨率特征时才修改设备子类型 (Subtype)。") }
-    static var mgResetComp: String { L("已移除当前 MobileGestalt 缓存并将旧备份安全归档。请立即【手动重启你的设备】。") }
-    static var revertComp: String { L("已通过 SHA-256 与物理落盘校验恢复本机原厂备份。建议【手动重启一次手机】。") }
-    static var revertConfirm: String { L("即将执行本机原厂参数恢复。") }
-    static var globalFactoryRestoreConfirm: String { L("即将执行全模块一键恢复原机出厂参数。") }
-    static var mgResetSavWarn: String { L("重新生成原始备份前，请确保当前已还原所有修改。") }
-    static var hidTweakWarn: String { L("显示被隐藏的修改项后，你将能看到当前机型本已原生支持或不兼容的底层开关。") }
+    static var appleIntellInfo: String { L("为不支持 Apple 智能的旧机型开启端侧生成式 AI 总开关 (DeviceSupportsGenerativeModelSystems)，并自动同步解锁以下 2 项在旧芯片上默认关闭的子能力标记：\n\n• 相册“消除”功能 (Photos Clean Up)\n• 备忘录“手写体合成” (Handwriting Synthesis)\n\n注：旧机型若需实际下载端侧 AI 模型，通常还需配合下方的“机型伪装”与上方的“解除地区限制”使用（修改后请手动重启手机生效）。") }
+    static var advAppleIntell: String { L("【防呆护栏警告】真机（iPhone 15 Pro Max · iPhone16,2 与 iPhone 18 Pro Max · iPhone19,7）底层探针交叉核验确认：iOS 27 音频智能 (rb2tKZxlj0Gm2tBmUQSLqQ，槽位 #178) 在 iPhone / iPad 原厂设备树中默认均为 false（0x00），而个人实时翻译 (M1n2sAqf33NAOgZRGxQYBA，槽位 #266) 在所有原生支持 Apple 智能的 iPhone（iPhone 15 Pro 及以上机型）上原厂已自动开启为 true（0x01）。\n\n⚠️ 在 iPhone / iPad 上强行开启非原生的 Audio Intelligence (#178)，或误将原生 AI 机型的 Personal Translator (#266) 设为 false，均会导致系统 GenerativeModels / ModelCatalog 管线校验瞬间断路——直接造成照片【高质量消除、扩图、重构】与【相机 Siri】0 秒瞬间报错！\n\n常规通话录音、语音备忘录转写与系统翻译均由主 AI 开关完整支持。安全护栏已自动校准本机原厂基线（原生 AI 机型锁定 #266=true、#178=false）；若此前受旧版本影响出现槽位偏差，点击顶部体检卡片「一键配齐 / 修复」（或关闭此开关）并应用冷重启即可彻底恢复。") }
+    static var audioMixInfo: String { L("通过本机系统库实时动态解析 CameracinematicAudioTrackRendering (aVL5GE3tx0LSCI/ErfrJGA) 二进制 CacheData 布尔槽位并设为 true，解锁相册与相机视频编辑中的“混音 (Audio Mix)”功能，支持“标准 / 语音突显 / 录音棚 / 电影效果”四档人声与环境音分离混音（应用后请手动重启手机生效）。") }
+    static var spatialAudioInfo: String { L("通过本机系统库实时动态解析 spatial-audio-recording 与 spatial-facetime-audio 二进制 CacheData 布尔槽位并同步设为 true，解锁相机视频录制时的 3D 空间音频拾音及 FaceTime 通话空间声场渲染能力（应用后请手动重启手机生效）。") }
+    static var spatialFaceTimeInfo: String { L("通过本机系统库实时动态解析 spatial-facetime-audio (/EVOCjM/Nmb2roP5ebtEFA) 二进制 CacheData 布尔槽位并设为 true，解锁 FaceTime 通话期间的 3D 空间声场渲染能力（纯软件声学渲染，支持 iPhone 15 Pro 及更早机型，不影响语音备忘录录音，应用后请手动重启手机生效）。") }
+    static var spatialAudioRecInfo: String { L("通过本机系统库实时动态解析 spatial-audio-recording (X6NGcYcvHmbqlR8hLXASJA) 二进制 CacheData 布尔槽位，控制相机 3D 空间音频拾音与语音备忘录“录音室 (Studio)”四声道录制模式。\n\n⚠️ 防呆说明：该功能物理依赖 iPhone 16 系列起的四麦克风录音棚声学阵列硬件（支持机型出厂已原生开启）。在三麦克风旧机型（如 iPhone 15 Pro 及更早机型）上强行开启，会导致“语音备忘录”出现无效的“录音室”选项，选择该档位点击录音会因四声道硬件初始化失败立即中断。因此非四麦克风机型已默认防呆锁定关闭（若此前在旧版本开启过，直接关闭本开关并应用重启即可恢复）。") }
+    static var responsiveShutterInfo: String { L("通过本机系统库实时动态解析 ResponsiveShutter (gQDt76Te0SPw7N8oTLrBFw) 二进制 CacheData 布尔槽位并设为 true，降低相机按下快门至成像管线的触发延迟，实现手指按下瞬间零延迟抓拍（应用后请手动重启手机生效）。") }
+    static var hypertensionInfo: String { L("通过本机系统库实时动态解析 HypertensionNotifications (4fh9efw4o1yaFqkXNCXoeA) 二进制 CacheData 布尔槽位并设为 true，开启“健康”App 中的血压偏高趋势评估、风险通知与测量记录向导页面（应用后请手动重启手机生效）。") }
+    static var callScreeningGuide: String { L("【普通话“询问来电原因”与海外 Apple 智能黄金共存方案（测试特性）】\n\nApple 对来电筛选施加了基于系统“地区 (Locale)”的语音过滤：若系统地区设为“美国”会丢失中文普通话来电询问；若保持“中国大陆”则会阻断 Apple 智能。\n\n唯一实测完美共存四步配置：\n1. MobileGestalt：在本页开启“解除地区限制 (LL / LL/A)”并填写对应美版监管型号；\n2. 系统设置 -> 通用 -> 语言与地区：“地区”改为【台湾】，首选语言第一项保持【简体中文】；\n3. 系统设置 -> Apple 智能与 Siri：Siri 语言设为【中文（普通话 - 中国大陆）】；\n4. 分流规则：guzzoni.apple.com 与 *.siri.apple.com 必须走【DIRECT 直连 + 真实 IP (always-real-ip)】防 Siri 报错，仅将 apple-relay.apple.com、gspe1-ssl.ls.apple.com 与 OpenAI 走美区节点（可在“跨容器应用共享组中心”一键导出 Surge 模块）。") }
+    static var expNotice: String { L("【测试特性提示】本分组所有开关均通过运行时从本机 libMobileGestalt.dylib 实时解析真实 CacheData 布尔槽位（QType=11）并在写前校验 CacheUUID、字节总长与槽位有效位。因不同机型的底层 ISP、传感器或地区守护进程（eligibilityd）支持程度存在差异，部分功能在缺乏物理硬件时仅解锁系统 UI 入口。应用后请【手动重启手机】验证效果，随时可关闭或还原备份。") }
+    static var expShutterMuteInfo: String { L("【测试特性】传统 RegionalBehaviorShutterClick 为只读动态探针（slot = -1），直接写 CacheExtra 无效。本开关组合修改 3 个真实 CacheData 布尔槽位：\n• DeviceSupportsRegionalCameraShutterRelaxation = true\n• KeyboardMutePreservesRegionalShutterClickBehavior = false\n• ...ForLegacyDevices = false\n可在无需更改整机销售地区的前提下，尝试解除日版 (J/A) 与韩版 (KH/A) 机型的强制相机快门音（应用后请手动重启手机生效）。") }
+    static var expStudioMicsInfo: String { L("【测试特性】开启高低功耗双阵列麦克风并发拾音槽位 DeviceSupportsConcurrentHPLPMics (dI30ovtFUIeLioNQKDMbGQ)，为语音备忘录录音棚伴奏叠录与多轨人声分离提供底层硬件能力标记（需麦克风 DSP 支持，重启生效）。") }
+    static var expPhotoToneInfo: String { L("【测试特性】同步开启 PhotosLocalLight、ToneMapping 与 HDRDeferredProcessing 三个影像后期管线布尔槽位，增强相册局部光影重绘、新一代色调映射与深度 HDR 延迟渲染能力（重启生效）。") }
+    static var expSpatialStereoInfo: String { L("【测试特性】同步开启 SpatialOverCapture、StereoAudioRecording 与 P3ColorspaceVideoRecording 三个视频捕获槽位，解锁超取景框空间视角重构、立体声拾音及 P3 广色域视频编码支持（重启生效）。") }
+    static var expCamControlInfo: String { L("【测试特性】同步开启 CameraButtonCapability、TouchSensitiveCameraControl、HardwareDetents 与 CameraHaptics 四个交互槽位，解锁完整的“设置 -> 相机 -> 相机控制”电容轻按/滑动变焦配置面板（无物理按键机型仅展示设置面板，重启生效）。") }
+    static var expLegacyBatteryInfo: String { L("【测试特性】开启 DeviceShowsBatteryModelInformationLegacyHW 与 DynamicEndOfChargeLegacyHW 槽位，在旧款 iPhone / iPad 的“设置 -> 电池 / 关于本机”中尝试展示电池生产日期、首次使用时间与精确充电循环次数（重启生效；亦可使用本工具“物理电池与温控遥测”模块直读底层数据）。") }
+    static var expHighLumAODInfo: String { L("【测试特性】同步开启 HighLuminanceAlwaysOnDisplay 与 AlwaysOnDisplayFlipbook 槽位，解锁户外高亮全天候显示策略与低功耗翻页帧缓冲渲染（注：非 LTPO 屏幕开启 AOD 会增加待机耗电，重启生效）。") }
+    static var expCarPlay2Info: String { L("【测试特性】开启 DeviceSupportsCarPlay2 (PR+xeEtTAiUN0R25+EYGfw) 槽位，启用新一代多屏全液晶仪表接管 CarPlay Ultra 车载协议支持（重启生效）。") }
+    static var expTouch120Info: String { L("【测试特性】开启 TouchDelivery120Hz (2OK50OGmkXM1ospsh766WQ) 槽位，向系统启用 120Hz 触控采样事件投递管线（注：60Hz 物理屏幕面板无法突破 60fps 画面刷新率，仅作用于触控采样投递层，重启生效）。") }
+    static var expHearingAidInfo: String { L("【测试特性】同步开启 hearingaid-audio-equalization、hearingaid-low-energy-audio 与 hearingaid-power-reduction 三个连续布尔槽位，配合 AirPods Pro 2 / 3 尝试解锁听力健康均衡与临床助听器辅助能力（部分地区仍受 eligibilityd 医疗围栏限制，重启生效）。") }
+    static var expSleepApneaInfo: String { L("【测试特性】开启 DeviceSupportsBreathingDisturbancesMeasurements (e0HV2blYUDBk/MsMEQACNA) 槽位，解锁“健康 -> 呼吸 -> 呼吸紊乱”睡眠呼吸暂停风险趋势评估页面（需配合 Apple Watch 睡眠监测数据，重启生效）。") }
+    static var expUSBloodOxygenInfo: String { L("【测试特性】将 DeviceSupportsUSLegallyCompliantBloodOxygen (E4vGMChwcVRKD8hMVxnRvg) 槽位设为 false，解除美版 (LL/A) 设备因专利禁令触发的软件层血氧测量屏蔽（国行机型原生已为 false 无需开启，重启生效）。") }
+    static var expWorkoutUltraInfo: String { L("【测试特性】同步开启 WorkoutUltraMode 与 DeviceSupportsTimeInDaylight 槽位，解锁极限户外运动辅助模式与健康“日光下时间”环境光监测统计入口（重启生效）。") }
+    static var expSiriHubInfo: String { L("【防呆护栏警告】真机实测表明：DeviceSupportsSiriHub (waGD2UTpntjbDXD1r3oALQ) 属于带屏家居中枢硬件 (HomeAccessory / HomePad) 专属路由标记。\n\n⚠️ 在 iPhone / iPad 上开启会导致 assistantd 请求不存在的 SiriHub 模型资产，使 Apple 智能无限卡死在“正在添加 Siri 支持内容，更新完成前，Siri 将无法使用”！\n\n安全护栏已默认锁定禁止在 iPhone / iPad 上新开启此项；如果你在旧版本曾开启过此开关，可直接关闭此项（或使用顶部 Apple 智能体检卡片一键修复）并手动重启手机即可恢复正常。") }
+    static var spoofUseless: String { L("伪装设备型号可能会导致面容 ID (Face ID) 等硬件功能失效！你的设备硬件本身已原生支持 Apple 智能，无需修改此项（国行设备只需开启上方“解除地区限制”即可）。") }
+    static var spoofAI: String { L("对于不支持 Apple 智能的旧机型，仅开启开关无法下载端侧 AI 模型，还需伪装为支持的机型；但伪装机型可能导致面容 ID 失效。取消机型伪装后，请勿再次进入“设置 -> Apple 智能与 Siri”页面。") }
+    static var subtype: String { L("仅在你想调整灵动岛纵向位置或屏幕分辨率特征时才修改设备子类型 (Subtype)。如需在非灵动岛机型开启灵动岛，请配合下方的“启用灵动岛”开关使用！") }
+    static var mgResetComp: String { L("已移除当前 MobileGestalt 缓存并将旧备份安全归档。请立即【手动重启你的设备】，系统将在开机时从硬件熔丝重新生成 100% 纯净的原厂参数。") }
+    static var revertComp: String { L("已通过 SHA-256 与物理落盘校验恢复本机原厂备份，并已同步清空本地自定义开关残留。建议【手动重启一次手机】以确保所有底层参数彻底复原。") }
+    static var revertConfirm: String { L("即将执行本机原厂参数恢复：\n\n1. 严格核对原厂备份的 SHA-256 摘要、系统版本、CacheUUID 与真实硬件型号；\n2. 通过无零字节窗口原位刷盘 (pwrite + F_FULLFSYNC) 恢复 MobileGestalt 并读回验证；\n3. 同步复位本地自定义键值、自定义机型名与越界门禁开关，杜绝残留回写。") }
+    static var globalFactoryRestoreConfirm: String { L("即将执行全模块一键恢复原机出厂参数：\n\n1. 恢复并校验本机 MobileGestalt 原厂备份（含 SHA-256 与物理刷盘验证）；\n2. 清除锁屏底部文字、设备资产铭牌及第三方伪监管残留（自动保护真实企业 MDM）；\n3. 清理自定义拨号键盘缓存并复位所有本地偏好状态。") }
+    static var mgResetSavWarn: String { L("重新生成原始备份前，请确保当前已还原所有修改，否则当前处于开启状态的修改会被写入新的原始备份中！") }
+    static var hidTweakWarn: String { L("显示被隐藏的修改项后，你将能看到当前机型本已原生支持或不兼容的底层开关。盲目改动可能导致功能异常甚至数据丢失！") }
 }
 
 enum MGKey {
